@@ -157,6 +157,31 @@ pub trait EventStore {
     fn purge_before(&self, ts: u64) -> Result<u64, StoreError>;
 }
 
+/// Appends the project (last folder of the agent's working directory) to an
+/// event title: `claude finished · OpenMosh`. Home and root add nothing.
+pub fn titled_with_project(title: String, cwd: Option<&str>) -> String {
+    let project = cwd
+        .map(|c| c.trim_end_matches('/'))
+        .and_then(|c| c.rsplit('/').next())
+        .map(|p| {
+            p.chars()
+                .filter(|c| !c.is_control())
+                .take(40)
+                .collect::<String>()
+        })
+        .filter(|p| !p.is_empty());
+    let home = std::env::var("HOME").ok();
+    match project {
+        Some(p)
+            if cwd.map(|c| c.trim_end_matches('/'))
+                != home.as_deref().map(|h| h.trim_end_matches('/')) =>
+        {
+            format!("{title} · {p}")
+        }
+        _ => title,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

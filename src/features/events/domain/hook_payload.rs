@@ -97,6 +97,7 @@ pub fn parse_hook_payload(
             )
         }
     };
+    let title = super::titled_with_project(title, str_field(&v, "cwd"));
     Ok(finish(source, kind, title, summary, pane, now))
 }
 
@@ -156,6 +157,7 @@ pub fn parse_with_kind(
         .find_map(|k| str_field(&v, k).filter(|s| !s.trim().is_empty()))
         .unwrap_or_default()
         .to_string();
+    let title = super::titled_with_project(title, str_field(&v, "cwd"));
     Ok(finish(source, kind, title, summary, pane, now))
 }
 
@@ -192,11 +194,29 @@ mod tests {
     }
 
     #[test]
+    fn titles_name_the_project_folder() {
+        let raw = r#"{"hook_event_name":"Stop","cwd":"/home/u/code/OpenMosh"}"#;
+        let e = parse_hook_payload("claude", raw, pane(), 7).unwrap();
+        assert_eq!(e.title, "claude finished · OpenMosh");
+        let e = parse_with_kind(
+            "codex",
+            EmitKind::Fixed(EventKind::Done),
+            r#"{"cwd":"/w/api/"}"#,
+            pane(),
+            7,
+        )
+        .unwrap();
+        assert_eq!(e.title, "codex finished · api");
+        let e = parse_hook_payload("claude", r#"{"hook_event_name":"Stop"}"#, pane(), 7).unwrap();
+        assert_eq!(e.title, "claude finished");
+    }
+
+    #[test]
     fn claude_permission_notification_is_approval() {
         let raw = r#"{"session_id":"s","transcript_path":"/secret/t.jsonl","cwd":"/x","hook_event_name":"Notification","message":"Claude needs your permission to use Bash"}"#;
         let e = parse_hook_payload("claude", raw, pane(), 7).unwrap();
         assert_eq!(e.kind, EventKind::ApprovalRequired);
-        assert_eq!(e.title, "claude needs approval");
+        assert_eq!(e.title, "claude needs approval · x");
         assert_eq!(e.summary, "Claude needs your permission to use Bash");
         assert_eq!(e.pane, pane());
         assert_eq!(e.created_at, 7);

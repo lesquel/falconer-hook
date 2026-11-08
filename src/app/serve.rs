@@ -10,7 +10,8 @@ use crate::features::agents::domain::{Agent, Transition, TransitionDetector};
 use crate::features::agents::infrastructure::herdr::HerdrRuntime;
 use crate::features::events::application::{ClearPane, IngestEvent, IngestOutcome};
 use crate::features::events::domain::{
-    retention_cutoff, EventKind, EventNotifier, EventStore, NewEvent, PaneRef, Runtime,
+    retention_cutoff, titled_with_project, EventKind, EventNotifier, EventStore, NewEvent, PaneRef,
+    Runtime,
 };
 use crate::features::events::infrastructure::sqlite_store::SqliteEventStore;
 use crate::shared::domain::clock::Clock;
@@ -29,7 +30,7 @@ pub fn event_for(agent: &Agent, kind: EventKind, now: u64) -> NewEvent {
         source: "herdr".into(),
         agent: agent.agent.clone(),
         kind,
-        title,
+        title: titled_with_project(title, Some(agent.cwd.as_str()).filter(|c| !c.is_empty())),
         summary: agent.title.clone(),
         pane: Some(PaneRef {
             runtime: Runtime::Herdr,
@@ -185,7 +186,7 @@ mod tests {
             runtime: R::Herdr,
         };
         let e = event_for(&a, EventKind::ApprovalRequired, 9);
-        assert_eq!(e.title, "claude needs approval");
+        assert_eq!(e.title, "claude needs approval · w");
         assert_eq!(e.summary, "Fix tests");
         assert_eq!(
             e.pane,
