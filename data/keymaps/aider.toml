@@ -1,0 +1,14 @@
+# Keystrokes that answer a Aider confirmation prompt, per action.
+#
+# NEEDS FIELD VERIFICATION: assumes a line prompt that reads y/n followed
+# by Enter. Confirm against the version in use before relying on it.
+#
+# Allowed key names: enter esc tab space backspace up down left right y n 1 2 3
+
+agent = "aider"
+version = 1
+verified = false
+
+allow = ["y", "enter"]
+deny = ["n", "enter"]
+submit = ["enter"]

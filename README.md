@@ -13,14 +13,23 @@ It opens **no permanent network port**. The only listener is the one-shot pairin
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/lesquel/openmosh-hook/main/install.sh | sh
+openmosh-hook setup        # config, service, agent hooks, doctor
+openmosh-hook pair         # scan the QR code with OpenMosh
 ```
+
+The installer downloads the release binary for your platform (`openmosh-hook-<target>.tar.gz`
+for `x86_64`/`aarch64` Linux (static musl) and macOS) and checks it against the release's
+`SHA256SUMS`. **While the repository is private**, anonymous downloads fail: install the
+[GitHub CLI](https://cli.github.com), run `gh auth login`, and the installer uses
+`gh release download` instead (set `OPENMOSH_NO_GH=1` to never use it). From a clone you can
+also run `sh install.sh --from-source` or `--binary <path>`.
 
 | Option | Effect |
 |---|---|
 | `--dry-run` | Print every step, change nothing |
 | `--from-source` | `cargo install --git https://github.com/lesquel/openmosh-hook --locked` (the repository is private for now, so this uses your git credentials) |
 | `--binary <path>` | Install a binary you already built |
-| `--version <tag>` | Release to download (default: latest) |
+| `--version <tag>` | Release to download (default: latest), with `gh` or curl/wget |
 | `--yes` | Accept the offers to install Herdr / Tailscale with their official installers |
 | `--no-service` | Skip `openmosh-hook service install` |
 
@@ -28,12 +37,31 @@ The installer puts the binary in `~/.local/bin`, checks `sshd`, Herdr or tmux an
 writes `~/.config/openmosh/config.toml` (`0600`), registers the user service and runs
 `openmosh-hook doctor`. It prints each command before running it and never calls `sudo` itself.
 
+### Setup and uninstall
+
+`openmosh-hook setup [--yes] [--no-service] [--json]` writes the default config if there is
+none, installs the user service, offers the integration of every [detected agent](#agents)
+(asks on a terminal; `--yes` installs them all; with `--json` and no `--yes` it only lists
+them), runs `doctor` and prints the next step (`openmosh-hook pair`). Running it again is safe.
+
+`openmosh-hook uninstall [--all] [--dry-run] [--yes] [--json]` removes everything
+openmosh-hook created, and nothing else:
+
+1. the user service (stopped and disabled first),
+2. every agent integration it installed (only its own hooks; your other hooks stay),
+3. the `authorized_keys` lines tagged `openmosh:` (paired phones; your own keys stay),
+4. `$XDG_CONFIG_HOME/openmosh` and `$XDG_STATE_HOME/openmosh` (config, devices, events, host key),
+5. with `--all`, the `openmosh-hook` binary that is running.
+
+Without `--yes` it prints the plan and asks on a terminal; without a terminal (or with `--json`)
+it refuses with `confirmation_required`. `--dry-run` prints the plan and changes nothing.
+
 ## Commands
 
 | Command | Purpose |
 |---|---|
 | `openmosh-hook serve` | Daemon (systemd user service / launchd agent): poll Herdr every second, record `blocked` → `approval_required` and `done` → `done`, publish encrypted pushes |
-| `openmosh-hook emit --source <name> [--json]` | Record an event from an agent hook; the hook JSON comes on stdin. The pane is taken from `$HERDR_PANE_ID` (when `$HERDR_ENV=1`) or `$TMUX_PANE` |
+| `openmosh-hook emit --source <name> [--kind <kind>] [--json]` | Record an event from an agent hook; the hook JSON comes on stdin. The pane is taken from `$HERDR_PANE_ID` (when `$HERDR_ENV=1`) or `$TMUX_PANE`. `--kind approval_required\|question\|done\|notification` fixes the kind for agents whose payload does not say it; the payload is then optional (only its message is kept, and a terminal on stdin is not read). `notification` becomes `approval_required` when the payload is about a permission, else `question` |
 | `openmosh-hook pair [--alias <name>] [--timeout <secs>] [--invert] [--uri]` | QR pairing (see below). `--invert` renders dark-on-light; `--uri` also prints the pairing URI, which carries the one-time token |
 | `openmosh-hook pair-ssh --json` | Pairing over an existing SSH session; request `{"name","ppk","endpoint"}` on stdin, returns `{"device_id","alias","hpk"}` |
 | `openmosh-hook sessions list --json` | Herdr and tmux sessions |
@@ -43,7 +71,10 @@ writes `~/.config/openmosh/config.toml` (`0600`), registers the user service and
 | `openmosh-hook devices list --json` | Paired devices |
 | `openmosh-hook devices revoke <id> [--json]` | Remove the device's `authorized_keys` line and its record |
 | `openmosh-hook devices set-endpoint <id> <url> [--json]` | Rotate the push endpoint (clears `endpoint_stale`) |
-| `openmosh-hook integration install\|uninstall claude [--settings <path>] [--json]` | Add/remove Claude Code `Notification` and `Stop` hooks calling `emit --source claude` (default `~/.claude/settings.json`) |
+| `openmosh-hook integration install\|uninstall <agent> [--settings <path>] [--json]` | Add/remove the [agent's hooks](#agents) calling `emit --source <agent>`; `--settings` overrides the default file |
+| `openmosh-hook integration list [--json]` | Every supported agent: detected on this machine (binary on `PATH` or config dir present), integration installed, file, docs link |
+| `openmosh-hook setup [--yes] [--no-service] [--json]` | First-time [setup](#setup-and-uninstall) |
+| `openmosh-hook uninstall [--all] [--dry-run] [--yes] [--json]` | Remove everything openmosh-hook created ([details](#setup-and-uninstall)) |
 | `openmosh-hook doctor [--json]` | Check Tailscale, Herdr/tmux, permissions, sshd host key, sshd password logins (`sshd -G`; warns when password or keyboard-interactive login is on), devices, keymaps, service |
 | `openmosh-hook service install\|uninstall [--dry-run] [--json]` | Register/remove the user service |
 | `openmosh-hook attach herdr [--session <name>]` | Run the Herdr client (`herdr` or `herdr session attach <name>`, from `[bins] herdr`) with [focus mirroring](#mirroring); exits with Herdr's status code |
@@ -140,12 +171,38 @@ marks a `done` agent in that pane as seen.
 Directories default to `~/.config` and `~/.local/state`. The hook refuses to run when any of
 these is readable by group or others.
 
-## Agent keymaps
+## Agents
 
-Keystrokes per agent live in [`data/keymaps/`](./data/keymaps) and are embedded at build time.
-`claude`: allow = `enter`, deny = `esc`, text is typed then `enter`. **These still need field
-verification** against the Claude Code version in use; `doctor` warns until a keymap is marked
-`verified = true`.
+`integration install <agent>` wires each agent's own, documented hook mechanism. Every edit keeps
+your other settings and hooks, is idempotent, repoints our commands when the binary moved, and
+refuses to touch a file it cannot parse (or, for files it owns, one it did not write).
+`integration uninstall` removes only what it added.
+
+| Agent | File edited | Events → kind | Docs |
+|---|---|---|---|
+| `claude` Claude Code | `~/.claude/settings.json` | `Notification`, `Stop` (payload parsed) | [hooks](https://code.claude.com/docs/en/hooks) |
+| `codex` OpenAI Codex CLI | `~/.codex/hooks.json` | `PermissionRequest` → approval, `Stop` → done | [hooks](https://learn.chatgpt.com/docs/hooks) |
+| `gemini` Gemini CLI | `~/.gemini/settings.json` | `Notification` → notification, `AfterAgent` → done | [hooks](https://geminicli.com/docs/hooks/) |
+| `cursor` Cursor | `~/.cursor/hooks.json` | `stop` → done | [hooks](https://cursor.com/docs/agent/hooks) |
+| `copilot` GitHub Copilot CLI | `~/.copilot/hooks/openmosh.json` (own file) | `notification` → notification, `agentStop` → done | [hooks](https://docs.github.com/en/copilot/reference/hooks-reference) |
+| `kiro` Kiro CLI | `~/.kiro/hooks/openmosh.json` (own file) | `Stop` → done | [hooks](https://kiro.dev/docs/hooks/) |
+| `opencode` OpenCode | `$XDG_CONFIG_HOME/opencode/plugins/openmosh.js` (own plugin) | `permission.asked` → approval, `question.asked` → question, `session.idle` → done | [plugins](https://opencode.ai/docs/plugins/) |
+| `aider` Aider | `~/.aider.conf.yml` (marked block) | `notifications_command` → done | [notifications](https://aider.chat/docs/usage/notifications.html) |
+
+Notes: Codex asks you to review and trust new hooks on its next start; Copilot CLI, Kiro CLI and
+OpenCode load hooks/plugins when they start. The OpenCode plugin runs `openmosh-hook` with an
+argv (no shell). The Aider block refuses to install when you already set `notifications` or
+`notifications_command` yourself. `CODEX_HOME` and `COPILOT_HOME` are not followed: pass
+`--settings` when you use them. **Amp** documents no hook or notification command (only
+sounds), so it has no integration; Herdr state polling still reports it.
+
+### Keymaps
+
+Keystrokes per agent live in [`data/keymaps/`](./data/keymaps) and are embedded at build time:
+`claude`, `codex`, `gemini`, `cursor`, `copilot`, `opencode`, `amp` (allow `enter`, deny `esc`;
+`codex` allows with `y`) and `kiro`, `aider` (`y`/`n` then `enter`). Text answers are typed, then
+`enter`. **All of them still need field verification** against the agent version in use;
+`doctor` warns until a keymap is marked `verified = true`.
 
 ## Shared test vectors
 
@@ -176,8 +233,17 @@ cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test
 cargo test --test cli -- --ignored   # QR pairing end to end over this machine's Tailscale IPv4
 ```
 
-CLI tests run the binary against a temporary HOME with fake `herdr`, `tmux`, `tailscale` and
-`systemctl` scripts; no test sends keys to a real pane or touches real user files.
+CLI tests (`tests/cli.rs`, `tests/agents.rs`, `tests/lifecycle.rs`, sharing `tests/common/`) run
+the binary against a temporary HOME with fake `herdr`, `tmux`, `tailscale` and `systemctl`
+scripts; no test sends keys to a real pane or touches real user files. `tests/install_sh.rs`
+runs `install.sh --dry-run` with fake `uname`/`gh`.
+
+### Releases
+
+Pushing a `v*` tag runs [`.github/workflows/release.yml`](./.github/workflows/release.yml): it
+builds `x86_64-unknown-linux-musl`, `aarch64-unknown-linux-musl` (with `cross`),
+`x86_64-apple-darwin` and `aarch64-apple-darwin`, and publishes
+`openmosh-hook-<target>.tar.gz` plus one `SHA256SUMS` to the GitHub release.
 
 ## License
 

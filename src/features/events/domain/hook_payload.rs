@@ -4,7 +4,10 @@
 //! - Claude Code hooks: `hook_event_name` = `Notification` | `PermissionRequest` | `Stop`.
 //! - Generic: `{"kind":"approval_required|question|done","title":"…","summary":"…"}`.
 //!
-//! Only `message`/`title`/`summary` are kept; transcript paths, session ids
+//! - Any payload with a kind fixed by the caller (`emit --kind`), used by
+//!   agents whose hook payloads have no shared shape (see [`parse_with_kind`]).
+//!
+//! Only `message`/`title`/`summary` (or the agent's last-message field) are kept; transcript paths, session ids
 //! and tool inputs are ignored.
 
 use serde_json::Value;
@@ -94,16 +97,86 @@ pub fn parse_hook_payload(
             )
         }
     };
+    Ok(finish(source, kind, title, summary, pane, now))
+}
+
+/// Event kind chosen by the hook command line (`emit --kind`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EmitKind {
+    Fixed(EventKind),
+    /// A notification: approval when it is about a permission, else a question.
+    Notification,
+}
+
+/// Fields that carry the human message, in order of preference, across
+/// Codex (`last_assistant_message`), Gemini (`prompt_response`), Cursor
+/// (`text`), Copilot (`message`) and OpenCode plugin payloads.
+const MESSAGE_FIELDS: &[&str] = &[
+    "message",
+    "summary",
+    "last_assistant_message",
+    "prompt_response",
+    "text",
+];
+
+fn is_permission(v: &Value) -> bool {
+    let has = |k: &str, needle: &str| {
+        str_field(v, k).is_some_and(|s| s.to_ascii_lowercase().contains(needle))
+    };
+    has("notification_type", "permission")
+        || has("message", "permission")
+        || has("message", "approval")
+}
+
+/// Builds an event whose kind is fixed by the caller. The payload is optional:
+/// empty or non-JSON input still records the event, without a summary.
+pub fn parse_with_kind(
+    source: &str,
+    kind: EmitKind,
+    raw: &str,
+    pane: Option<PaneRef>,
+    now: u64,
+) -> Result<NewEvent, PayloadError> {
+    if !valid_source(source) {
+        return Err(PayloadError::Source);
+    }
+    let v: Value = serde_json::from_str(raw).unwrap_or(Value::Null);
+    let kind = match kind {
+        EmitKind::Fixed(k) => k,
+        EmitKind::Notification if is_permission(&v) => EventKind::ApprovalRequired,
+        EmitKind::Notification => EventKind::Question,
+    };
+    let title = match kind {
+        EventKind::ApprovalRequired => format!("{source} needs approval"),
+        EventKind::Question => format!("{source} is waiting for input"),
+        EventKind::Done => format!("{source} finished"),
+    };
+    let summary = MESSAGE_FIELDS
+        .iter()
+        .find_map(|k| str_field(&v, k).filter(|s| !s.trim().is_empty()))
+        .unwrap_or_default()
+        .to_string();
+    Ok(finish(source, kind, title, summary, pane, now))
+}
+
+fn finish(
+    source: &str,
+    kind: EventKind,
+    title: String,
+    summary: String,
+    pane: Option<PaneRef>,
+    now: u64,
+) -> NewEvent {
     let clean = |s: String| s.chars().filter(|c| !c.is_control()).collect::<String>();
-    Ok(NewEvent {
+    NewEvent {
         source: source.to_string(),
-        agent,
+        agent: source.to_string(),
         kind,
         title: clean(title).chars().take(120).collect(),
         summary: clean(summary).chars().take(200).collect(),
         pane,
         created_at: now,
-    })
+    }
 }
 
 #[cfg(test)]
@@ -184,5 +257,50 @@ mod tests {
             parse_hook_payload("bad name", "{}", None, 1),
             Err(PayloadError::Source)
         );
+    }
+
+    #[test]
+    fn fixed_kind_accepts_any_payload_and_picks_the_message_field() {
+        let done = parse_with_kind(
+            "codex",
+            EmitKind::Fixed(EventKind::Done),
+            r#"{"hook_event_name":"Stop","last_assistant_message":"All tests pass\u001b"}"#,
+            None,
+            3,
+        )
+        .unwrap();
+        assert_eq!(done.kind, EventKind::Done);
+        assert_eq!(done.title, "codex finished");
+        assert_eq!(done.summary, "All tests pass");
+        assert_eq!(done.agent, "codex");
+        let empty =
+            parse_with_kind("aider", EmitKind::Fixed(EventKind::Done), "", None, 3).unwrap();
+        assert_eq!(empty.summary, "");
+        let junk = parse_with_kind(
+            "kiro",
+            EmitKind::Fixed(EventKind::Question),
+            "not json",
+            None,
+            3,
+        )
+        .unwrap();
+        assert_eq!(junk.title, "kiro is waiting for input");
+        assert_eq!(
+            parse_with_kind("bad name", EmitKind::Notification, "{}", None, 1),
+            Err(PayloadError::Source)
+        );
+    }
+
+    #[test]
+    fn notification_kind_detects_permission_prompts() {
+        let gemini = r#"{"hook_event_name":"Notification","notification_type":"ToolPermission","message":"Run shell?"}"#;
+        let e = parse_with_kind("gemini", EmitKind::Notification, gemini, None, 1).unwrap();
+        assert_eq!(e.kind, EventKind::ApprovalRequired);
+        assert_eq!(e.title, "gemini needs approval");
+        assert_eq!(e.summary, "Run shell?");
+        let copilot =
+            r#"{"hook_event_name":"notification","notification_type":"idle","message":"Waiting"}"#;
+        let q = parse_with_kind("copilot", EmitKind::Notification, copilot, None, 1).unwrap();
+        assert_eq!(q.kind, EventKind::Question);
     }
 }

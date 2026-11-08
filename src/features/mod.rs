@@ -10,3 +10,4 @@ pub mod pairing;
 pub mod push;
 pub mod responses;
 pub mod service;
+pub mod setup;

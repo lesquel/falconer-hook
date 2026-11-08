@@ -9,7 +9,9 @@ use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
-use crate::features::pairing::domain::{device_comment, AuthorizedKeys, RegistryError};
+use crate::features::pairing::domain::{
+    device_comment, is_tagged_line, AuthorizedKeys, RegistryError,
+};
 use crate::shared::infrastructure::fs_secure::{lock_exclusive, write_atomic, FsError};
 
 pub struct FileAuthorizedKeys {
@@ -115,6 +117,33 @@ impl AuthorizedKeys for FileAuthorizedKeys {
         }
         Ok(removed)
     }
+
+    fn remove_tagged(&self, dry_run: bool) -> Result<usize, RegistryError> {
+        if !self.path.exists() {
+            return Ok(0);
+        }
+        if dry_run {
+            // Read only: no lock file, no permission changes.
+            let text = fs::read_to_string(&self.path).map_err(|e| io(&self.path, e))?;
+            return Ok(text.lines().filter(|l| is_tagged_line(l)).count());
+        }
+        let _g = lock_exclusive(&self.lock_path).map_err(fs_err)?;
+        let (real, text, mode) = self.load()?;
+        let mut n = 0;
+        let mut out = String::with_capacity(text.len());
+        for l in text.lines() {
+            if is_tagged_line(l) {
+                n += 1;
+            } else {
+                out.push_str(l);
+                out.push('\n');
+            }
+        }
+        if n > 0 {
+            write_atomic(&real, out.as_bytes(), mode).map_err(fs_err)?;
+        }
+        Ok(n)
+    }
 }
 
 #[cfg(test)]
@@ -217,5 +246,43 @@ mod tests {
             .is_err());
         assert!(fs::symlink_metadata(&p).unwrap().file_type().is_symlink());
         assert!(!t.path().join("nowhere").exists());
+    }
+
+    #[test]
+    fn remove_tagged_keeps_foreign_lines_and_dry_run_changes_nothing() {
+        let t = tempfile::tempdir().unwrap();
+        let ssh = t.path().join(".ssh");
+        fs::create_dir_all(&ssh).unwrap();
+        fs::set_permissions(&ssh, fs::Permissions::from_mode(0o755)).unwrap();
+        let path = ssh.join("authorized_keys");
+        let mine = format!("{KEY} me@laptop\nssh-rsa AAAA openmosh-like-but-not\n");
+        let text = format!(
+            "{}{}\n{}\n",
+            mine,
+            authorized_keys_line(KEY, "AAAAAAAAAAAAAAAAAAAA01"),
+            authorized_keys_line(KEY, "AAAAAAAAAAAAAAAAAAAA02")
+        );
+        fs::write(&path, &text).unwrap();
+        let k = FileAuthorizedKeys {
+            path: path.clone(),
+            lock_path: t.path().join(".lock"),
+        };
+        assert_eq!(k.remove_tagged(true).unwrap(), 2);
+        assert_eq!(fs::read_to_string(&path).unwrap(), text);
+        assert!(!t.path().join(".lock").exists(), "dry run takes no lock");
+        assert_eq!(
+            fs::metadata(&ssh).unwrap().permissions().mode() & 0o777,
+            0o755,
+            "dry run never chmods"
+        );
+        assert_eq!(k.remove_tagged(false).unwrap(), 2);
+        assert_eq!(fs::read_to_string(&path).unwrap(), mine);
+        assert_eq!(k.remove_tagged(false).unwrap(), 0);
+        let missing = FileAuthorizedKeys {
+            path: t.path().join("none/authorized_keys"),
+            lock_path: t.path().join(".lock2"),
+        };
+        assert_eq!(missing.remove_tagged(false).unwrap(), 0);
+        assert!(!t.path().join("none").exists());
     }
 }

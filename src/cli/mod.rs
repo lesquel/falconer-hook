@@ -33,6 +33,10 @@ pub enum Command {
         /// Agent name, e.g. `claude`.
         #[arg(long)]
         source: String,
+        /// Event kind, for agents whose payload does not say it. The payload
+        /// is then optional and only its message is kept.
+        #[arg(long, value_enum)]
+        kind: Option<KindArg>,
         #[command(flatten)]
         out: JsonFlag,
     },
@@ -93,6 +97,32 @@ pub enum Command {
     Integration {
         #[command(subcommand)]
         cmd: IntegrationCmd,
+    },
+    /// First-time setup: config, user service, agent integrations, doctor.
+    Setup {
+        /// Install the integration of every detected agent without asking.
+        #[arg(long)]
+        yes: bool,
+        /// Do not register the user service.
+        #[arg(long)]
+        no_service: bool,
+        #[command(flatten)]
+        out: JsonFlag,
+    },
+    /// Remove everything openmosh-hook created: service, integrations,
+    /// paired keys, devices, state and config.
+    Uninstall {
+        /// Also delete the openmosh-hook binary that is running.
+        #[arg(long)]
+        all: bool,
+        /// Print the plan without changing anything.
+        #[arg(long)]
+        dry_run: bool,
+        /// Do not ask for confirmation.
+        #[arg(long)]
+        yes: bool,
+        #[command(flatten)]
+        out: JsonFlag,
     },
     /// Check Tailscale, Herdr/tmux, permissions, devices and the service.
     Doctor {
@@ -179,24 +209,56 @@ pub enum DevicesCmd {
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
+pub enum KindArg {
+    #[value(name = "approval_required")]
+    ApprovalRequired,
+    Question,
+    Done,
+    /// Approval when the payload is about a permission, else question.
+    Notification,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
 pub enum AgentArg {
+    /// Claude Code (~/.claude/settings.json)
     Claude,
+    /// OpenAI Codex CLI (~/.codex/hooks.json)
+    Codex,
+    /// Gemini CLI (~/.gemini/settings.json)
+    Gemini,
+    /// Cursor agent (~/.cursor/hooks.json)
+    Cursor,
+    /// GitHub Copilot CLI (~/.copilot/hooks/openmosh.json)
+    Copilot,
+    /// Kiro CLI (~/.kiro/hooks/openmosh.json)
+    Kiro,
+    /// OpenCode (~/.config/opencode/plugins/openmosh.js)
+    Opencode,
+    /// Aider (~/.aider.conf.yml)
+    Aider,
 }
 
 #[derive(Debug, Subcommand)]
 pub enum IntegrationCmd {
+    /// Wire the agent's hooks to `openmosh-hook emit`.
     Install {
         agent: AgentArg,
-        /// Settings file (default: ~/.claude/settings.json).
+        /// File to edit (default: the agent's user-level file listed above).
         #[arg(long)]
         settings: Option<PathBuf>,
         #[command(flatten)]
         out: JsonFlag,
     },
+    /// Remove only the hooks openmosh-hook added.
     Uninstall {
         agent: AgentArg,
         #[arg(long)]
         settings: Option<PathBuf>,
+        #[command(flatten)]
+        out: JsonFlag,
+    },
+    /// Every supported agent: detected on this machine, integration installed.
+    List {
         #[command(flatten)]
         out: JsonFlag,
     },
@@ -228,6 +290,8 @@ impl Command {
             | Command::PairSsh { out }
             | Command::Respond { out, .. }
             | Command::Doctor { out }
+            | Command::Setup { out, .. }
+            | Command::Uninstall { out, .. }
             | Command::Version { out } => out.json,
             Command::Sessions {
                 cmd: ListCmd::List { out },
@@ -244,9 +308,9 @@ impl Command {
                 | DevicesCmd::SetEndpoint { out, .. } => out.json,
             },
             Command::Integration { cmd } => match cmd {
-                IntegrationCmd::Install { out, .. } | IntegrationCmd::Uninstall { out, .. } => {
-                    out.json
-                }
+                IntegrationCmd::Install { out, .. }
+                | IntegrationCmd::Uninstall { out, .. }
+                | IntegrationCmd::List { out } => out.json,
             },
             Command::Service { cmd } => match cmd {
                 ServiceCmd::Install { out, .. } | ServiceCmd::Uninstall { out, .. } => out.json,

@@ -65,3 +65,32 @@ mod tests {
         assert_ne!(a, b);
     }
 }
+
+/// Whether an executable file named `name` is in one of the `PATH` directories.
+pub fn on_path(name: &str, path_env: Option<&str>) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    path_env.unwrap_or("").split(':').any(|dir| {
+        !dir.is_empty()
+            && std::fs::metadata(std::path::Path::new(dir).join(name))
+                .is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+    })
+}
+
+#[cfg(test)]
+mod path_tests {
+    use super::on_path;
+    use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn finds_only_executable_files() {
+        let t = tempfile::tempdir().unwrap();
+        let exe = t.path().join("tool");
+        std::fs::write(&exe, "#!/bin/sh\n").unwrap();
+        let path = format!("/nonexistent:{}", t.path().display());
+        assert!(!on_path("tool", Some(&path)), "not executable yet");
+        std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(on_path("tool", Some(&path)));
+        assert!(!on_path("other", Some(&path)));
+        assert!(!on_path("tool", None));
+    }
+}

@@ -69,9 +69,6 @@ impl Paths {
     pub fn authorized_keys(&self) -> PathBuf {
         self.home.join(".ssh/authorized_keys")
     }
-    pub fn claude_settings(&self) -> PathBuf {
-        self.home.join(".claude/settings.json")
-    }
     pub fn systemd_unit(&self) -> PathBuf {
         self.xdg_config_home
             .join("systemd/user/openmosh-hook.service")
@@ -81,6 +78,20 @@ impl Paths {
             .join("Library/LaunchAgents/dev.openmosh.hook.plist")
     }
 }
+
+/// `config.toml` written by `setup` (and `install.sh`) when none exists.
+pub const DEFAULT_CONFIG: &str = r#"# openmosh-hook configuration. Keep this file mode 0600.
+# host_alias = "my-laptop"   # name shown on the phone (default: hostname)
+retention_days = 7
+poll_interval_ms = 1000
+sources = ["herdr", "tmux"]
+ssh_port = 22
+
+[push]
+# Push transport suggested to the phone. ntfy.sh only sees ciphertext;
+# a self-hosted ntfy inside your tailnet also works.
+server = "https://ntfy.sh"
+"#;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default, deny_unknown_fields)]
@@ -179,6 +190,13 @@ impl Config {
 mod tests {
     use super::*;
     use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn default_config_parses() {
+        let c: Config = toml::from_str(DEFAULT_CONFIG).unwrap();
+        assert_eq!(c.retention_days, 7);
+        assert_eq!(c.push.server, "https://ntfy.sh");
+    }
 
     #[test]
     fn xdg_paths_follow_env_and_fallbacks() {

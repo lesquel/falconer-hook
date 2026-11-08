@@ -4,7 +4,17 @@ use serde::Deserialize;
 
 use crate::features::responses::domain::{Keymap, KeymapSource};
 
-const EMBEDDED: &[&str] = &[include_str!("../../../../data/keymaps/claude.toml")];
+const EMBEDDED: &[&str] = &[
+    include_str!("../../../../data/keymaps/claude.toml"),
+    include_str!("../../../../data/keymaps/codex.toml"),
+    include_str!("../../../../data/keymaps/opencode.toml"),
+    include_str!("../../../../data/keymaps/cursor.toml"),
+    include_str!("../../../../data/keymaps/kiro.toml"),
+    include_str!("../../../../data/keymaps/gemini.toml"),
+    include_str!("../../../../data/keymaps/copilot.toml"),
+    include_str!("../../../../data/keymaps/aider.toml"),
+    include_str!("../../../../data/keymaps/amp.toml"),
+];
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -69,6 +79,15 @@ mod tests {
             "claude keys still need field verification"
         );
         assert!(k.keymap("unknown").is_none());
+        for agent in [
+            "codex", "opencode", "cursor", "kiro", "gemini", "copilot", "aider", "amp",
+        ] {
+            let m = k.keymap(agent).unwrap_or_else(|| panic!("{agent} keymap"));
+            assert!(
+                !m.verified,
+                "{agent} keys are unverified until field-tested"
+            );
+        }
     }
 
     #[test]

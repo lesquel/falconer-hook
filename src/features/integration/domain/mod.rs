@@ -1,17 +1,22 @@
-//! Pure edits of a Claude Code `settings.json` value.
+//! Pure edits of agent configuration files so each agent's own hook (or
+//! plugin, or notification command) runs `openmosh-hook emit --source <agent>`.
 //!
-//! Adds one `{"type":"command","command":"<exe> emit --source claude"}` hook
-//! under `hooks.Notification` and `hooks.Stop`. Unrelated keys and hooks are
-//! preserved; both operations are idempotent. Installing again from a
-//! different executable path repoints our hook commands at it.
+//! Every edit preserves unrelated content, is idempotent, repoints our
+//! commands when the executable moved, and refuses unexpected shapes
+//! instead of guessing. A command is "ours" when it names `openmosh-hook`
+//! and contains ` emit --source <agent>`.
 
-use serde_json::{json, Map, Value};
+pub mod aider;
+pub mod catalog;
+pub mod flat;
+pub mod nested;
+pub mod owned;
+
 use thiserror::Error;
 
 use crate::shared::domain::error::ErrorCode;
 
-pub const HOOK_EVENTS: &[&str] = &["Notification", "Stop"];
-const MARKER: &str = "emit --source claude";
+pub use catalog::{AgentId, AgentSpec, Base, Format, CATALOG};
 
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum IntegrationError {
@@ -19,6 +24,8 @@ pub enum IntegrationError {
     NotAnObject,
     #[error("settings file has an unexpected `hooks` shape; edit it manually")]
     BadHooks,
+    #[error("the file exists and was not created by openmosh-hook; edit it manually")]
+    Conflict,
     #[error("settings file could not be read or written")]
     Io,
 }
@@ -27,188 +34,70 @@ impl ErrorCode for IntegrationError {
     fn code(&self) -> &'static str {
         match self {
             IntegrationError::NotAnObject | IntegrationError::BadHooks => "settings_invalid",
+            IntegrationError::Conflict => "settings_conflict",
             IntegrationError::Io => "io_error",
         }
     }
 }
 
-/// Single-quotes `s` for a POSIX shell (Claude Code runs hook commands via a shell).
+/// Single-quotes `s` for a POSIX shell (agents run hook commands via a shell).
 pub fn shell_quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', r"'\''"))
 }
 
-pub fn hook_command(exe: &str) -> String {
-    format!("{} {MARKER}", shell_quote(exe))
+fn marker(agent: &str) -> String {
+    format!(" emit --source {agent}")
 }
 
-fn is_ours(hook: &Value) -> bool {
-    hook.get("command")
-        .and_then(Value::as_str)
-        .is_some_and(|c| c.contains("openmosh-hook") && c.ends_with(MARKER))
-}
-
-fn hooks_obj(settings: &mut Value) -> Result<&mut Map<String, Value>, IntegrationError> {
-    let obj = settings
-        .as_object_mut()
-        .ok_or(IntegrationError::NotAnObject)?;
-    obj.entry("hooks")
-        .or_insert_with(|| json!({}))
-        .as_object_mut()
-        .ok_or(IntegrationError::BadHooks)
-}
-
-/// Adds the hooks, or repoints ours at `command` when they name another
-/// executable path (e.g. after the binary moved). Returns whether
-/// `settings` changed.
-pub fn install(settings: &mut Value, command: &str) -> Result<bool, IntegrationError> {
-    let hooks = hooks_obj(settings)?;
-    let mut changed = false;
-    for ev in HOOK_EVENTS {
-        let groups = hooks
-            .entry(*ev)
-            .or_insert_with(|| json!([]))
-            .as_array_mut()
-            .ok_or(IntegrationError::BadHooks)?;
-        let mut present = false;
-        for g in groups.iter_mut() {
-            let Some(hs) = g.get_mut("hooks").and_then(Value::as_array_mut) else {
-                continue;
-            };
-            for h in hs.iter_mut().filter(|h| is_ours(h)) {
-                present = true;
-                if h.get("command").and_then(Value::as_str) != Some(command) {
-                    h["command"] = Value::String(command.to_string());
-                    changed = true;
-                }
-            }
-        }
-        if !present {
-            groups.push(json!({"hooks": [{"type": "command", "command": command}]}));
-            changed = true;
-        }
+/// `'<exe>' emit --source <agent>[ --kind <kind>]`.
+pub fn agent_command(exe: &str, agent: &str, kind: Option<&str>) -> String {
+    let mut c = format!("{}{}", shell_quote(exe), marker(agent));
+    if let Some(k) = kind {
+        c.push_str(" --kind ");
+        c.push_str(k);
     }
-    Ok(changed)
+    c
 }
 
-/// Removes only our hooks, dropping groups/events/`hooks` left empty by that.
-pub fn uninstall(settings: &mut Value) -> Result<bool, IntegrationError> {
-    let obj = settings
-        .as_object_mut()
-        .ok_or(IntegrationError::NotAnObject)?;
-    let Some(hooks) = obj.get_mut("hooks") else {
-        return Ok(false);
-    };
-    let hooks = hooks.as_object_mut().ok_or(IntegrationError::BadHooks)?;
-    let mut changed = false;
-    for ev in HOOK_EVENTS {
-        let Some(groups) = hooks.get_mut(*ev).and_then(Value::as_array_mut) else {
-            continue;
-        };
-        for g in groups.iter_mut() {
-            if let Some(hs) = g.get_mut("hooks").and_then(Value::as_array_mut) {
-                let before = hs.len();
-                hs.retain(|h| !is_ours(h));
-                if hs.len() != before {
-                    changed = true;
-                }
-            }
-        }
-        groups.retain(|g| {
-            g.get("hooks")
-                .and_then(Value::as_array)
-                .is_none_or(|hs| !hs.is_empty())
-        });
-        if groups.is_empty() {
-            hooks.remove(*ev);
-        }
-    }
-    if changed && hooks.is_empty() {
-        obj.remove("hooks");
-    }
-    Ok(changed)
+/// Whether `command` is one of our hook commands for `agent`.
+pub fn is_our_command(command: &str, agent: &str) -> bool {
+    let m = marker(agent);
+    command.contains("openmosh-hook")
+        && (command.ends_with(&m) || command.contains(&format!("{m} ")))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    const CMD: &str = "'/home/u/.local/bin/openmosh-hook' emit --source claude";
-
-    #[test]
-    fn install_preserves_unrelated_and_is_idempotent() {
-        let mut s = json!({
-            "model": "opus",
-            "hooks": {"Stop": [{"hooks": [{"type": "command", "command": "notify-send done"}]}], "PreToolUse": []}
-        });
-        assert!(install(&mut s, CMD).unwrap());
-        assert!(!install(&mut s, CMD).unwrap(), "second install is a no-op");
-        assert_eq!(s["model"], "opus");
-        assert_eq!(s["hooks"]["PreToolUse"], json!([]));
-        assert_eq!(
-            s["hooks"]["Stop"][0]["hooks"][0]["command"],
-            "notify-send done"
-        );
-        assert_eq!(s["hooks"]["Stop"][1]["hooks"][0]["command"], CMD);
-        assert_eq!(
-            s["hooks"]["Notification"][0]["hooks"][0],
-            json!({"type": "command", "command": CMD})
-        );
-    }
-
-    #[test]
-    fn install_repoints_a_stale_executable_path() {
-        let old = "'/old/place/openmosh-hook' emit --source claude";
-        let mut s = json!({"hooks": {
-            "Stop": [{"hooks": [{"type": "command", "command": "notify-send done"}, {"type": "command", "command": old}]}],
-            "Notification": [{"hooks": [{"type": "command", "command": CMD}]}]
-        }});
-        assert!(install(&mut s, CMD).unwrap());
-        assert_eq!(
-            s["hooks"]["Stop"][0]["hooks"][0]["command"],
-            "notify-send done"
-        );
-        assert_eq!(s["hooks"]["Stop"][0]["hooks"][1]["command"], CMD);
-        assert_eq!(s["hooks"]["Stop"].as_array().unwrap().len(), 1);
-        assert_eq!(s["hooks"]["Notification"][0]["hooks"][0]["command"], CMD);
-        assert!(!install(&mut s, CMD).unwrap(), "idempotent once repointed");
-    }
-
-    #[test]
-    fn uninstall_removes_only_ours() {
-        let original = json!({"model": "opus", "hooks": {"Stop": [{"hooks": [{"type": "command", "command": "notify-send done"}]}]}});
-        let mut s = original.clone();
-        install(&mut s, CMD).unwrap();
-        assert!(uninstall(&mut s).unwrap());
-        assert_eq!(s, original);
-        assert!(!uninstall(&mut s).unwrap());
-
-        let mut empty = json!({});
-        install(&mut empty, CMD).unwrap();
-        uninstall(&mut empty).unwrap();
-        assert_eq!(empty, json!({}));
-    }
-
-    #[test]
-    fn refuses_unexpected_shapes() {
-        assert_eq!(
-            install(&mut json!([]), CMD),
-            Err(IntegrationError::NotAnObject)
-        );
-        assert_eq!(
-            install(&mut json!({"hooks": []}), CMD),
-            Err(IntegrationError::BadHooks)
-        );
-        assert_eq!(
-            install(&mut json!({"hooks": {"Stop": {}}}), CMD),
-            Err(IntegrationError::BadHooks)
-        );
-    }
-
     #[test]
     fn command_is_shell_quoted() {
         assert_eq!(
-            hook_command("/opt/it's/openmosh-hook"),
+            agent_command("/opt/it's/openmosh-hook", "claude", None),
             r"'/opt/it'\''s/openmosh-hook' emit --source claude"
         );
+        assert_eq!(
+            agent_command("/b/openmosh-hook", "codex", Some("done")),
+            "'/b/openmosh-hook' emit --source codex --kind done"
+        );
+    }
+
+    #[test]
+    fn ours_matches_the_agent_exactly() {
+        let c = agent_command("/b/openmosh-hook", "codex", Some("done"));
+        assert!(is_our_command(&c, "codex"));
+        assert!(!is_our_command(&c, "cod"));
+        assert!(is_our_command(
+            "'/b/openmosh-hook' emit --source claude",
+            "claude"
+        ));
+        assert!(!is_our_command(
+            "notify-send emit --source claude",
+            "claude"
+        ));
+        assert!(!is_our_command(
+            "'/b/openmosh-hook' emit --source claudex",
+            "claude"
+        ));
     }
 }

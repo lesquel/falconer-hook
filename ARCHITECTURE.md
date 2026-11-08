@@ -11,6 +11,8 @@ src/
 │   ├── mod.rs               #   Ctx (paths, env, runner), private state, runtimes, push notifier, dispatch
 │   ├── commands.rs          #   request/response commands
 │   ├── serve.rs             #   daemon loop
+│   ├── integrations.rs      #   integration install/uninstall/list over the agent catalog
+│   ├── lifecycle.rs         #   setup and uninstall
 │   ├── pair.rs              #   QR and SSH pairing
 │   └── attach.rs            #   `attach herdr`: Herdr client + focus mirror
 ├── cli/                     # clap definitions and the JSON envelope; no adapters
@@ -26,8 +28,11 @@ src/
         ├── application/     # use cases, generic over ports
         └── infrastructure/  # adapters
 tests/
-├── cli.rs                   # the binary against a temp HOME and fake herdr/tmux/tailscale/systemctl
-├── install_sh.rs            # install.sh --dry-run
+├── common/                  # shared harness: temp HOME, fake herdr/tmux/tailscale/systemctl
+├── cli.rs                   # the binary end to end
+├── agents.rs                # agent integrations and `emit --kind`
+├── lifecycle.rs             # setup and uninstall
+├── install_sh.rs            # install.sh --dry-run (fake uname/gh)
 └── vectors/                 # shared wire-format vectors (push_v1.json, pair_v1.json)
 data/
 └── keymaps/                 # per-agent keystrokes (versioned data, embedded at build time)
@@ -44,7 +49,8 @@ data/
 | `responses` | Resolve an event and execute allow/deny/text | `KeymapSource` (uses `AgentRuntime`, `EventStore`, `EventNotifier`) | `EmbeddedKeymaps` |
 | `service` | Render and apply the user service plan | `ServiceFiles` (uses `CommandRunner`) | `FsServiceFiles` |
 | `doctor` | Diagnose dependencies, permissions and connectivity | uses other ports read-only | filesystem and service checks |
-| `integration` | Add/remove Claude Code hooks calling `emit` | `SettingsFile` | `JsonSettingsFile` |
+| `integration` | Agent catalog (Claude Code, Codex, Gemini, Cursor, Copilot, Kiro, OpenCode, Aider) and pure edits of each agent's hook file calling `emit` | `SettingsFile` | `JsonSettingsFile` |
+| `setup` | Uninstall plan (only what openmosh-hook created) and its step-by-step execution | `UninstallPorts` (implemented in `app/lifecycle.rs` over `service`, `integration`, `pairing`) | — |
 | `mirror` | Run the Herdr client and mirror focus to every attached client | `FocusSocket`, `Launcher`, `MonoClock` | `HerdrSocket` (Unix socket, NDJSON), `TtyLauncher`, `SystemMonoClock` |
 
 Cross-feature calls go through another feature's `domain` ports (for example `push` reads

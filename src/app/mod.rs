@@ -4,6 +4,8 @@
 
 mod attach;
 mod commands;
+mod integrations;
+mod lifecycle;
 mod pair;
 mod serve;
 
@@ -34,6 +36,8 @@ pub struct Ctx {
     /// Agent pane from `$HERDR_ENV`/`$HERDR_PANE_ID` or `$TMUX_PANE`.
     pub pane: Option<PaneRef>,
     pub exe: PathBuf,
+    /// `$PATH`, used only to detect installed agents.
+    pub path_env: Option<String>,
     pub stop: Arc<AtomicBool>,
 }
 
@@ -72,6 +76,7 @@ impl Ctx {
             }),
             pane,
             exe,
+            path_env: get("PATH"),
             stop: Arc::new(AtomicBool::new(false)),
         })
     }
@@ -178,7 +183,7 @@ pub fn run(ctx: &Ctx, command: Command) -> Result<Reply, CliError> {
     use crate::cli::{DevicesCmd, InboxCmd, IntegrationCmd, ListCmd, ServiceCmd};
     match command {
         Command::Serve => serve::serve(ctx),
-        Command::Emit { source, .. } => commands::emit(ctx, &source),
+        Command::Emit { source, kind, .. } => commands::emit(ctx, &source, kind),
         Command::Pair {
             alias,
             timeout,
@@ -209,11 +214,25 @@ pub fn run(ctx: &Ctx, command: Command) -> Result<Reply, CliError> {
             }
         },
         Command::Integration { cmd } => match cmd {
-            IntegrationCmd::Install { settings, .. } => commands::integration(ctx, settings, true),
-            IntegrationCmd::Uninstall { settings, .. } => {
-                commands::integration(ctx, settings, false)
-            }
+            IntegrationCmd::Install {
+                agent, settings, ..
+            } => integrations::integration(ctx, agent, settings, true),
+            IntegrationCmd::Uninstall {
+                agent, settings, ..
+            } => integrations::integration(ctx, agent, settings, false),
+            IntegrationCmd::List { .. } => integrations::list(ctx),
         },
+        Command::Setup {
+            yes,
+            no_service,
+            out,
+        } => lifecycle::setup(ctx, yes, no_service, out.json),
+        Command::Uninstall {
+            all,
+            dry_run,
+            yes,
+            out,
+        } => lifecycle::uninstall(ctx, all, dry_run, yes, out.json),
         Command::Doctor { .. } => commands::doctor(ctx),
         Command::Service { cmd } => match cmd {
             ServiceCmd::Install { dry_run, .. } => commands::service(ctx, true, dry_run),

@@ -76,6 +76,16 @@ pub trait AuthorizedKeys {
     fn append(&self, line: &str) -> Result<(), RegistryError>;
     /// Removes every line ending in `openmosh:<device_id>`. Returns whether one was removed.
     fn remove_device(&self, device_id: &str) -> Result<bool, RegistryError>;
+    /// Removes every line tagged `openmosh:` (any device) and returns how
+    /// many; with `dry_run` only counts them, changing nothing on disk.
+    fn remove_tagged(&self, dry_run: bool) -> Result<usize, RegistryError>;
+}
+
+/// Whether an `authorized_keys` line belongs to a paired phone.
+pub fn is_tagged_line(line: &str) -> bool {
+    line.split_whitespace()
+        .last()
+        .is_some_and(|c| c.starts_with("openmosh:"))
 }
 
 /// Snapshot of the local Tailscale node.
@@ -182,6 +192,14 @@ pub mod fakes {
             let before = v.len();
             v.retain(|l| !l.ends_with(&tag));
             Ok(v.len() != before)
+        }
+        fn remove_tagged(&self, dry_run: bool) -> Result<usize, RegistryError> {
+            let mut v = self.lines.borrow_mut();
+            let n = v.iter().filter(|l| is_tagged_line(l)).count();
+            if !dry_run {
+                v.retain(|l| !is_tagged_line(l));
+            }
+            Ok(n)
         }
     }
 }

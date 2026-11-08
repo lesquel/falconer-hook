@@ -1,4 +1,4 @@
-//! Agent integrations: add/remove Claude Code hooks that call `emit`.
+//! Agent integrations: wire each agent's own hook mechanism to call `emit`.
 
 pub mod application;
 pub mod domain;

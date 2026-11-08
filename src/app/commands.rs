@@ -3,11 +3,10 @@
 use serde_json::json;
 use std::fmt::Write as _;
 use std::io::Read;
-use std::path::PathBuf;
 
 use super::{open_state, with_notifier, Ctx, Runtimes};
 use crate::cli::output::{CliError, Reply};
-use crate::cli::ActionArg;
+use crate::cli::{ActionArg, KindArg};
 use crate::features::agents::application::{ListAgents, ListSessions};
 use crate::features::doctor::application::{
     check_devices, check_keymaps, check_runtimes, check_tailscale,
@@ -17,10 +16,7 @@ use crate::features::doctor::infrastructure::{
     check_launchd_service, check_permissions, check_ssh, check_sshd_auth, check_systemd_service,
 };
 use crate::features::events::application::{IngestEvent, IngestOutcome, ListInbox};
-use crate::features::events::domain::parse_hook_payload;
-use crate::features::integration::application::ClaudeIntegration;
-use crate::features::integration::domain::hook_command;
-use crate::features::integration::infrastructure::JsonSettingsFile;
+use crate::features::events::domain::{parse_hook_payload, parse_with_kind, EmitKind, EventKind};
 use crate::features::pairing::application::DeviceAdmin;
 use crate::features::pairing::infrastructure::tailscale::TailscaleCli;
 use crate::features::responses::application::RespondToEvent;
@@ -46,10 +42,29 @@ pub fn read_stdin(max: usize) -> Result<String, CliError> {
     String::from_utf8(buf).map_err(|_| CliError::new("invalid_input", "stdin is not UTF-8"))
 }
 
-pub fn emit(ctx: &Ctx, source: &str) -> Result<Reply, CliError> {
+pub fn emit(ctx: &Ctx, source: &str, kind: Option<KindArg>) -> Result<Reply, CliError> {
+    use std::io::IsTerminal;
     let cfg = ctx.config()?;
-    let raw = read_stdin(1024 * 1024)?;
-    let new = parse_hook_payload(source, &raw, ctx.pane.clone(), SystemClock.now())?;
+    // With --kind the payload is optional, and a hook run from an
+    // interactive shell (e.g. Aider) may inherit the terminal: never block on it.
+    let raw = if kind.is_some() && std::io::stdin().is_terminal() {
+        String::new()
+    } else {
+        read_stdin(1024 * 1024)?
+    };
+    let (pane, now) = (ctx.pane.clone(), SystemClock.now());
+    let new = match kind {
+        None => parse_hook_payload(source, &raw, pane, now)?,
+        Some(k) => {
+            let k = match k {
+                KindArg::ApprovalRequired => EmitKind::Fixed(EventKind::ApprovalRequired),
+                KindArg::Question => EmitKind::Fixed(EventKind::Question),
+                KindArg::Done => EmitKind::Fixed(EventKind::Done),
+                KindArg::Notification => EmitKind::Notification,
+            };
+            parse_with_kind(source, k, &raw, pane, now)?
+        }
+    };
     let st = open_state(ctx)?;
     let ingest = IngestEvent {
         store: &st.store,
@@ -216,32 +231,6 @@ pub fn devices_set_endpoint(ctx: &Ctx, id: &str, url: &str) -> Result<Reply, Cli
         &json!({"device": d}),
         format!("Updated {}", d.name),
     ))
-}
-
-pub fn integration(ctx: &Ctx, settings: Option<PathBuf>, install: bool) -> Result<Reply, CliError> {
-    let file = JsonSettingsFile {
-        path: settings.unwrap_or_else(|| ctx.paths.claude_settings()),
-    };
-    let exe = ctx
-        .exe
-        .to_str()
-        .ok_or_else(|| CliError::new("invalid_input", "executable path is not UTF-8"))?;
-    let uc = ClaudeIntegration {
-        file: &file,
-        command: hook_command(exe),
-    };
-    let r = if install {
-        uc.install()?
-    } else {
-        uc.uninstall()?
-    };
-    let verb = match (install, r.changed) {
-        (true, true) => "Installed Claude Code hooks in",
-        (true, false) => "Claude Code hooks already present in",
-        (false, true) => "Removed Claude Code hooks from",
-        (false, false) => "No Claude Code hooks to remove in",
-    };
-    Ok(Reply::new(&r, format!("{verb} {}", r.settings)))
 }
 
 pub fn doctor(ctx: &Ctx) -> Result<Reply, CliError> {

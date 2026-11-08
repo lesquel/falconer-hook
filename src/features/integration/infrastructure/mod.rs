@@ -1,4 +1,4 @@
-//! `settings.json` file adapter: atomic replace, existing mode kept, new file `0600`.
+//! Agent config file adapter: atomic replace, existing mode kept, new file `0600`.
 
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
@@ -35,6 +35,14 @@ impl SettingsFile for JsonSettingsFile {
         write_atomic(&target, contents.as_bytes(), mode).map_err(|_| IntegrationError::Io)
     }
 
+    fn remove(&self) -> Result<(), IntegrationError> {
+        match std::fs::remove_file(&self.path) {
+            Ok(()) => Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(_) => Err(IntegrationError::Io),
+        }
+    }
+
     fn location(&self) -> String {
         self.path.display().to_string()
     }
@@ -63,5 +71,8 @@ mod tests {
             0o644
         );
         assert_eq!(f.load().unwrap().as_deref(), Some("{\"a\":1}\n"));
+        f.remove().unwrap();
+        f.remove().unwrap();
+        assert_eq!(f.load().unwrap(), None);
     }
 }

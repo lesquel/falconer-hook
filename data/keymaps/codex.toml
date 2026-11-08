@@ -1,0 +1,14 @@
+# Keystrokes that answer an OpenAI Codex CLI approval prompt, per action.
+#
+# NEEDS FIELD VERIFICATION: Codex's approval overlay accepts with `y` and
+# cancels with Escape in the versions seen so far; confirm before relying on it.
+#
+# Allowed key names: enter esc tab space backspace up down left right y n 1 2 3
+
+agent = "codex"
+version = 1
+verified = false
+
+allow = ["y"]
+deny = ["esc"]
+submit = ["enter"]

@@ -1,0 +1,15 @@
+# Keystrokes that answer a GitHub Copilot CLI approval prompt, per action.
+#
+# NEEDS FIELD VERIFICATION: assumes the prompt highlights the "allow once"
+# option (Enter accepts it) and that Escape rejects it, like Claude Code.
+# Confirm against the version in use before relying on it.
+#
+# Allowed key names: enter esc tab space backspace up down left right y n 1 2 3
+
+agent = "copilot"
+version = 1
+verified = false
+
+allow = ["enter"]
+deny = ["esc"]
+submit = ["enter"]
