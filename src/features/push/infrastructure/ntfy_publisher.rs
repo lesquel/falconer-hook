@@ -33,6 +33,8 @@ impl HttpPublisher {
             Ok(r) if r.status().is_success() => PostOutcome::Delivered,
             Ok(r) if r.status().as_u16() == 404 || r.status().as_u16() == 410 => PostOutcome::Stale,
             Ok(r) if r.status().is_redirection() => PostOutcome::Failed("redirect_refused"),
+            // ntfy refuses UnifiedPush topics whose phone app is not connected.
+            Ok(r) if r.status().as_u16() == 507 => PostOutcome::Failed("no_active_subscriber"),
             Ok(_) => PostOutcome::Failed("http_status"),
             Err(e) if e.is_timeout() => PostOutcome::Failed("timeout"),
             Err(_) => PostOutcome::Failed("network"),
@@ -111,6 +113,12 @@ mod tests {
         assert_eq!(p.send(&url, "{}"), PostOutcome::Stale);
         let (url, _rx) = serve_once("500 Internal Server Error", "");
         assert_eq!(p.send(&url, "{}"), PostOutcome::Failed("http_status"));
+        // ntfy.sh: "cannot publish to UnifiedPush topic without previously active subscriber".
+        let (url, _rx) = serve_once("507 Insufficient Storage", "");
+        assert_eq!(
+            p.send(&url, "{}"),
+            PostOutcome::Failed("no_active_subscriber")
+        );
     }
 
     #[test]

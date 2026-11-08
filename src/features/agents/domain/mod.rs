@@ -119,6 +119,11 @@ impl TransitionDetector {
             match a.status {
                 AgentStatus::Blocked => out.push(Transition::Blocked(a.clone())),
                 AgentStatus::Done => out.push(Transition::Done(a.clone())),
+                // Herdr reports `idle` instead of `done` when someone is
+                // watching the pane, so a finished turn would go unnoticed.
+                AgentStatus::Idle if matches!(prev, Some((AgentStatus::Working, _))) => {
+                    out.push(Transition::Done(a.clone()))
+                }
                 _ if matches!(prev, Some((AgentStatus::Blocked, _))) => {
                     out.push(Transition::Unblocked(a.clone()))
                 }
@@ -178,6 +183,16 @@ mod tests {
         d.observe(&[agent("p", Blocked, 5)]);
         let t = d.observe(&[agent("p", Blocked, 7)]);
         assert_eq!(t, vec![Transition::Blocked(agent("p", Blocked, 7))]);
+    }
+
+    #[test]
+    fn working_to_idle_counts_as_done() {
+        // Herdr skips `done` and reports `idle` when the pane is being watched.
+        use AgentStatus::*;
+        let mut d = TransitionDetector::default();
+        d.observe(&[agent("p", Working, 1), agent("q", Idle, 1)]);
+        let t = d.observe(&[agent("p", Idle, 2), agent("q", Idle, 2)]);
+        assert_eq!(t, vec![Transition::Done(agent("p", Idle, 2))]);
     }
 
     #[test]
