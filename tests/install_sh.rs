@@ -317,7 +317,7 @@ fn version_must_be_a_plain_release_tag() {
         "latest",
         "v1/../x",
     ] {
-        let (_t, out) = dry_run_output(&["--version", bad], &[], &[]);
+        let (_t, out) = dry_run_output(&["--version", bad], &[("OPENMOSH_NO_GH", "1")], &[]);
         assert!(!out.status.success(), "{bad} was accepted");
         assert!(
             String::from_utf8_lossy(&out.stderr).contains("release tag"),
@@ -325,7 +325,8 @@ fn version_must_be_a_plain_release_tag() {
             String::from_utf8_lossy(&out.stderr)
         );
     }
-    let (_t, out) = dry_run_output(&["--version", "v0.1.0"], &[], &[]);
+    // gh is turned off: on CI runners its auth check writes a config file into HOME.
+    let (_t, out) = dry_run_output(&["--version", "v0.1.0"], &[("OPENMOSH_NO_GH", "1")], &[]);
     assert!(
         out.status.success(),
         "{}",
