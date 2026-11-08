@@ -2,7 +2,7 @@
 
 mod hook_payload;
 
-pub use hook_payload::{parse_hook_payload, PayloadError};
+pub use hook_payload::parse_hook_payload;
 
 use serde::Serialize;
 use thiserror::Error;

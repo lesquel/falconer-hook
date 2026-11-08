@@ -2,4 +2,4 @@
 
 mod publish;
 
-pub use publish::{PublishEvent, PublishReport};
+pub use publish::PublishEvent;

@@ -20,8 +20,6 @@ pub enum IntegrationError {
     BadHooks,
     #[error("settings file could not be read or written")]
     Io,
-    #[error("unsupported agent; only `claude` is supported")]
-    UnsupportedAgent,
 }
 
 impl ErrorCode for IntegrationError {
@@ -29,7 +27,6 @@ impl ErrorCode for IntegrationError {
         match self {
             IntegrationError::NotAnObject | IntegrationError::BadHooks => "settings_invalid",
             IntegrationError::Io => "io_error",
-            IntegrationError::UnsupportedAgent => "invalid_input",
         }
     }
 }

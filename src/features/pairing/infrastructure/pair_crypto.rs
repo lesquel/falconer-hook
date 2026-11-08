@@ -14,7 +14,7 @@ use zeroize::Zeroizing;
 use crate::features::pairing::domain::{PairCrypto, PairRequestPlain, PairResponsePlain};
 use crate::shared::domain::encoding::{b64u_decode, b64u_decode_array, b64u_encode};
 use crate::shared::infrastructure::crypto::{
-    diffie_hellman, hkdf32, open, public_key, random_bytes, seal, Key32,
+    diffie_hellman, hkdf32, open, random_bytes, seal, Key32,
 };
 
 pub const PAIR_AAD: &[u8] = b"openmosh/pair/v1";
@@ -54,6 +54,7 @@ pub fn derive_pair_keys(shared: &[u8; 32], token: &[u8; 32]) -> PairKeys {
     }
 }
 
+#[cfg(test)]
 /// Phone side: builds a request line (no trailing newline). Used by the
 /// shared test vectors and by tests that play the phone.
 pub fn seal_request(
@@ -68,7 +69,9 @@ pub fn seal_request(
     let c = seal(&keys.k_req, nonce, plaintext.as_bytes(), PAIR_AAD);
     serde_json::to_string(&RequestLine {
         v: 1,
-        e: b64u_encode(&public_key(eph_secret)),
+        e: b64u_encode(&crate::shared::infrastructure::crypto::public_key(
+            eph_secret,
+        )),
         n: b64u_encode(nonce),
         c: b64u_encode(&c),
     })
@@ -86,6 +89,7 @@ pub fn seal_response_with_nonce(k_resp: &[u8; 32], nonce: &[u8; 24], plaintext: 
     .expect("response line serializes")
 }
 
+#[cfg(test)]
 /// Phone side: decrypts a success response line.
 pub fn open_response(k_resp: &[u8; 32], line: &str) -> Option<String> {
     let r: ResponseLine = serde_json::from_str(line.trim_end()).ok()?;
@@ -139,6 +143,7 @@ impl PairCrypto for X25519PairCrypto {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::shared::infrastructure::crypto::public_key;
 
     fn plain(tok: &[u8; 32]) -> String {
         format!(

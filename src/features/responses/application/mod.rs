@@ -2,4 +2,4 @@
 
 mod respond;
 
-pub use respond::{RespondOutcome, RespondToEvent};
+pub use respond::RespondToEvent;

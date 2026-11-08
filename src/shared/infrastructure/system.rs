@@ -27,6 +27,31 @@ impl IdGenerator for OsIds {
     }
 }
 
+/// Short host name: `/proc/sys/kernel/hostname` on Linux, else `hostname -s`.
+pub fn hostname(runner: &dyn crate::shared::domain::command::CommandRunner) -> String {
+    let raw = std::fs::read_to_string("/proc/sys/kernel/hostname")
+        .ok()
+        .or_else(|| {
+            runner
+                .run("hostname", &["-s".to_string()])
+                .ok()
+                .filter(|o| o.success())
+                .map(|o| o.stdout)
+        });
+    let clean: String = raw
+        .unwrap_or_default()
+        .trim()
+        .chars()
+        .filter(|c| !c.is_control())
+        .take(64)
+        .collect();
+    if clean.is_empty() {
+        "host".into()
+    } else {
+        clean
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -26,10 +26,6 @@ impl HostIdentity {
         self.public
     }
 
-    pub fn public_b64u(&self) -> String {
-        b64u_encode(&self.public)
-    }
-
     pub fn secret(&self) -> Zeroizing<[u8; 32]> {
         self.secret.clone()
     }

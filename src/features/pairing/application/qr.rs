@@ -167,10 +167,6 @@ where
         }
     }
 
-    pub fn expires_at(&self) -> u64 {
-        self.expires_at
-    }
-
     /// QR content for a listener bound on `port`.
     pub fn offer(&self, port: u16) -> PairOffer {
         let ip = self.preflight.ipv4.to_string();

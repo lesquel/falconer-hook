@@ -3,5 +3,5 @@
 mod list;
 mod watch;
 
-pub use list::{AgentsReport, ListAgents, ListSessions, SessionsReport};
+pub use list::{ListAgents, ListSessions};
 pub use watch::{SignalSink, WatchAgents};
