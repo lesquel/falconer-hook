@@ -2,6 +2,7 @@
 //! `infrastructure` layers; dependencies point inward.
 
 pub mod agents;
+pub mod doctor;
 pub mod events;
 pub mod integration;
 pub mod pairing;
