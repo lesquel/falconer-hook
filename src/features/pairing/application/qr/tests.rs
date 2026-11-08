@@ -39,7 +39,23 @@ fn request(tok: &PairToken, f: impl FnOnce(&mut PairRequestPlain)) -> String {
     )
 }
 
+/// Scripted host user: answers every prompt with `yes` and records it.
+#[derive(Default)]
+struct User {
+    no: std::cell::Cell<bool>,
+    asked: std::cell::RefCell<Vec<String>>,
+}
+impl PairConfirm for User {
+    fn confirm(&self, name: &str, node: &str, ip: IpAddr) -> bool {
+        self.asked
+            .borrow_mut()
+            .push(format!("Pair \"{name}\" from {node} ({ip})?"));
+        !self.no.get()
+    }
+}
+
 struct World {
+    user: User,
     tailnet: FakeTailnet,
     registry: MemRegistry,
     keys: MemAuthorizedKeys,
@@ -50,6 +66,7 @@ struct World {
 impl World {
     fn new() -> Self {
         Self {
+            user: User::default(),
             tailnet: FakeTailnet::running(
                 "me@example.com",
                 &[
@@ -83,6 +100,7 @@ impl World {
             &self.keys,
             &self.clock,
             &self.ids,
+            &self.user,
             pre,
             facts,
             Zeroizing::new(TOKEN),
@@ -99,6 +117,7 @@ fn reason(a: Attempt) -> &'static str {
     match a {
         Attempt::Rejected { reason } => reason,
         Attempt::Paired { .. } => "paired",
+        Attempt::Declined => "declined",
     }
 }
 
@@ -169,7 +188,15 @@ fn successful_pairing_authorizes_key_stores_device_and_burns_token() {
     );
     assert_eq!(
         w.keys.lines.borrow().as_slice(),
-        [format!("from=\"100.64.0.0/10,fd7a:115c:a1e0::/48\",no-agent-forwarding,no-X11-forwarding,no-port-forwarding,no-user-rc {KEY} openmosh:{}", device.id)]
+        [format!(
+            "restrict,pty,from=\"100.101.1.2,fd7a:115c:a1e0::1:2\" {KEY} openmosh:{}",
+            device.id
+        )]
+    );
+    assert_eq!(device.peer_ips, vec!["100.101.1.2", "fd7a:115c:a1e0::1:2"]);
+    assert_eq!(
+        w.user.asked.borrow().as_slice(),
+        ["Pair \"Pixel 8\" from pixel-8.tail.ts.net (100.101.1.2)?"]
     );
     assert_eq!(w.registry.list().unwrap(), vec![device]);
     assert!(p.is_closed());
@@ -221,6 +248,77 @@ fn every_rejection_path_in_order() {
     );
     assert!(w.keys.lines.borrow().is_empty());
     assert!(w.registry.list().unwrap().is_empty());
+}
+
+#[test]
+fn a_no_on_the_host_writes_nothing_and_burns_the_token() {
+    let w = World::new();
+    w.user.no.set(true);
+    let mut p = w.pairing();
+    assert_eq!(
+        p.handle(ip(PHONE), || Some(request(&TOKEN, |_| {}))),
+        Attempt::Declined
+    );
+    assert!(w.keys.lines.borrow().is_empty());
+    assert!(w.registry.list().unwrap().is_empty());
+    assert!(p.is_closed());
+}
+
+#[test]
+fn the_user_is_asked_only_after_every_check_passed() {
+    let w = World::new();
+    let mut p = w.pairing();
+    let bad = request(&TOKEN, |r| r.ssh_pub = "ssh-rsa AAAA".into());
+    assert_eq!(reason(p.handle(ip(PHONE), || Some(bad))), "bad_ssh_key");
+    assert!(w.user.asked.borrow().is_empty());
+}
+
+#[test]
+fn whois_is_not_repeated_for_refused_or_failing_peers() {
+    let mut w = World::new();
+    let never_read = || -> Option<String> { panic!("must not read") };
+    {
+        let mut p = w.pairing();
+        for _ in 0..10 {
+            assert_eq!(
+                reason(p.handle(ip("100.101.9.9"), never_read)),
+                "whois_mismatch"
+            );
+        }
+        assert_eq!(w.tailnet.whois_calls.get(), 1, "a refused peer is cached");
+    }
+    w.tailnet.whois_fails = true;
+    w.tailnet.whois_calls.set(0);
+    let mut p = w.pairing();
+    assert_eq!(reason(p.handle(ip(PHONE), never_read)), "whois_failed");
+    for _ in 0..10 {
+        assert_eq!(
+            reason(p.handle(ip(PHONE), never_read)),
+            "whois_rate_limited"
+        );
+    }
+    assert_eq!(w.tailnet.whois_calls.get(), 1, "one lookup per second");
+    w.clock.advance(WHOIS_INTERVAL_SECS);
+    assert_eq!(reason(p.handle(ip(PHONE), never_read)), "whois_failed");
+    assert!(!p.is_closed(), "network refusals never close the session");
+}
+
+#[test]
+fn pinned_addresses_keep_only_tailnet_ones() {
+    let info = Peer {
+        login: "me".into(),
+        node: None,
+        addresses: vec![
+            ip("100.101.1.2"),
+            ip("fd7a:115c:a1e0::9"),
+            ip("192.168.1.4"),
+            ip("::ffff:100.101.1.2"),
+        ],
+    };
+    assert_eq!(
+        peer_addresses(ip("::ffff:100.101.1.2"), &info),
+        vec!["100.101.1.2", "fd7a:115c:a1e0::9"]
+    );
 }
 
 #[test]
@@ -325,6 +423,7 @@ fn network_rejections_do_not_spend_the_failure_budget() {
     let mut p = w.pairing();
     for _ in 0..20 {
         assert_eq!(reason(p.handle(ip(PHONE), never_read)), "whois_failed");
+        w.clock.advance(1);
     }
     assert!(!p.is_closed());
 }

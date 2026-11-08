@@ -33,6 +33,10 @@ pub struct Device {
     /// Normalized `ssh-ed25519 <b64>` authorized at pairing (QR flow only).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ssh_key: Option<String>,
+    /// Tailnet addresses the key is pinned to (`from=`); empty for devices
+    /// paired before v0.2.1 (whole tailnet) and for `pair-ssh`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub peer_ips: Vec<String>,
 }
 
 #[derive(Debug, Error)]
@@ -116,12 +120,29 @@ pub enum TailnetError {
     Failed,
 }
 
+/// The node behind a tailnet address, as `tailscale whois` reports it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Peer {
+    /// `UserProfile.LoginName` of the owner.
+    pub login: String,
+    /// MagicDNS name of the node, without the trailing dot.
+    pub node: Option<String>,
+    /// The node's own tailnet addresses (`Node.Addresses`).
+    pub addresses: Vec<IpAddr>,
+}
+
 /// Read-only Tailscale queries.
 pub trait Tailnet {
     fn status(&self) -> Result<TailnetStatus, TailnetError>;
     fn ipv4(&self) -> Result<Ipv4Addr, TailnetError>;
-    /// `UserProfile.LoginName` of the node owning `ip`, if any.
-    fn whois_login(&self, ip: IpAddr) -> Result<Option<String>, TailnetError>;
+    /// The user-owned node behind `ip`, if any (tagged nodes have none).
+    fn whois(&self, ip: IpAddr) -> Result<Option<Peer>, TailnetError>;
+}
+
+/// The host user's go-ahead before a phone's key is authorized.
+pub trait PairConfirm {
+    /// `true` only when the user said yes to `Pair "<name>" from <node> (<ip>)?`.
+    fn confirm(&self, name: &str, node: &str, ip: IpAddr) -> bool;
 }
 
 /// Request decryption / response encryption for the QR flow (wire contract §6.3).
@@ -224,6 +245,7 @@ pub mod tailnet_fakes {
         pub peers: HashMap<IpAddr, String>,
         pub missing: bool,
         pub whois_fails: bool,
+        pub whois_calls: std::cell::Cell<u32>,
     }
 
     impl FakeTailnet {
@@ -241,6 +263,7 @@ pub mod tailnet_fakes {
                     .collect(),
                 missing: false,
                 whois_fails: false,
+                whois_calls: Default::default(),
             }
         }
     }
@@ -255,11 +278,16 @@ pub mod tailnet_fakes {
         fn ipv4(&self) -> Result<Ipv4Addr, TailnetError> {
             Ok("100.88.77.66".parse().unwrap())
         }
-        fn whois_login(&self, ip: IpAddr) -> Result<Option<String>, TailnetError> {
+        fn whois(&self, ip: IpAddr) -> Result<Option<Peer>, TailnetError> {
+            self.whois_calls.set(self.whois_calls.get() + 1);
             if self.whois_fails {
                 return Err(TailnetError::Failed);
             }
-            Ok(self.peers.get(&ip).cloned())
+            Ok(self.peers.get(&ip).map(|login| Peer {
+                login: login.clone(),
+                node: Some("pixel-8.tail.ts.net".into()),
+                addresses: vec![ip, "fd7a:115c:a1e0::1:2".parse().unwrap()],
+            }))
         }
     }
 

@@ -3,17 +3,24 @@
 //! Validation order for every connection, each failure answered with the
 //! same generic `pair_rejected`:
 //! 1. peer IP in `100.64.0.0/10`
-//! 2. `tailscale whois` of the peer has the host's `LoginName`
+//! 2. `tailscale whois` of the peer has the host's `LoginName` (a peer that
+//!    answers are remembered for the session and a failing lookup is retried
+//!    at most once per second per peer, so other nodes cannot make the host
+//!    spawn `tailscale` endlessly)
 //! 3. the request decrypts (keys derived from the token)
 //! 4. `tok` matches (constant time)
 //! 5. not expired
 //! 6. not already used
 //! 7. `ssh_pub` is a valid `ssh-ed25519` key
 //! 8. `endpoint` passes push endpoint validation
+//! 9. the user on the host confirms `Pair "<name>" from <node> (<ip>)?`
+//!    (a "no" burns the token)
 //!
 //! After 5 failed attempts from a verified peer (checks 3 onwards) the
-//! session closes; refusals at checks 1-2 do not count.
+//! session closes; refusals at checks 1-2 do not count. The key is pinned
+//! (`from=`) to the phone's own tailnet addresses.
 
+use std::collections::{HashMap, HashSet};
 use std::net::{IpAddr, Ipv4Addr};
 use std::time::Duration;
 use thiserror::Error;
@@ -21,18 +28,21 @@ use zeroize::Zeroizing;
 
 use crate::features::pairing::domain::{
     authorized_keys_line, normalize_ssh_ed25519, sanitize_name, valid_ppk, AuthorizedKeys, Device,
-    DeviceRegistry, PairCrypto, PairOffer, PairResponsePlain, PairToken, Tailnet, TailnetError,
-    PAIR_TOKEN_LEN,
+    DeviceRegistry, PairConfirm, PairCrypto, PairOffer, PairResponsePlain, PairToken, Peer,
+    Tailnet, TailnetError, PAIR_TOKEN_LEN,
 };
 use crate::features::push::domain::validate_endpoint;
 use crate::shared::domain::clock::Clock;
 use crate::shared::domain::encoding::{b64u_encode, ct_eq};
 use crate::shared::domain::error::ErrorCode;
 use crate::shared::domain::ids::IdGenerator;
-use crate::shared::domain::net::is_tailnet_ip;
+use crate::shared::domain::net::{is_tailnet_addr, is_tailnet_ip};
+use crate::shared::domain::text::clean_label;
 
 pub const TOKEN_TTL_SECS: u64 = 300;
 pub const MAX_FAILURES: u32 = 5;
+/// A failed `tailscale whois` is retried for a peer after this many seconds.
+pub const WHOIS_INTERVAL_SECS: u64 = 1;
 
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum PairError {
@@ -121,6 +131,21 @@ pub enum Attempt {
     Paired { device: Device, reply: String },
     /// `reason` is for the local log only; the peer always gets the generic reply.
     Rejected { reason: &'static str },
+    /// The host user said no: the token is burned and the session ends.
+    Declined,
+}
+
+/// The phone's addresses to pin: the connecting address plus the node's
+/// own tailnet addresses from whois (IPv4 and IPv6), without duplicates.
+pub fn peer_addresses(peer: IpAddr, info: &Peer) -> Vec<String> {
+    let mut out: Vec<IpAddr> = vec![peer.to_canonical()];
+    for a in &info.addresses {
+        let a = a.to_canonical();
+        if is_tailnet_addr(a) && !out.contains(&a) {
+            out.push(a);
+        }
+    }
+    out.iter().map(IpAddr::to_string).collect()
 }
 
 pub struct QrPairing<'a, T, C: PairCrypto, R, A, K, I> {
@@ -130,12 +155,19 @@ pub struct QrPairing<'a, T, C: PairCrypto, R, A, K, I> {
     pub keys: &'a A,
     pub clock: &'a K,
     pub ids: &'a I,
+    pub confirm: &'a dyn PairConfirm,
     preflight: Preflight,
     facts: HostFacts,
     token: Zeroizing<PairToken>,
     expires_at: u64,
     used: bool,
     failures: u32,
+    /// Peers whose whois did not match: refused without another lookup.
+    refused: HashSet<IpAddr>,
+    /// Peers whose whois matched the host user.
+    owners: HashMap<IpAddr, Peer>,
+    /// When a peer's whois last failed.
+    whois_failed_at: HashMap<IpAddr, u64>,
 }
 
 impl<'a, T, C, R, A, K, I> QrPairing<'a, T, C, R, A, K, I>
@@ -155,6 +187,7 @@ where
         keys: &'a A,
         clock: &'a K,
         ids: &'a I,
+        confirm: &'a dyn PairConfirm,
         preflight: Preflight,
         facts: HostFacts,
         token: Zeroizing<PairToken>,
@@ -168,13 +201,55 @@ where
             keys,
             clock,
             ids,
+            confirm,
             preflight,
             facts,
             token,
             expires_at,
             used: false,
             failures: 0,
+            refused: HashSet::new(),
+            owners: HashMap::new(),
+            whois_failed_at: HashMap::new(),
         }
+    }
+
+    /// The host user's node behind `peer`, from the session cache or whois.
+    fn owner(&mut self, peer: IpAddr) -> Result<Peer, &'static str> {
+        if let Some(p) = self.owners.get(&peer) {
+            return Ok(p.clone());
+        }
+        if self.refused.contains(&peer) {
+            return Err("whois_mismatch");
+        }
+        let now = self.clock.now();
+        if self
+            .whois_failed_at
+            .get(&peer)
+            .is_some_and(|t| now.saturating_sub(*t) < WHOIS_INTERVAL_SECS)
+        {
+            return Err("whois_rate_limited");
+        }
+        match self.tailnet.whois(peer) {
+            Ok(Some(p)) if p.login == self.preflight.login_name => {
+                self.owners.insert(peer, p.clone());
+                Ok(p)
+            }
+            Ok(_) => {
+                self.refused.insert(peer);
+                Err("whois_mismatch")
+            }
+            Err(_) => {
+                self.whois_failed_at.insert(peer, now);
+                Err("whois_failed")
+            }
+        }
+    }
+
+    /// Takes a pairing back (the phone never got the reply).
+    pub fn undo(&mut self, device: &Device) {
+        let _ = self.keys.remove_device(&device.id);
+        let _ = self.registry.remove(&device.id);
     }
 
     /// QR content for a listener bound on `port`.
@@ -225,19 +300,10 @@ where
                 reason: "not_tailnet",
             };
         }
-        match self.tailnet.whois_login(peer) {
-            Ok(Some(login)) if login == self.preflight.login_name => {}
-            Ok(_) => {
-                return Attempt::Rejected {
-                    reason: "whois_mismatch",
-                }
-            }
-            Err(_) => {
-                return Attempt::Rejected {
-                    reason: "whois_failed",
-                }
-            }
-        }
+        let peer_info = match self.owner(peer) {
+            Ok(p) => p,
+            Err(reason) => return Attempt::Rejected { reason },
+        };
         let Some(line) = read_line() else {
             return self.reject("read_failed");
         };
@@ -270,6 +336,20 @@ where
         if !valid_ppk(&req.ppk) {
             return self.reject("bad_ppk");
         }
+        let node = peer_info
+            .node
+            .as_deref()
+            .map(|n| clean_label(n, 64))
+            .filter(|n| !n.is_empty())
+            .unwrap_or_else(|| "an unnamed node".into());
+        if !self.confirm.confirm(&name, &node, peer.to_canonical()) {
+            self.burn();
+            return Attempt::Declined;
+        }
+        // The user may have taken a while: the session can expire meanwhile.
+        if self.clock.now() > self.expires_at || self.used {
+            return self.reject("expired");
+        }
 
         let device = Device {
             id: self.ids.new_id(),
@@ -279,10 +359,15 @@ where
             paired_at: now,
             endpoint_stale: false,
             ssh_key: Some(ssh_key.clone()),
+            peer_ips: peer_addresses(peer, &peer_info),
         };
         if self
             .keys
-            .append(&authorized_keys_line(&ssh_key, &device.id))
+            .append(&authorized_keys_line(
+                &ssh_key,
+                &device.id,
+                &device.peer_ips,
+            ))
             .is_err()
         {
             return self.reject("storage");
@@ -318,6 +403,8 @@ pub trait PairSession {
     /// Time left before the session expires; bounds each connection.
     fn remaining(&self) -> Duration;
     fn burn(&mut self);
+    /// Removes a pairing whose reply never reached the phone.
+    fn undo(&mut self, device: &Device);
 }
 
 impl<T, C, R, A, K, I> PairSession for QrPairing<'_, T, C, R, A, K, I>
@@ -344,6 +431,9 @@ where
     }
     fn burn(&mut self) {
         QrPairing::burn(self)
+    }
+    fn undo(&mut self, device: &Device) {
+        QrPairing::undo(self, device)
     }
 }
 

@@ -206,7 +206,8 @@ pub fn run(ctx: &Ctx, command: Command) -> Result<Reply, CliError> {
             timeout,
             invert,
             uri,
-        } => pair::pair(ctx, alias, timeout, invert, uri),
+            yes,
+        } => pair::pair(ctx, alias, timeout, invert, uri, yes),
         Command::PairSsh { .. } => pair::pair_ssh(ctx),
         Command::Sessions {
             cmd: ListCmd::List { .. },

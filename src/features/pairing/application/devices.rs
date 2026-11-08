@@ -79,7 +79,9 @@ impl<R: DeviceRegistry, A: AuthorizedKeys> DeviceAdmin<'_, R, A> {
             Ok(d) => Ok(d.into()),
             Err(e) => {
                 if let Some(k) = &device.ssh_key {
-                    let _ = self.keys.append(&authorized_keys_line(k, id));
+                    let _ = self
+                        .keys
+                        .append(&authorized_keys_line(k, id, &device.peer_ips));
                 }
                 Err(e.into())
             }
@@ -119,12 +121,15 @@ mod tests {
             paired_at: 1,
             endpoint_stale: true,
             ssh_key: Some(KEY.into()),
+            peer_ips: Vec::new(),
         }]);
         let keys = MemAuthorizedKeys::default();
         keys.lines
             .borrow_mut()
             .push("ssh-ed25519 AAAAuser laptop".into());
-        keys.lines.borrow_mut().push(authorized_keys_line(KEY, ID));
+        keys.lines
+            .borrow_mut()
+            .push(authorized_keys_line(KEY, ID, &[]));
         (reg, keys)
     }
 

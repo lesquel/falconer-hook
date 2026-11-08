@@ -5,7 +5,7 @@ use serde::Deserialize;
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr};
 
-use crate::features::pairing::domain::{Tailnet, TailnetError, TailnetStatus};
+use crate::features::pairing::domain::{Peer, Tailnet, TailnetError, TailnetStatus};
 use crate::shared::domain::command::{CommandError, CommandRunner};
 
 pub struct TailscaleCli<'a> {
@@ -48,6 +48,11 @@ struct Whois {
 struct WhoisNode {
     #[serde(default)]
     tags: Option<Vec<String>>,
+    #[serde(default)]
+    name: String,
+    /// CIDR strings (`100.101.1.2/32`, `fd7a:…/128`).
+    #[serde(default)]
+    addresses: Vec<String>,
 }
 
 /// `LoginName` Tailscale reports for nodes owned by tags instead of a user.
@@ -79,16 +84,29 @@ pub fn parse_status(stdout: &str) -> Result<TailnetStatus, TailnetError> {
     })
 }
 
-/// Owner login of a whois result. Tagged nodes and results without a
+/// The user-owned node of a whois result. Tagged nodes and results without a
 /// `Node` or `UserProfile` have none, so they can never match the host.
-pub fn parse_whois(stdout: &str) -> Option<String> {
+pub fn parse_whois(stdout: &str) -> Option<Peer> {
     let w: Whois = serde_json::from_str(stdout).ok()?;
-    if has_tags(&w.node?.tags) {
+    let node = w.node?;
+    if has_tags(&node.tags) {
         return None;
     }
-    w.user_profile
+    let login = w
+        .user_profile
         .map(|u| u.login_name)
-        .filter(|l| !l.is_empty() && l != TAGGED_LOGIN)
+        .filter(|l| !l.is_empty() && l != TAGGED_LOGIN)?;
+    let addresses = node
+        .addresses
+        .iter()
+        .filter_map(|a| a.split('/').next()?.parse::<IpAddr>().ok())
+        .collect();
+    let name = node.name.trim_end_matches('.');
+    Some(Peer {
+        login,
+        node: (!name.is_empty()).then(|| name.to_string()),
+        addresses,
+    })
 }
 
 impl TailscaleCli<'_> {
@@ -129,7 +147,7 @@ impl Tailnet for TailscaleCli<'_> {
             .ok_or(TailnetError::Failed)
     }
 
-    fn whois_login(&self, ip: IpAddr) -> Result<Option<String>, TailnetError> {
+    fn whois(&self, ip: IpAddr) -> Result<Option<Peer>, TailnetError> {
         let out = self.run(&["whois", "--json", &ip.to_string()])?;
         if !out.success() {
             return Ok(None);
@@ -179,8 +197,22 @@ mod tests {
         }
         assert_eq!(
             parse_whois(r#"{"Node":{"Tags":[]},"UserProfile":{"LoginName":"me@example.com"}}"#)
+                .map(|p| p.login)
                 .as_deref(),
             Some("me@example.com")
+        );
+    }
+
+    #[test]
+    fn whois_reports_the_node_name_and_addresses() {
+        let p = parse_whois(r#"{"Node":{"Name":"pixel-8.tailnet-example.ts.net.","Addresses":["100.101.1.2/32","fd7a:115c:a1e0::1:2/128","junk"]},"UserProfile":{"LoginName":"me@example.com"}}"#).unwrap();
+        assert_eq!(p.node.as_deref(), Some("pixel-8.tailnet-example.ts.net"));
+        assert_eq!(
+            p.addresses,
+            vec![
+                "100.101.1.2".parse::<IpAddr>().unwrap(),
+                "fd7a:115c:a1e0::1:2".parse().unwrap()
+            ]
         );
     }
 
@@ -199,8 +231,9 @@ mod tests {
             program: "tailscale".into(),
         };
         assert_eq!(
-            t.whois_login("100.101.1.2".parse().unwrap())
+            t.whois("100.101.1.2".parse().unwrap())
                 .unwrap()
+                .map(|p| p.login)
                 .as_deref(),
             Some("me@example.com")
         );
@@ -208,7 +241,7 @@ mod tests {
             t.ipv4().unwrap(),
             "100.88.77.66".parse::<Ipv4Addr>().unwrap()
         );
-        assert_eq!(t.whois_login("100.101.1.3".parse().unwrap()).unwrap(), None);
+        assert_eq!(t.whois("100.101.1.3".parse().unwrap()).unwrap(), None);
         assert_eq!(
             r.argv(),
             vec![

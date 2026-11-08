@@ -161,7 +161,7 @@ mod tests {
             path: t.path().join(".ssh/authorized_keys"),
             lock_path: t.path().join(".lock"),
         };
-        let line = authorized_keys_line(KEY, "AAAAAAAAAAAAAAAAAAAA01");
+        let line = authorized_keys_line(KEY, "AAAAAAAAAAAAAAAAAAAA01", &[]);
         ak.append(&line).unwrap();
         let mode = |p: &Path| fs::metadata(p).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode(&t.path().join(".ssh")), 0o700);
@@ -184,7 +184,7 @@ mod tests {
             path: p.clone(),
             lock_path: t.path().join(".lock"),
         };
-        ak.append(&authorized_keys_line(KEY, "AAAAAAAAAAAAAAAAAAAA01"))
+        ak.append(&authorized_keys_line(KEY, "AAAAAAAAAAAAAAAAAAAA01", &[]))
             .unwrap();
         ak.remove_device("AAAAAAAAAAAAAAAAAAAA01").unwrap();
         assert_eq!(
@@ -219,7 +219,7 @@ mod tests {
             path: p.clone(),
             lock_path: t.path().join(".lock"),
         };
-        ak.append(&authorized_keys_line(KEY, "AAAAAAAAAAAAAAAAAAAA01"))
+        ak.append(&authorized_keys_line(KEY, "AAAAAAAAAAAAAAAAAAAA01", &[]))
             .unwrap();
         assert!(fs::symlink_metadata(&p).unwrap().file_type().is_symlink());
         assert!(fs::read_to_string(&real)
@@ -242,7 +242,7 @@ mod tests {
             lock_path: t.path().join(".lock"),
         };
         assert!(ak
-            .append(&authorized_keys_line(KEY, "AAAAAAAAAAAAAAAAAAAA01"))
+            .append(&authorized_keys_line(KEY, "AAAAAAAAAAAAAAAAAAAA01", &[]))
             .is_err());
         assert!(fs::symlink_metadata(&p).unwrap().file_type().is_symlink());
         assert!(!t.path().join("nowhere").exists());
@@ -259,8 +259,8 @@ mod tests {
         let text = format!(
             "{}{}\n{}\n",
             mine,
-            authorized_keys_line(KEY, "AAAAAAAAAAAAAAAAAAAA01"),
-            authorized_keys_line(KEY, "AAAAAAAAAAAAAAAAAAAA02")
+            authorized_keys_line(KEY, "AAAAAAAAAAAAAAAAAAAA01", &[]),
+            authorized_keys_line(KEY, "AAAAAAAAAAAAAAAAAAAA02", &[])
         );
         fs::write(&path, &text).unwrap();
         let k = FileAuthorizedKeys {

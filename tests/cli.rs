@@ -475,9 +475,19 @@ fn pair_refuses_without_tailscale_running() {
         r#"{"BackendState":"Stopped","Self":null,"User":{}}"#,
     )
     .unwrap();
-    let out = e.run(&["pair", "--timeout", "10"], None, &[]);
+    let out = e.run(&["pair", "--timeout", "10", "--yes"], None, &[]);
     assert_eq!(out.status.code(), Some(1));
     assert!(String::from_utf8_lossy(&out.stderr).contains("tailscale is not running"));
+}
+
+#[test]
+fn pair_without_a_terminal_needs_yes() {
+    let e = Env::new();
+    let out = e.run(&["pair", "--timeout", "10"], None, &[]);
+    assert_eq!(out.status.code(), Some(1));
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("pass --yes"), "{err}");
+    assert!(e.calls().is_empty(), "refused before touching Tailscale");
 }
 
 #[test]
@@ -488,7 +498,7 @@ fn pair_refuses_on_a_tagged_host() {
         r#"{"BackendState":"Running","Self":{"UserID":1,"DNSName":"box.tail.ts.net.","Tags":["tag:server"]},"User":{"1":{"LoginName":"tagged-devices"}}}"#,
     )
     .unwrap();
-    let out = e.run(&["pair", "--timeout", "10"], None, &[]);
+    let out = e.run(&["pair", "--timeout", "10", "--yes"], None, &[]);
     assert_eq!(out.status.code(), Some(1));
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(err.contains("tagged Tailscale node"), "{err}");
@@ -618,7 +628,15 @@ fn qr_pairing_end_to_end_over_tailnet() {
     let e = Env::new();
     fs::write(e.root.join("fake/ts_ip"), format!("{ip}\n")).unwrap();
     let mut child = e
-        .cmd(&["pair", "--timeout", "30", "--uri", "--alias", "e2e"])
+        .cmd(&[
+            "pair",
+            "--timeout",
+            "30",
+            "--uri",
+            "--alias",
+            "e2e",
+            "--yes",
+        ])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
@@ -698,7 +716,7 @@ fn qr_pairing_end_to_end_over_tailnet() {
     let ak = fs::read_to_string(e.home().join(".ssh/authorized_keys")).unwrap();
     assert_eq!(
         ak,
-        format!("from=\"100.64.0.0/10,fd7a:115c:a1e0::/48\",no-agent-forwarding,no-X11-forwarding,no-port-forwarding,no-user-rc ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJYwG729z8R85TUE6pHTEWVG3RxgVSZik0RW18NtXepH openmosh:{device_id}\n")
+        format!("restrict,pty,from=\"{ip}\" ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJYwG729z8R85TUE6pHTEWVG3RxgVSZik0RW18NtXepH openmosh:{device_id}\n")
     );
     assert_eq!(mode(&e.home().join(".ssh/authorized_keys")), 0o600);
     assert_eq!(mode(&e.home().join(".ssh")), 0o700);

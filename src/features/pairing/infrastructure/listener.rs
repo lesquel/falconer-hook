@@ -3,7 +3,10 @@
 //! and one reply line. The whole request must arrive within
 //! `min(10 s, time left before expiry)`; cancellation (Ctrl+C) and expiry are
 //! checked at least every 100 ms, even while a slow peer is sending. Stops on
-//! success, expiry, cancellation or after too many failures; the token is burned.
+//! success, expiry, cancellation, a "no" on the host or after too many
+//! failures; the token is burned. A pairing whose phone hung up before the
+//! reply could be sent (e.g. while the host user was still deciding) is
+//! taken back, so no key stays authorized for a phone that never got it.
 
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -63,6 +66,21 @@ impl Read for DeadlineReader<'_> {
     }
 }
 
+/// True when the peer has already closed its side (EOF or reset).
+fn peer_hung_up(stream: &TcpStream) -> bool {
+    let mut b = [0u8; 1];
+    if stream.set_nonblocking(true).is_err() {
+        return true;
+    }
+    let gone = match stream.peek(&mut b) {
+        Ok(0) => true,
+        Ok(_) => false,
+        Err(e) => e.kind() != io::ErrorKind::WouldBlock,
+    };
+    let _ = stream.set_nonblocking(false);
+    gone
+}
+
 fn read_request_line(stream: &mut impl Read) -> Option<String> {
     let mut buf = Vec::new();
     let mut r = BufReader::new(stream.take(MAX_LINE_BYTES as u64 + 1));
@@ -108,10 +126,26 @@ pub fn run_listener(
         });
         match attempt {
             Attempt::Paired { device, reply } => {
-                let _ = stream.write_all(format!("{reply}\n").as_bytes());
+                let sent = !peer_hung_up(&stream)
+                    && stream.write_all(format!("{reply}\n").as_bytes()).is_ok()
+                    && stream.flush().is_ok();
+                session.burn();
+                if !sent {
+                    session.undo(&device);
+                    log(
+                        Level::Warn,
+                        "pairing taken back",
+                        &[("reason", Field::Code("phone_hung_up"))],
+                    );
+                    return Ok(ListenEnd::Closed { cancelled: false });
+                }
+                return Ok(ListenEnd::Paired(Box::new(device)));
+            }
+            Attempt::Declined => {
+                let _ = stream.write_all(format!("{REJECTED_LINE}\n").as_bytes());
                 let _ = stream.flush();
                 session.burn();
-                return Ok(ListenEnd::Paired(Box::new(device)));
+                return Ok(ListenEnd::Closed { cancelled: true });
             }
             Attempt::Rejected { reason } => {
                 log(
@@ -137,6 +171,7 @@ mod tests {
     struct Script {
         failures: u32,
         burned: bool,
+        undone: bool,
         peers: Vec<IpAddr>,
         max_failures: u32,
         remaining: Duration,
@@ -146,6 +181,7 @@ mod tests {
         Script {
             failures: 0,
             burned: false,
+            undone: false,
             peers: vec![],
             max_failures,
             remaining,
@@ -168,9 +204,11 @@ mod tests {
                         paired_at: 0,
                         endpoint_stale: false,
                         ssh_key: None,
+                        peer_ips: vec![],
                     },
                     reply: "{\"v\":1}".into(),
                 },
+                Some("no\n") => Attempt::Declined,
                 _ => {
                     self.failures += 1;
                     Attempt::Rejected { reason: "bad" }
@@ -185,6 +223,9 @@ mod tests {
         }
         fn burn(&mut self) {
             self.burned = true;
+        }
+        fn undo(&mut self, _: &Device) {
+            self.undone = true;
         }
     }
 
@@ -212,6 +253,38 @@ mod tests {
         assert_eq!(b, "{\"v\":1}\n");
         assert!(matches!(end, ListenEnd::Paired(_)));
         assert!(s.burned);
+    }
+
+    #[test]
+    fn a_no_on_the_host_ends_the_session() {
+        let l = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = l.local_addr().unwrap();
+        let client = std::thread::spawn(move || exchange(addr, b"no\n"));
+        let mut s = script(5, Duration::from_secs(300));
+        let end = run_listener(&l, &mut s, &AtomicBool::new(false)).unwrap();
+        assert_eq!(
+            client.join().unwrap(),
+            "{\"v\":1,\"err\":\"pair_rejected\"}\n"
+        );
+        assert_eq!(end, ListenEnd::Closed { cancelled: true });
+        assert!(s.burned);
+    }
+
+    #[test]
+    fn a_phone_that_hung_up_is_not_left_paired() {
+        let l = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = l.local_addr().unwrap();
+        let client = std::thread::spawn(move || {
+            let mut s = TcpStream::connect(addr).unwrap();
+            s.write_all(b"good\n").unwrap();
+            s.shutdown(std::net::Shutdown::Both).unwrap();
+        });
+        client.join().unwrap();
+        std::thread::sleep(Duration::from_millis(50));
+        let mut s = script(5, Duration::from_secs(300));
+        let end = run_listener(&l, &mut s, &AtomicBool::new(false)).unwrap();
+        assert_eq!(end, ListenEnd::Closed { cancelled: false });
+        assert!(s.undone && s.burned);
     }
 
     #[test]

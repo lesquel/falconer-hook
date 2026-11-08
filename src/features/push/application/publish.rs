@@ -111,6 +111,7 @@ mod tests {
             paired_at: 1,
             endpoint_stale: stale,
             ssh_key: None,
+            peer_ips: Vec::new(),
         }
     }
 

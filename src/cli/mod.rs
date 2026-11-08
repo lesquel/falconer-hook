@@ -55,6 +55,10 @@ pub enum Command {
         /// Also print the pairing URI. It carries the one-time token: treat it like the QR.
         #[arg(long)]
         uri: bool,
+        /// Authorize the phone without asking `Pair "<name>" from <node> (<ip>)? [y/N]`.
+        /// Needed when stdin is not a terminal.
+        #[arg(long)]
+        yes: bool,
     },
     /// Pair over an existing SSH session (request JSON on stdin).
     PairSsh {

@@ -104,6 +104,7 @@ mod tests {
             paired_at: 3,
             endpoint_stale: false,
             ssh_key: Some("ssh-ed25519 AAAA".into()),
+            peer_ips: Vec::new(),
         }
     }
 

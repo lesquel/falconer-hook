@@ -33,10 +33,29 @@ pub fn device_comment(device_id: &str) -> String {
     format!("openmosh:{device_id}")
 }
 
+/// `from=` for devices paired before addresses were pinned: the whole tailnet.
+pub const LEGACY_FROM: &str = "100.64.0.0/10,fd7a:115c:a1e0::/48";
+
 /// The exact `authorized_keys` line for a paired phone (control T-3).
-pub fn authorized_keys_line(normalized_key: &str, device_id: &str) -> String {
+///
+/// `restrict` turns off every forwarding, `~/.ssh/rc` and any option a future
+/// OpenSSH adds; `pty` gives the interactive terminal back. `from=` pins the
+/// phone's own tailnet addresses (`peer_ips`), or the whole tailnet for
+/// devices paired before addresses were recorded. Addresses are re-parsed, so
+/// nothing but IP literals reaches the line.
+pub fn authorized_keys_line(normalized_key: &str, device_id: &str, peer_ips: &[String]) -> String {
+    let ips: Vec<String> = peer_ips
+        .iter()
+        .filter_map(|ip| ip.parse::<std::net::IpAddr>().ok())
+        .map(|ip| ip.to_string())
+        .collect();
+    let from = if ips.is_empty() {
+        LEGACY_FROM.to_string()
+    } else {
+        ips.join(",")
+    };
     format!(
-        "from=\"100.64.0.0/10,fd7a:115c:a1e0::/48\",no-agent-forwarding,no-X11-forwarding,no-port-forwarding,no-user-rc {normalized_key} {}",
+        "restrict,pty,from=\"{from}\" {normalized_key} {}",
         device_comment(device_id)
     )
 }
@@ -129,10 +148,20 @@ mod tests {
 
     #[test]
     fn authorized_keys_line_exact_format() {
+        let ips = ["100.101.1.2".to_string(), "fd7a:115c:a1e0::1:2".to_string()];
         assert_eq!(
-            authorized_keys_line(KEY, "AAAAAAAAAAAAAAAAAAAA01"),
-            format!("from=\"100.64.0.0/10,fd7a:115c:a1e0::/48\",no-agent-forwarding,no-X11-forwarding,no-port-forwarding,no-user-rc {KEY} openmosh:AAAAAAAAAAAAAAAAAAAA01")
+            authorized_keys_line(KEY, "AAAAAAAAAAAAAAAAAAAA01", &ips),
+            format!("restrict,pty,from=\"100.101.1.2,fd7a:115c:a1e0::1:2\" {KEY} openmosh:AAAAAAAAAAAAAAAAAAAA01")
         );
+        // Devices paired before addresses were recorded keep the tailnet range.
+        assert_eq!(
+            authorized_keys_line(KEY, "AAAAAAAAAAAAAAAAAAAA01", &[]),
+            format!("restrict,pty,from=\"100.64.0.0/10,fd7a:115c:a1e0::/48\" {KEY} openmosh:AAAAAAAAAAAAAAAAAAAA01")
+        );
+        // Only IP literals reach the line.
+        let evil = ["1.2.3.4\",command=\"sh".to_string()];
+        assert!(authorized_keys_line(KEY, "AAAAAAAAAAAAAAAAAAAA01", &evil)
+            .starts_with("restrict,pty,from=\"100.64.0.0/10"));
     }
 
     #[test]

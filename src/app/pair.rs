@@ -1,6 +1,9 @@
 //! `pair` (QR) and `pair-ssh`.
 
-use std::net::{SocketAddr, TcpListener};
+use std::io::{IsTerminal, Write as _};
+use std::net::{IpAddr, SocketAddr, TcpListener};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{Duration, Instant};
 
 use super::commands::read_stdin;
 use super::{open_state, Ctx};
@@ -8,6 +11,7 @@ use crate::cli::output::{CliError, Reply};
 use crate::features::pairing::application::{
     HostFacts, PairError, Preflight, QrPairing, SshPairing,
 };
+use crate::features::pairing::domain::PairConfirm;
 use crate::features::pairing::infrastructure::listener::{run_listener, ListenEnd};
 use crate::features::pairing::infrastructure::pair_crypto::X25519PairCrypto;
 use crate::features::pairing::infrastructure::qr_render::render_qr;
@@ -31,13 +35,75 @@ fn ssh_user(ctx: &Ctx) -> Result<String, CliError> {
         .ok_or_else(|| CliError::new("internal", "could not determine the SSH user"))
 }
 
+/// How long the host user has to answer the pairing prompt.
+const CONFIRM_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// `y`/`yes` (any case) is the only yes.
+pub fn is_yes(answer: &str) -> bool {
+    let a = answer.trim();
+    a.eq_ignore_ascii_case("y") || a.eq_ignore_ascii_case("yes")
+}
+
+/// `--yes`: the user accepted any phone that passes the checks in advance.
+struct PreApproved;
+impl PairConfirm for PreApproved {
+    fn confirm(&self, _: &str, _: &str, _: IpAddr) -> bool {
+        true
+    }
+}
+
+/// Asks on the terminal; no answer within the timeout, Ctrl+C or EOF is a no.
+struct TerminalConfirm<'a> {
+    stop: &'a AtomicBool,
+}
+
+impl PairConfirm for TerminalConfirm<'_> {
+    fn confirm(&self, name: &str, node: &str, ip: IpAddr) -> bool {
+        print!("Pair \"{name}\" from {node} ({ip})? [y/N] ");
+        let _ = std::io::stdout().flush();
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let mut line = String::new();
+            let read = std::io::stdin().read_line(&mut line);
+            let _ = tx.send(read.ok().filter(|n| *n > 0).map(|_| line));
+        });
+        let deadline = Instant::now() + CONFIRM_TIMEOUT;
+        loop {
+            match rx.recv_timeout(Duration::from_millis(100)) {
+                Ok(Some(line)) => {
+                    let yes = is_yes(&line);
+                    if !yes {
+                        println!("Not paired.");
+                    }
+                    return yes;
+                }
+                Ok(None) | Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return false,
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                    if self.stop.load(Ordering::SeqCst) || Instant::now() >= deadline {
+                        println!("\nNo answer: not paired.");
+                        return false;
+                    }
+                }
+            }
+        }
+    }
+}
+
 pub fn pair(
     ctx: &Ctx,
     alias: Option<String>,
     timeout: u64,
     invert: bool,
     show_uri: bool,
+    yes: bool,
 ) -> Result<Reply, CliError> {
+    // The host user confirms each phone; without a terminal that needs --yes.
+    if !yes && !std::io::stdin().is_terminal() {
+        return Err(CliError::new(
+            "confirmation_required",
+            "pairing asks for confirmation on this terminal; run it interactively or pass --yes",
+        ));
+    }
     let cfg = ctx.config()?;
     let st = open_state(ctx)?;
     let tailscale = TailscaleCli {
@@ -71,6 +137,8 @@ pub fn pair(
     let crypto = X25519PairCrypto::new(st.identity.secret());
     let ip = preflight.ipv4;
     let alias_shown = facts.alias.clone();
+    let terminal = TerminalConfirm { stop: &ctx.stop };
+    let confirm: &dyn PairConfirm = if yes { &PreApproved } else { &terminal };
     let mut session = QrPairing::new(
         &tailscale,
         &crypto,
@@ -78,6 +146,7 @@ pub fn pair(
         &st.keys,
         &SystemClock,
         &OsIds,
+        confirm,
         preflight,
         facts,
         random_bytes::<{ crate::features::pairing::domain::PAIR_TOKEN_LEN }>(),
@@ -95,7 +164,9 @@ pub fn pair(
         alias_shown
     );
     println!("Listening on {ip}:{port} (Tailscale only) for {timeout} s. Ctrl+C cancels.");
-    use std::io::Write as _;
+    if !yes {
+        println!("You will be asked to confirm the phone before its key is authorized.");
+    }
     let _ = std::io::stdout().flush();
     let end = run_listener(&listener, &mut session, &ctx.stop).map_err(|e| {
         log(
@@ -112,7 +183,7 @@ pub fn pair(
         )),
         ListenEnd::Closed { cancelled: true } => Err(CliError::new(
             "pair_cancelled",
-            "pairing cancelled; token burned",
+            "pairing cancelled or declined; token burned",
         )),
         ListenEnd::Closed { cancelled: false } => Err(CliError::new(
             "pair_closed",
@@ -135,4 +206,19 @@ pub fn pair_ssh(ctx: &Ctx) -> Result<Reply, CliError> {
     let r = uc.pair(&input)?;
     let human = format!("Paired device {}", r.device_id);
     Ok(Reply::new(&r, human))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_y_or_yes_confirms() {
+        for y in ["y", "Y", "yes", " YES \n"] {
+            assert!(is_yes(y), "{y:?}");
+        }
+        for n in ["", "\n", "n", "no", "yep", "y es", "1"] {
+            assert!(!is_yes(n), "{n:?}");
+        }
+    }
 }

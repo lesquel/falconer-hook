@@ -134,6 +134,7 @@ fn pair(ctx: &Ctx, invert: bool) -> Result<Reply, CliError> {
             timeout: 300,
             invert,
             uri: false,
+            yes: false,
         },
     );
     match &r {

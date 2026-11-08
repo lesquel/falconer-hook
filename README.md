@@ -103,7 +103,7 @@ else (it would recreate state); quit with `q`.
 |---|---|
 | `openmosh-hook serve` | Daemon (systemd user service / launchd agent): poll Herdr every second, record `blocked` → `approval_required` and `done` → `done`, publish encrypted pushes |
 | `openmosh-hook emit --source <name> [--kind <kind>] [--json]` | Record an event from an agent hook; the hook JSON comes on stdin. The pane is taken from `$HERDR_PANE_ID` (when `$HERDR_ENV=1`) or `$TMUX_PANE`. `--kind approval_required\|question\|done\|notification` fixes the kind for agents whose payload does not say it; the payload is then optional (only its message is kept, and a terminal on stdin is not read). `notification` becomes `approval_required` when the payload is about a permission, else `question` |
-| `openmosh-hook pair [--alias <name>] [--timeout <secs>] [--invert] [--uri]` | QR pairing (see below). `--invert` renders dark-on-light; `--uri` also prints the pairing URI, which carries the one-time token |
+| `openmosh-hook pair [--alias <name>] [--timeout <secs>] [--invert] [--uri] [--yes]` | QR pairing (see below). Asks `Pair "<name>" from <node> (<ip>)? [y/N]` before authorizing the phone; `--yes` skips that (required without a terminal). `--invert` renders dark-on-light; `--uri` also prints the pairing URI, which carries the one-time token |
 | `openmosh-hook pair-ssh --json` | Pairing over an existing SSH session; request `{"name","ppk","endpoint"}` on stdin, returns `{"device_id","alias","hpk"}` |
 | `openmosh-hook sessions list --json` | Herdr and tmux sessions |
 | `openmosh-hook agents list --json` | Agents with their state |
@@ -140,7 +140,7 @@ Exit code is `0` on success and `1` on error. Messages never contain secrets. Er
 `runtime_unavailable`, `runtime_error`, `invalid_endpoint`, `permissions_too_open`,
 `config_error`, `io_error`, `store_error`, `registry_corrupt`, `storage_error`,
 `tailscale_missing`, `tailscale_not_running`, `tailscale_tagged`, `tailscale_error`, `ssh_host_key_missing`,
-`listen_failed`, `pair_closed`, `pair_cancelled`, `settings_invalid`, `service_error`, `internal`.
+`listen_failed`, `pair_closed`, `pair_cancelled`, `confirmation_required`, `settings_invalid`, `service_error`, `internal`.
 
 ## Usage
 
@@ -179,17 +179,31 @@ the phone inside the encrypted reply. For every
 connection it checks, in order: the peer is in `100.64.0.0/10`, `tailscale whois` reports the same
 login as this host and the peer is not a tagged node, the request decrypts, the token matches, it
 has not expired or been used, the SSH key is a valid `ssh-ed25519` key and the push endpoint is
-acceptable. The whole request must arrive within 10 s (or the time left before expiry, if less).
+acceptable. Only then does the host ask, on its terminal,
+`Pair "<name>" from <tailscale node name> (<ip>)? [y/N]`; anything but `y`/`yes`, no answer within
+60 s, or Ctrl+C declines and burns the token (`pair_cancelled`). `--yes` skips the question;
+without a terminal on stdin and without `--yes`, `pair` refuses with `confirmation_required`
+before doing anything. The TUI runs pairing in the plain terminal, so the question works there
+too. A peer whose whois did not match is not looked up again, a failing lookup is retried at most
+once per second per peer, and a matching answer is remembered for the session. If the phone hangs
+up before the encrypted reply can be sent (for example while the host user was deciding), the key
+line and the device record are removed again. The whole request must arrive within 10 s (or the time left before expiry, if less).
 Device names lose control, invisible formatting (bidi, zero-width) and line-separator characters
 and are capped at 64 characters. Every failure gets the same `pair_rejected` answer; after 5
 failures from a peer that passed the network checks (other addresses and other users' nodes do
 not count), on timeout or on Ctrl+C the token is burned and the command exits 1. On success the phone's key is appended to `~/.ssh/authorized_keys` restricted to
 the tailnet (the file is left `0600` and `~/.ssh` `0700`; a symlinked file is followed, a dangling
-symlink is refused):
+symlink is refused), pinned to the phone's own tailnet addresses (the connecting IPv4 plus the
+node's addresses from `tailscale whois`, IPv4 and IPv6):
 
 ```text
-from="100.64.0.0/10,fd7a:115c:a1e0::/48",no-agent-forwarding,no-X11-forwarding,no-port-forwarding,no-user-rc ssh-ed25519 AAAA… openmosh:<device_id>
+restrict,pty,from="100.101.1.2,fd7a:115c:a1e0::1:2" ssh-ed25519 AAAA… openmosh:<device_id>
 ```
+
+`restrict` turns off agent, X11 and port forwarding, `~/.ssh/rc` and any restriction a future
+OpenSSH adds; `pty` keeps the interactive terminal. A phone whose Tailscale address changes (for
+example after reinstalling Tailscale) has to pair again. Lines written by earlier versions keep
+their whole-tailnet `from=` until the device is paired again.
 
 **SSH (secondary).** `pair-ssh --json` registers push keys for a phone that already reaches the
 host over SSH with its own key; no key is added.

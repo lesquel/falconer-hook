@@ -139,6 +139,7 @@ mod tests {
             paired_at: 0,
             endpoint_stale: true,
             ssh_key: None,
+            peer_ips: Vec::new(),
         };
         assert_eq!(
             check_devices(&MemRegistry::with(vec![d.clone()])).status,
