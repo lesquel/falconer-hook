@@ -2,6 +2,7 @@
 //! adapter types. Each handler builds adapters, injects them into use cases
 //! and returns a `Reply` for the CLI envelope.
 
+mod attach;
 mod commands;
 mod pair;
 mod serve;
@@ -170,6 +171,8 @@ impl<'a> Runtimes<'a> {
     }
 }
 
+pub use attach::attach_herdr;
+
 /// Dispatches one command.
 pub fn run(ctx: &Ctx, command: Command) -> Result<Reply, CliError> {
     use crate::cli::{DevicesCmd, InboxCmd, IntegrationCmd, ListCmd, ServiceCmd};
@@ -216,6 +219,7 @@ pub fn run(ctx: &Ctx, command: Command) -> Result<Reply, CliError> {
             ServiceCmd::Install { dry_run, .. } => commands::service(ctx, true, dry_run),
             ServiceCmd::Uninstall { dry_run, .. } => commands::service(ctx, false, dry_run),
         },
+        Command::Attach { .. } => Err(CliError::new("internal", "attach is dispatched by main")),
         Command::Version { .. } => Ok(commands::version()),
     }
 }

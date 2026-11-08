@@ -14,10 +14,25 @@ use std::process::ExitCode;
 use std::sync::atomic::Ordering;
 
 use cli::output::{err_envelope, ok_envelope};
-use cli::{Cli, Command};
+use cli::{AttachCmd, Cli, Command};
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
+    if let Command::Attach {
+        cmd: AttachCmd::Herdr { session },
+    } = &cli.command
+    {
+        // The child owns the terminal; exit with its status code.
+        return match app::Ctx::from_env()
+            .and_then(|ctx| app::attach_herdr(&ctx, session.as_deref()))
+        {
+            Ok(code) => ExitCode::from(code),
+            Err(e) => {
+                eprintln!("openmosh-hook: {}", e.message);
+                ExitCode::from(1)
+            }
+        };
+    }
     let json = cli.command.json();
     let result = app::Ctx::from_env().and_then(|ctx| {
         if matches!(cli.command, Command::Serve | Command::Pair { .. }) {

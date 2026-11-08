@@ -11,7 +11,8 @@ src/
 │   ├── mod.rs               #   Ctx (paths, env, runner), private state, runtimes, push notifier, dispatch
 │   ├── commands.rs          #   request/response commands
 │   ├── serve.rs             #   daemon loop
-│   └── pair.rs              #   QR and SSH pairing
+│   ├── pair.rs              #   QR and SSH pairing
+│   └── attach.rs            #   `attach herdr`: Herdr client + focus mirror
 ├── cli/                     # clap definitions and the JSON envelope; no adapters
 ├── shared/
 │   ├── domain/              # ids, clock, command-runner port, encodings, tailnet ranges, runtime kind
@@ -44,6 +45,7 @@ data/
 | `service` | Render and apply the user service plan | `ServiceFiles` (uses `CommandRunner`) | `FsServiceFiles` |
 | `doctor` | Diagnose dependencies, permissions and connectivity | uses other ports read-only | filesystem and service checks |
 | `integration` | Add/remove Claude Code hooks calling `emit` | `SettingsFile` | `JsonSettingsFile` |
+| `mirror` | Run the Herdr client and mirror focus to every attached client | `FocusSocket`, `Launcher`, `MonoClock` | `HerdrSocket` (Unix socket, NDJSON), `TtyLauncher`, `SystemMonoClock` |
 
 Cross-feature calls go through another feature's `domain` ports (for example `push` reads
 `pairing::domain::DeviceRegistry`, `responses` uses `agents::domain::AgentRuntime`).
@@ -56,7 +58,8 @@ Cross-feature calls go through another feature's `domain` ports (for example `pu
 3. Only `main.rs` and `app/` know concrete adapter types.
 4. Every subcommand used by the app prints the JSON envelope with `--json`.
 5. No permanent network listener. Outbound HTTPS to push endpoints only; the pairing listener is
-   one-shot and bound to the Tailscale IPv4.
+   one-shot and bound to the Tailscale IPv4. The mirror is a client of Herdr's local Unix socket.
 6. Errors: `thiserror` in domain/application with a stable `ErrorCode`; the CLI maps them to the envelope.
-7. External programs run through `CommandRunner` with argv only (no shell).
+7. External programs run through `CommandRunner` with argv only (no shell). The interactive
+   Herdr client of `attach` is spawned by `TtyLauncher`, also argv only, with the inherited terminal.
 8. No `unsafe` (`#![forbid(unsafe_code)]`); secrets are held in `zeroize` buffers.

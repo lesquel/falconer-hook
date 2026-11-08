@@ -104,10 +104,25 @@ pub enum Command {
         #[command(subcommand)]
         cmd: ServiceCmd,
     },
+    /// Run a multiplexer client with focus mirroring across attached clients.
+    Attach {
+        #[command(subcommand)]
+        cmd: AttachCmd,
+    },
     /// Print the version and wire protocol versions.
     Version {
         #[command(flatten)]
         out: JsonFlag,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum AttachCmd {
+    /// Run the Herdr client; tab/pane focus from any client is applied to all.
+    Herdr {
+        /// Named Herdr session (`herdr session attach <name>`).
+        #[arg(long)]
+        session: Option<String>,
     },
 }
 
@@ -208,7 +223,7 @@ impl Command {
     /// Whether errors must be printed as a JSON envelope.
     pub fn json(&self) -> bool {
         match self {
-            Command::Serve | Command::Pair { .. } => false,
+            Command::Serve | Command::Pair { .. } | Command::Attach { .. } => false,
             Command::Emit { out, .. }
             | Command::PairSsh { out }
             | Command::Respond { out, .. }

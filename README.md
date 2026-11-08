@@ -46,6 +46,7 @@ writes `~/.config/openmosh/config.toml` (`0600`), registers the user service and
 | `openmosh-hook integration install\|uninstall claude [--settings <path>] [--json]` | Add/remove Claude Code `Notification` and `Stop` hooks calling `emit --source claude` (default `~/.claude/settings.json`) |
 | `openmosh-hook doctor [--json]` | Check Tailscale, Herdr/tmux, permissions, sshd host key, devices, keymaps, service |
 | `openmosh-hook service install\|uninstall [--dry-run] [--json]` | Register/remove the user service |
+| `openmosh-hook attach herdr [--session <name>]` | Run the Herdr client (`herdr` or `herdr session attach <name>`, from `[bins] herdr`) with [focus mirroring](#mirroring); exits with Herdr's status code |
 | `openmosh-hook version [--json]` | Version and wire protocol versions |
 
 Ids are b64url and may start with `-`; positional id arguments accept that.
@@ -101,6 +102,27 @@ variables, send `User-Agent: openmosh`, never follow redirects, and `404`/`410` 
 `respond` claims the event atomically before sending anything, so of two concurrent answers only
 one reaches the agent; the other gets `already_resolved`. `integration install` run from a new
 executable path repoints the existing hooks at it.
+
+## Mirroring
+
+Herdr keeps a separate view per attached client, so navigating on the phone does not move the
+computer. `openmosh-hook attach herdr` runs the real Herdr client on the inherited terminal and,
+next to it, subscribes to Herdr's `workspace.focused`, `tab.focused` and `pane.focused` events on
+the local socket. When any client focuses a new target, the mirror sends `workspace.focus`,
+`tab.focus` or `pane.focus`, which Herdr applies to every attached client.
+
+- **Both directions.** Events come from every client, so the computer follows the phone and the
+  phone follows the computer. One mirror is enough; several running at once converge.
+- **No loops.** The last applied target per kind is remembered and its echo is ignored. Changes of
+  the same kind are rate-limited to one per 150 ms; the latest one inside the window wins.
+- **Recovery.** On `events_lost` or a dropped socket it reconnects and takes the current focus from
+  `session.snapshot` as the new baseline.
+- **Best effort.** Without a reachable socket Herdr still runs, and one warning is printed when it
+  exits. The socket is `--session`'s, then `$HERDR_SOCKET_PATH`, then `$HERDR_SESSION`'s, then
+  `$XDG_CONFIG_HOME/herdr/herdr.sock`.
+
+Limits: pane sizes follow the last active client (Herdr resizes to it), and an explicit focus
+marks a `done` agent in that pane as seen.
 
 ## Files
 

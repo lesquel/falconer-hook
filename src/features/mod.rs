@@ -5,6 +5,7 @@ pub mod agents;
 pub mod doctor;
 pub mod events;
 pub mod integration;
+pub mod mirror;
 pub mod pairing;
 pub mod push;
 pub mod responses;

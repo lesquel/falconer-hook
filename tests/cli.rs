@@ -20,6 +20,10 @@ name=$(basename "$0")
 { printf '%s' "$name"; for a in "$@"; do printf '\037%s' "$a"; done; printf '\036'; } >> "$FAKE_LOG"
 case "$name $1 $2" in
   "herdr agent list") cat "$FAKE_DIR/agents.json" ;;
+  "herdr  "|"herdr session attach")
+    # Interactive client stand-in: wait for the test to release it, then exit 3.
+    i=0; while [ ! -f "$FAKE_DIR/release" ] && [ $i -lt 200 ]; do sleep 0.05; i=$((i+1)); done
+    exit 3 ;;
   "herdr session list") echo '{"sessions":[{"default":true,"name":"default","running":true}]}' ;;
   "tmux list-sessions"*) printf 'main\t1\n' ;;
   "tailscale status --json") cat "$FAKE_DIR/ts_status.json" ;;
@@ -775,4 +779,94 @@ fn qr_pairing_end_to_end_over_tailnet() {
     assert_eq!(mode(&e.home().join(".ssh")), 0o700);
     // The listener is gone: single use.
     assert!(TcpStream::connect((ip.as_str(), port)).is_err());
+}
+
+/// Fake Herdr socket: acks the focus subscription, pushes one `tab_focused`
+/// event, answers `session.snapshot`, and records every other request.
+fn fake_herdr_socket(path: &Path, release: PathBuf) -> std::sync::mpsc::Receiver<Value> {
+    use std::io::{BufRead, BufReader};
+    use std::os::unix::net::UnixListener;
+    let listener = UnixListener::bind(path).unwrap();
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        for conn in listener.incoming() {
+            let Ok(conn) = conn else { break };
+            let tx = tx.clone();
+            let release = release.clone();
+            std::thread::spawn(move || {
+                let mut w = conn.try_clone().unwrap();
+                for line in BufReader::new(conn).lines() {
+                    let Ok(line) = line else { break };
+                    let req: Value = serde_json::from_str(&line).unwrap();
+                    let id = req["id"].as_str().unwrap_or_default().to_string();
+                    let reply = match req["method"].as_str() {
+                        Some("events.subscribe") => {
+                            json!({"id": id, "result": {"type": "subscription_started"}})
+                        }
+                        Some("session.snapshot") => json!({"id": id, "result": {
+                            "type": "session_snapshot",
+                            "snapshot": {"focused_workspace_id": "w1", "focused_tab_id": "w1:t1"}
+                        }}),
+                        _ => json!({"id": id, "result": {"type": "ok"}}),
+                    };
+                    writeln!(w, "{reply}").unwrap();
+                    match req["method"].as_str() {
+                        Some("events.subscribe") => {
+                            std::thread::sleep(std::time::Duration::from_millis(100));
+                            let ev = json!({"event": "tab_focused", "data": {
+                                "type": "tab_focused", "tab_id": "w1:t2", "workspace_id": "w1"}});
+                            writeln!(w, "{ev}").unwrap();
+                        }
+                        Some("session.snapshot") => {}
+                        _ => {
+                            let _ = tx.send(req);
+                            fs::write(&release, "").unwrap();
+                        }
+                    }
+                }
+            });
+        }
+    });
+    rx
+}
+
+#[test]
+fn attach_herdr_mirrors_focus_and_exits_with_the_child_code() {
+    let env = Env::new();
+    let sock = env.root.join("h.sock");
+    let rx = fake_herdr_socket(&sock, env.root.join("fake/release"));
+    let out = env.run(
+        &["attach", "herdr"],
+        None,
+        &[("HERDR_SOCKET_PATH", sock.to_str().unwrap())],
+    );
+    assert_eq!(out.status.code(), Some(3), "{out:?}");
+    let req = rx.recv_timeout(std::time::Duration::from_secs(1)).unwrap();
+    assert_eq!(req["method"], "tab.focus");
+    assert_eq!(req["params"], json!({"tab_id": "w1:t2"}));
+    assert!(rx.try_recv().is_err(), "only one focus request");
+    assert!(env.calls().iter().any(|c| c == &["herdr".to_string()]));
+    assert!(!String::from_utf8_lossy(&out.stderr).contains("unavailable"));
+}
+
+#[test]
+fn attach_herdr_without_a_socket_still_runs_herdr() {
+    let env = Env::new();
+    fs::write(env.root.join("fake/release"), "").unwrap();
+    let out = env.run(&["attach", "herdr", "--session", "work"], None, &[]);
+    assert_eq!(out.status.code(), Some(3), "{out:?}");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(
+        stderr.matches("herdr socket unavailable").count(),
+        1,
+        "{stderr}"
+    );
+    assert!(env
+        .calls()
+        .iter()
+        .any(|c| c == &["herdr", "session", "attach", "work"]));
+
+    let bad = env.run(&["attach", "herdr", "--session", "../x"], None, &[]);
+    assert_eq!(bad.status.code(), Some(1));
+    assert!(!env.calls().iter().any(|c| c.contains(&"../x".to_string())));
 }
