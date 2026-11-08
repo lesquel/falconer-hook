@@ -13,6 +13,11 @@ use crate::features::mirror::domain::{
 /// seen inside the window are coalesced and the latest is applied when it ends.
 pub const DEBOUNCE_MS: u64 = 150;
 
+/// How often the loop reads `session.snapshot`. Herdr 0.9 emits no
+/// `tab.focused` event when a client switches tabs, but the snapshot's focus
+/// follows the client that navigated last, so polling catches those changes.
+pub const SNAPSHOT_POLL_MS: u64 = 250;
+
 /// Pure focus bookkeeping: what was applied last, what is waiting, and when.
 #[derive(Debug, Default)]
 pub struct FocusState {
@@ -96,6 +101,7 @@ pub struct MirrorLoop<S, C> {
     pub poll: Duration,
     pub retry_ms: u64,
     state: FocusState,
+    last_snapshot_ms: u64,
 }
 
 impl<S: FocusSocket, C: MonoClock> MirrorLoop<S, C> {
@@ -106,6 +112,7 @@ impl<S: FocusSocket, C: MonoClock> MirrorLoop<S, C> {
             poll: Duration::from_millis(50),
             retry_ms: 500,
             state: FocusState::default(),
+            last_snapshot_ms: 0,
         }
     }
 
@@ -126,6 +133,7 @@ impl<S: FocusSocket, C: MonoClock> MirrorLoop<S, C> {
                 match self.connect() {
                     Ok(snap) => {
                         self.state.reset(&snap);
+                        self.last_snapshot_ms = self.clock.now_ms();
                         if report.connected {
                             report.resyncs += 1;
                         }
@@ -133,6 +141,27 @@ impl<S: FocusSocket, C: MonoClock> MirrorLoop<S, C> {
                         connected = true;
                     }
                     Err(_) => {
+                        next_try = now + self.retry_ms;
+                        continue;
+                    }
+                }
+            }
+            let now = self.clock.now_ms();
+            if now.saturating_sub(self.last_snapshot_ms) >= SNAPSHOT_POLL_MS {
+                self.last_snapshot_ms = now;
+                match self.socket.snapshot() {
+                    Ok(snap) => {
+                        // Workspace and tab only: a tab's focused pane is shared.
+                        for kind in [FocusKind::Workspace, FocusKind::Tab] {
+                            if let Some(t) =
+                                snap.get(kind).and_then(|id| FocusTarget::new(kind, id))
+                            {
+                                self.state.observe(t);
+                            }
+                        }
+                    }
+                    Err(_) => {
+                        connected = false;
                         next_try = now + self.retry_ms;
                         continue;
                     }

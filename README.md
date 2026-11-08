@@ -109,7 +109,10 @@ Herdr keeps a separate view per attached client, so navigating on the phone does
 computer. `openmosh-hook attach herdr` runs the real Herdr client on the inherited terminal and,
 next to it, subscribes to Herdr's `workspace.focused`, `tab.focused` and `pane.focused` events on
 the local socket. When any client focuses a new target, the mirror sends `workspace.focus`,
-`tab.focus` or `pane.focus`, which Herdr applies to every attached client.
+`tab.focus` or `pane.focus`, which Herdr applies to every attached client. Herdr 0.9 does not
+emit `tab.focused` when a client switches tabs, so the mirror also reads `session.snapshot` every
+250 ms (its focus follows the client that navigated last) and treats a changed workspace or tab
+the same way.
 
 - **Both directions.** Events come from every client, so the computer follows the phone and the
   phone follows the computer. One mirror is enough; several running at once converge.

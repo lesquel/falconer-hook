@@ -335,3 +335,41 @@ fn attach_does_not_start_the_mirror_when_the_child_cannot_start() {
     assert!(matches!(r, Err(MirrorError::Launch(_))));
     assert!(!started.load(Ordering::SeqCst));
 }
+
+#[test]
+fn follows_tab_changes_seen_only_in_the_snapshot() {
+    // Herdr 0.9 emits no tab.focused event when a client switches tabs; the
+    // session snapshot still moves to the last-navigated client's tab.
+    let mut steps = Vec::new();
+    for _ in 0..12 {
+        steps.push(Step::Idle);
+    }
+    let (report, log) = run(|s| {
+        let mut s = s.snap("w1:t1").snap("w1:t2");
+        for st in steps {
+            s = s.step(st);
+        }
+        s
+    });
+    let f = focuses(&log);
+    assert_eq!(f.len(), 1, "{log:?}");
+    let at: u64 = f[0].rsplit('@').next().unwrap().parse().unwrap();
+    assert!(f[0].starts_with("focus Tab w1:t2 @"));
+    assert!(
+        (SNAPSHOT_POLL_MS..SNAPSHOT_POLL_MS + 60).contains(&at),
+        "{at}"
+    );
+    assert_eq!(report.applied, 1);
+}
+
+#[test]
+fn a_snapshot_matching_what_was_applied_sends_nothing() {
+    let (_, log) = run(|s| {
+        let mut s = s.snap("w1:t1").snap("w1:t1").snap("w1:t1");
+        for _ in 0..12 {
+            s = s.step(Step::Idle);
+        }
+        s
+    });
+    assert!(focuses(&log).is_empty(), "{log:?}");
+}
