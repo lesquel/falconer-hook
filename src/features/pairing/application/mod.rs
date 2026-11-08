@@ -1,0 +1,1 @@
+//! Pairing use cases.

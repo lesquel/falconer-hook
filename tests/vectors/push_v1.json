@@ -1,0 +1,11 @@
+{
+  "host_priv": "AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA",
+  "host_pub": "B6N8vBQgk8i3VdwbEOhstCY3StFqqFPtC9_AsrhtHHw",
+  "device_priv": "ISIjJCUmJygpKissLS4vMDEyMzQ1Njc4OTo7PD0-P0A",
+  "device_pub": "WGmv9FBUlzLLqu1eXfmzCm2jHLDldCutWtShp2jxpns",
+  "device_id": "oKGio6SlpqeoqaqrrK2urw",
+  "nonce": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYX",
+  "key": "TQUVeUnq_Yul46XZUiwT2Z94zbdHpT4GsMk16PTL9G0",
+  "plaintext": "{\"id\":\"EBESExQVFhcYGRobHB0eHw\",\"seq\":42,\"host\":\"devbox\",\"agent\":\"claude\",\"kind\":\"approval_required\",\"title\":\"claude needs approval\",\"summary\":\"Allow Bash: cargo test — ✓ ünïcödé \\\"quoted\\\"\",\"pane\":\"w7:pA\",\"ts\":1762500000}",
+  "body": "{\"v\":1,\"kid\":\"oKGio6SlpqeoqaqrrK2urw\",\"n\":\"AAECAwQFBgcICQoLDA0ODxAREhMUFRYX\",\"c\":\"1-ghTxyVox1as3-1nzcCi0dIlVcOjfD8wk8AuXe1l8dlcwXT5PLyTHogAjXHoWWsEtkgQSZ5EkOd-8s8CUcLqWhhdH8BiHphkoKnoeNgcdhyJn26GlNRTcyXiscTWA5PND0ncz9OvmIXZKX7nyEXTNm_cQg9whWGa1v-ByFokfQQl4aiZWHZjmsfYlGkp2UvjIdvgkSur5JMQPZL-ctZYTLLE7qUZMIcJB7jQsqE56CsHP96m7L_Q8hN4CObH1c5GaDqEzNYeLkWONHSe3PFuCOIFdd0v63ajpW2eWyF4iS2OIEqZQ2R6qIM4WAIdTi-8Pk0JBY\"}"
+}
