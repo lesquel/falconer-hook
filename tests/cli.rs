@@ -280,7 +280,7 @@ fn respond_text_from_herdr_pane_uses_one_argv_entry() {
                 "send-text",
                 "--",
                 "w7:pA",
-                "-n; $(rm -rf ~) `x`[2J\nnext"
+                "-n; $(rm -rf ~) `x`[2J next"
             ],
             vec!["herdr", "agent", "send-keys", "w7:pA", "enter"],
         ]
@@ -773,7 +773,7 @@ fn qr_pairing_end_to_end_over_tailnet() {
     let ak = fs::read_to_string(e.home().join(".ssh/authorized_keys")).unwrap();
     assert_eq!(
         ak,
-        format!("from=\"100.64.0.0/10,fd7a:115c:a1e0::/48\",no-agent-forwarding,no-X11-forwarding ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJYwG729z8R85TUE6pHTEWVG3RxgVSZik0RW18NtXepH openmosh:{device_id}\n")
+        format!("from=\"100.64.0.0/10,fd7a:115c:a1e0::/48\",no-agent-forwarding,no-X11-forwarding,no-port-forwarding,no-user-rc ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJYwG729z8R85TUE6pHTEWVG3RxgVSZik0RW18NtXepH openmosh:{device_id}\n")
     );
     assert_eq!(mode(&e.home().join(".ssh/authorized_keys")), 0o600);
     assert_eq!(mode(&e.home().join(".ssh")), 0o700);

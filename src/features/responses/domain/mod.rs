@@ -115,11 +115,14 @@ impl ErrorCode for ResponseError {
     }
 }
 
-/// Removes control characters except `\n` and enforces the size limit (control T-9).
+/// Makes the answer one line (a newline would act as Enter in the agent's
+/// prompt and submit early), removes other control characters and enforces
+/// the size limit (control T-9).
 pub fn sanitize_text(text: &str) -> Result<String, ResponseError> {
     let clean: String = text
         .chars()
-        .filter(|c| *c == '\n' || !c.is_control())
+        .map(|c| if c == '\n' { ' ' } else { c })
+        .filter(|c| !c.is_control())
         .collect();
     if clean.trim().is_empty() {
         return Err(ResponseError::EmptyText);
@@ -135,10 +138,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn strips_control_chars_but_keeps_newlines() {
+    fn strips_control_chars_and_turns_newlines_into_spaces() {
         assert_eq!(
             sanitize_text("ok\u{1b}[31m\r\nnext\u{7}\t\u{9b}x").unwrap(),
-            "ok[31m\nnextx"
+            "ok[31m nextx"
         );
     }
 

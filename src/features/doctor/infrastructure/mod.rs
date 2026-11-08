@@ -52,6 +52,43 @@ pub fn check_ssh(host_key_pub: &Path) -> Check {
     }
 }
 
+/// Read-only: `sshd -G` effective settings. Password or keyboard-interactive
+/// logins bypass every key restriction OpenMosh adds, so they are a warning.
+pub fn check_sshd_auth(runner: &dyn CommandRunner, sshd: &str) -> Check {
+    match runner.run(sshd, &["-G".to_string()]) {
+        Ok(o) if o.success() => sshd_auth_check(&o.stdout),
+        _ => Check::ok("sshd auth", "not checked (`sshd -G` unavailable)"),
+    }
+}
+
+pub fn sshd_auth_check(effective: &str) -> Check {
+    let enabled = |key: &str| {
+        effective.lines().any(|l| {
+            let mut it = l.split_whitespace();
+            it.next().is_some_and(|k| k.eq_ignore_ascii_case(key))
+                && it.next().is_some_and(|v| v.eq_ignore_ascii_case("yes"))
+        })
+    };
+    let open: Vec<&str> = ["passwordauthentication", "kbdinteractiveauthentication"]
+        .into_iter()
+        .filter(|k| enabled(k))
+        .collect();
+    if open.is_empty() {
+        Check::ok("sshd auth", "public key only")
+    } else {
+        Check::warn(
+            "sshd auth",
+            format!(
+                "{} enabled: anyone who reaches port 22 can guess passwords. Add \
+                 /etc/ssh/sshd_config.d/10-openmosh.conf with `PasswordAuthentication no`, \
+                 `KbdInteractiveAuthentication no`, `AuthenticationMethods publickey`, \
+                 then reload sshd",
+                open.join(", ")
+            ),
+        )
+    }
+}
+
 /// Read-only: unit file present and `systemctl --user is-active`.
 pub fn check_systemd_service(unit: &Path, runner: &dyn CommandRunner, systemctl: &str) -> Check {
     if !unit.exists() {
@@ -137,5 +174,19 @@ mod tests {
                 "openmosh-hook.service"
             ]]
         );
+    }
+
+    #[test]
+    fn sshd_password_logins_are_a_warning() {
+        let open = super::sshd_auth_check(
+            "port 22\npasswordauthentication yes\npubkeyauthentication yes\n",
+        );
+        assert_eq!(open.status, crate::features::doctor::domain::Status::Warn);
+        assert!(open.detail.contains("passwordauthentication"));
+        let closed =
+            super::sshd_auth_check("passwordauthentication no\nkbdinteractiveauthentication no\n");
+        assert_eq!(closed.status, crate::features::doctor::domain::Status::Ok);
+        let kbd = super::sshd_auth_check("kbdinteractiveauthentication yes\n");
+        assert!(kbd.detail.contains("kbdinteractiveauthentication"));
     }
 }

@@ -14,7 +14,7 @@ use crate::features::doctor::application::{
 };
 use crate::features::doctor::domain::{Check, DoctorReport, Status};
 use crate::features::doctor::infrastructure::{
-    check_launchd_service, check_permissions, check_ssh, check_systemd_service,
+    check_launchd_service, check_permissions, check_ssh, check_sshd_auth, check_systemd_service,
 };
 use crate::features::events::application::{IngestEvent, IngestOutcome, ListInbox};
 use crate::features::events::domain::parse_hook_payload;
@@ -278,6 +278,7 @@ pub fn doctor(ctx: &Ctx) -> Result<Reply, CliError> {
         &files.iter().map(|f| f.as_path()).collect::<Vec<_>>(),
     ));
     checks.push(check_ssh(&cfg.ssh_host_key_pub));
+    checks.push(check_sshd_auth(&ctx.runner, "sshd"));
     checks.push(check_devices(&ctx.registry()));
     checks.push(check_keymaps(EmbeddedKeymaps::load().all()));
     checks.push(if cfg!(target_os = "macos") {

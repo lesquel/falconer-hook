@@ -169,7 +169,7 @@ fn successful_pairing_authorizes_key_stores_device_and_burns_token() {
     );
     assert_eq!(
         w.keys.lines.borrow().as_slice(),
-        [format!("from=\"100.64.0.0/10,fd7a:115c:a1e0::/48\",no-agent-forwarding,no-X11-forwarding {KEY} openmosh:{}", device.id)]
+        [format!("from=\"100.64.0.0/10,fd7a:115c:a1e0::/48\",no-agent-forwarding,no-X11-forwarding,no-port-forwarding,no-user-rc {KEY} openmosh:{}", device.id)]
     );
     assert_eq!(w.registry.list().unwrap(), vec![device]);
     assert!(p.is_closed());

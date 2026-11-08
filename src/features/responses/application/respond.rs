@@ -254,7 +254,7 @@ mod tests {
         );
         assert_eq!(
             r.herdr.typed.borrow().as_slice(),
-            [("w1:p2".to_string(), "run it[2J again\nplease".to_string())]
+            [("w1:p2".to_string(), "run it[2J again please".to_string())]
         );
     }
 

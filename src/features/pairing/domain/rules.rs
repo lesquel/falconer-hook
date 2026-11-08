@@ -36,7 +36,7 @@ pub fn device_comment(device_id: &str) -> String {
 /// The exact `authorized_keys` line for a paired phone (control T-3).
 pub fn authorized_keys_line(normalized_key: &str, device_id: &str) -> String {
     format!(
-        "from=\"100.64.0.0/10,fd7a:115c:a1e0::/48\",no-agent-forwarding,no-X11-forwarding {normalized_key} {}",
+        "from=\"100.64.0.0/10,fd7a:115c:a1e0::/48\",no-agent-forwarding,no-X11-forwarding,no-port-forwarding,no-user-rc {normalized_key} {}",
         device_comment(device_id)
     )
 }
@@ -131,7 +131,7 @@ mod tests {
     fn authorized_keys_line_exact_format() {
         assert_eq!(
             authorized_keys_line(KEY, "AAAAAAAAAAAAAAAAAAAA01"),
-            format!("from=\"100.64.0.0/10,fd7a:115c:a1e0::/48\",no-agent-forwarding,no-X11-forwarding {KEY} openmosh:AAAAAAAAAAAAAAAAAAAA01")
+            format!("from=\"100.64.0.0/10,fd7a:115c:a1e0::/48\",no-agent-forwarding,no-X11-forwarding,no-port-forwarding,no-user-rc {KEY} openmosh:AAAAAAAAAAAAAAAAAAAA01")
         );
     }
 

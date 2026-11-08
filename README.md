@@ -39,12 +39,12 @@ writes `~/.config/openmosh/config.toml` (`0600`), registers the user service and
 | `openmosh-hook sessions list --json` | Herdr and tmux sessions |
 | `openmosh-hook agents list --json` | Agents with their state |
 | `openmosh-hook inbox list --json [--since <seq>] [--limit <n>]` | Events with `seq > since` (default limit 100, max 500) |
-| `openmosh-hook respond <event-id> --action allow\|deny\|text [--text <msg>] --json` | Deliver the answer into the agent's pane and push `resolved` to every device |
+| `openmosh-hook respond <event-id> --action allow\|deny\|text [--text <msg>] --json` | Deliver the answer into the agent's pane and push `resolved` to every device. Text answers are sent as one line (newlines become spaces, control characters are removed), then Enter |
 | `openmosh-hook devices list --json` | Paired devices |
 | `openmosh-hook devices revoke <id> [--json]` | Remove the device's `authorized_keys` line and its record |
 | `openmosh-hook devices set-endpoint <id> <url> [--json]` | Rotate the push endpoint (clears `endpoint_stale`) |
 | `openmosh-hook integration install\|uninstall claude [--settings <path>] [--json]` | Add/remove Claude Code `Notification` and `Stop` hooks calling `emit --source claude` (default `~/.claude/settings.json`) |
-| `openmosh-hook doctor [--json]` | Check Tailscale, Herdr/tmux, permissions, sshd host key, devices, keymaps, service |
+| `openmosh-hook doctor [--json]` | Check Tailscale, Herdr/tmux, permissions, sshd host key, sshd password logins (`sshd -G`; warns when password or keyboard-interactive login is on), devices, keymaps, service |
 | `openmosh-hook service install\|uninstall [--dry-run] [--json]` | Register/remove the user service |
 | `openmosh-hook attach herdr [--session <name>]` | Run the Herdr client (`herdr` or `herdr session attach <name>`, from `[bins] herdr`) with [focus mirroring](#mirroring); exits with Herdr's status code |
 | `openmosh-hook version [--json]` | Version and wire protocol versions |
@@ -87,7 +87,7 @@ the tailnet (the file is left `0600` and `~/.ssh` `0700`; a symlinked file is fo
 symlink is refused):
 
 ```text
-from="100.64.0.0/10,fd7a:115c:a1e0::/48",no-agent-forwarding,no-X11-forwarding ssh-ed25519 AAAA… openmosh:<device_id>
+from="100.64.0.0/10,fd7a:115c:a1e0::/48",no-agent-forwarding,no-X11-forwarding,no-port-forwarding,no-user-rc ssh-ed25519 AAAA… openmosh:<device_id>
 ```
 
 **SSH (secondary).** `pair-ssh --json` registers push keys for a phone that already reaches the
