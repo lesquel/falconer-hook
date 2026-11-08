@@ -92,12 +92,13 @@ pub fn parse_snapshot(result: &Value) -> FocusSnapshot {
     }
 }
 
-/// Unix-socket client: one long-lived subscription plus one request connection.
+/// Unix-socket client: one long-lived subscription; every request opens its
+/// own connection, because Herdr 0.9 closes a request connection after one
+/// reply.
 pub struct HerdrSocket {
     path: PathBuf,
     sub: Option<UnixStream>,
     buf: Vec<u8>,
-    cmd: Option<BufReader<UnixStream>>,
     next_id: u64,
 }
 
@@ -107,7 +108,6 @@ impl HerdrSocket {
             path,
             sub: None,
             buf: Vec::new(),
-            cmd: None,
             next_id: 0,
         }
     }
@@ -124,42 +124,39 @@ impl HerdrSocket {
         format!("openmosh-{prefix}-{}", self.next_id)
     }
 
-    /// Sends one request on the command connection and returns its `result`.
+    /// Sends one request on a fresh connection and returns its `result`.
     fn request(&mut self, method: &str, params: Value) -> Result<Value, MirrorError> {
+        if self.sub.is_none() {
+            return Err(MirrorError::Closed);
+        }
         let id = self.id("req");
         let line = json!({"id": id, "method": method, "params": params}).to_string();
-        let cmd = self.cmd.as_mut().ok_or(MirrorError::Closed)?;
-        let res = (|| {
-            let stream = cmd.get_mut();
-            stream
-                .set_read_timeout(Some(REQUEST_TIMEOUT))
+        let mut stream = self.open().map_err(|_| MirrorError::Closed)?;
+        stream
+            .set_read_timeout(Some(REQUEST_TIMEOUT))
+            .map_err(|_| MirrorError::Closed)?;
+        writeln!(stream, "{line}").map_err(|_| MirrorError::Closed)?;
+        let mut cmd = BufReader::new(stream);
+        loop {
+            let mut reply = String::new();
+            let n = cmd
+                .by_ref()
+                .take(MAX_LINE as u64)
+                .read_line(&mut reply)
                 .map_err(|_| MirrorError::Closed)?;
-            writeln!(stream, "{line}").map_err(|_| MirrorError::Closed)?;
-            loop {
-                let mut reply = String::new();
-                let n = cmd
-                    .by_ref()
-                    .take(MAX_LINE as u64)
-                    .read_line(&mut reply)
-                    .map_err(|_| MirrorError::Closed)?;
-                if n == 0 || !reply.ends_with('\n') {
-                    return Err(MirrorError::Closed);
-                }
-                let v: Value =
-                    serde_json::from_str(&reply).map_err(|_| MirrorError::Protocol("bad_json"))?;
-                if v.get("id").and_then(Value::as_str) != Some(id.as_str()) {
-                    continue;
-                }
-                if v.get("error").is_some() {
-                    return Err(MirrorError::Protocol("request_refused"));
-                }
-                return Ok(v.get("result").cloned().unwrap_or(Value::Null));
+            if n == 0 || !reply.ends_with('\n') {
+                return Err(MirrorError::Closed);
             }
-        })();
-        if res.is_err() {
-            self.cmd = None;
+            let v: Value =
+                serde_json::from_str(&reply).map_err(|_| MirrorError::Protocol("bad_json"))?;
+            if v.get("id").and_then(Value::as_str) != Some(id.as_str()) {
+                continue;
+            }
+            if v.get("error").is_some() {
+                return Err(MirrorError::Protocol("request_refused"));
+            }
+            return Ok(v.get("result").cloned().unwrap_or(Value::Null));
         }
-        res
     }
 
     /// Reads from the subscription until a full line is buffered or `wait` passes.
@@ -193,7 +190,6 @@ impl HerdrSocket {
 impl FocusSocket for HerdrSocket {
     fn connect(&mut self) -> Result<(), MirrorError> {
         self.sub = None;
-        self.cmd = None;
         self.buf.clear();
         let mut sub = self.open()?;
         let id = self.id("sub");
@@ -231,7 +227,6 @@ impl FocusSocket for HerdrSocket {
             }
             break;
         }
-        self.cmd = Some(BufReader::new(self.open()?));
         Ok(())
     }
 

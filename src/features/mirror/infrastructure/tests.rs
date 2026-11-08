@@ -128,10 +128,11 @@ fn talks_to_a_fake_herdr_socket() {
             r#"{{"id":"{id}","result":{{"type":"subscription_started"}}}}"#
         )
         .unwrap();
-        let (cmd, _) = listener.accept().unwrap();
-        let mut cmd_r = BufReader::new(cmd.try_clone().unwrap());
-        let mut cmd_w = cmd;
-        for _ in 0..2 {
+        // Like Herdr 0.9: one request per connection, closed after the reply.
+        for _ in 0..3 {
+            let (cmd, _) = listener.accept().unwrap();
+            let mut cmd_r = BufReader::new(cmd.try_clone().unwrap());
+            let mut cmd_w = cmd;
             let req = read_req(&mut cmd_r);
             tx.send(req.clone()).unwrap();
             let id = req["id"].as_str().unwrap();
@@ -168,6 +169,9 @@ fn talks_to_a_fake_herdr_socket() {
     s.focus(&FocusTarget::new(FocusKind::Tab, "w1:t9").unwrap())
         .unwrap();
     let focus = rx.recv().unwrap();
+    // A later poll still works: every request gets its own connection.
+    assert_eq!(s.snapshot().unwrap().tab.as_deref(), Some("w1:t1"));
+    assert_eq!(rx.recv().unwrap()["method"], "session.snapshot");
     assert_eq!(focus["method"], "tab.focus");
     assert_eq!(focus["params"], json!({"tab_id":"w1:t9"}));
     let mut got = None;
