@@ -70,22 +70,22 @@ impl ProcSshSessions<'_> {
     }
 
     /// The nearest `sshd`/`sshd-session` ancestor owned by the user: the
-    /// process that holds this connection. Falls back to the process itself.
-    fn session_of(&self, pid: u32) -> u32 {
+    /// process that holds this connection. None when there is none: a daemon
+    /// forked from the session (tmux or Herdr server, `nohup` job) inherits
+    /// `SSH_CONNECTION` but must not be killed with it.
+    fn session_of(&self, pid: u32) -> Option<u32> {
         let mut cur = pid;
         for _ in 0..64 {
-            let Some((ppid, _)) = stat(&self.proc_root, cur) else {
-                break;
-            };
+            let (ppid, _) = stat(&self.proc_root, cur)?;
             if ppid <= 1 || !self.owned(ppid) {
-                break;
+                return None;
             }
             if stat(&self.proc_root, ppid).is_some_and(|(_, c)| c.starts_with("sshd")) {
-                return ppid;
+                return Some(ppid);
             }
             cur = ppid;
         }
-        pid
+        None
     }
 }
 
@@ -105,8 +105,7 @@ impl LiveSessions for ProcSshSessions<'_> {
                 continue;
             };
             if ssh_peer(&env).is_some_and(|p| ips.contains(&p)) {
-                let s = self.session_of(pid);
-                if !self.protect.contains(&s) {
+                if let Some(s) = self.session_of(pid).filter(|s| !self.protect.contains(s)) {
                     targets.insert(s);
                 }
             }
@@ -154,6 +153,10 @@ mod tests {
         // The caller runs over the phone's own address: protected.
         proc(root, 30, 10, "sshd", "");
         proc(root, 31, 30, "sh (x) y", &conn("::ffff:100.101.1.2"));
+        // Daemons forked from the phone's session (a tmux or Herdr server,
+        // reparented to init) carry its SSH_CONNECTION: never killed.
+        proc(root, 40, 1, "tmux: server", &conn("100.101.1.2"));
+        proc(root, 41, 40, "zsh", &conn("100.101.1.2"));
         let r = RecordingRunner::default();
         let s = ProcSshSessions {
             proc_root: root.to_path_buf(),
