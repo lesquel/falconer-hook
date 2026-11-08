@@ -1,16 +1,9 @@
 //! Use case: the usage report over the agents' local logs.
 
 use crate::features::usage::domain::{
-    AgentUsage, ClaudeParser, CodexParser, Days, Limit, Tally, UsageReport, Window,
+    AgentUsage, CodexParser, CodexSession, Days, Limit, Tally, UsageReport, Window,
 };
 use crate::shared::domain::clock::Clock;
-
-/// Agents that keep usage logs this hook can read.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LogAgent {
-    Claude,
-    Codex,
-}
 
 /// What a scan hands to its visitor, file by file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -20,17 +13,17 @@ pub enum LogLine<'a> {
     Line(&'a str),
 }
 
-/// Port over the agents' log directories (read-only).
+/// Port over Codex's session rollouts (read-only, bounded).
 pub trait UsageLogs {
-    /// Visits every line of the agent's log files modified at or after
-    /// `modified_since`. Returns `false` when the agent has no log directory.
-    fn scan(
-        &self,
-        agent: LogAgent,
-        modified_since: u64,
-        visit: &mut dyn FnMut(LogLine<'_>),
-    ) -> bool;
+    /// Visits the newest rollout files modified at or after `modified_since`,
+    /// each as `File` followed by the lines of its head and its tail only.
+    /// Returns `false` when Codex has no sessions directory.
+    fn codex(&self, modified_since: u64, visit: &mut dyn FnMut(LogLine<'_>)) -> bool;
 }
+
+/// Claude Code is never read: its usage lives only inside its transcripts.
+pub const CLAUDE_NOTE: &str =
+    "not read: Claude Code keeps no usage summary, and its transcripts are too large to scan";
 
 /// Supported agents that record no token usage on disk.
 pub const NOT_RECORDED: [&str; 6] = ["gemini", "cursor", "copilot", "kiro", "opencode", "aider"];
@@ -46,7 +39,10 @@ impl ReportUsage<'_> {
     pub fn run(&self, days: Days) -> UsageReport {
         let now = self.clock.now();
         let window = Window::new(now, self.utc_offset, days);
-        let mut agents = vec![self.claude(window), self.codex(window)];
+        let mut agents = vec![
+            AgentUsage::unavailable("claude", CLAUDE_NOTE),
+            self.codex(window),
+        ];
         agents.extend(
             NOT_RECORDED
                 .iter()
@@ -59,47 +55,28 @@ impl ReportUsage<'_> {
         }
     }
 
-    fn claude(&self, window: Window) -> AgentUsage {
-        let (mut parser, mut tally) = (ClaudeParser::default(), Tally::new(window));
-        let found = self
-            .logs
-            .scan(LogAgent::Claude, window.period_start, &mut |l| {
-                if let LogLine::Line(line) = l {
-                    if let Some(r) = parser.feed(line) {
-                        tally.add(r);
-                    }
-                }
-            });
-        if !found {
-            return AgentUsage::unavailable("claude", "no local logs found");
-        }
-        // Claude Code keeps no plan usage on disk; it is never fetched.
-        tally.finish(
-            "claude",
-            Some("plan limits are not recorded locally".into()),
-            vec![],
-        )
-    }
-
+    /// One record per session, at its last event: a session that spans
+    /// midnight counts on the day it ended.
     fn codex(&self, window: Window) -> AgentUsage {
-        let (mut parser, mut tally) = (CodexParser::default(), Tally::new(window));
+        let mut parser = CodexParser::default();
+        let mut sessions: Vec<CodexSession> = Vec::new();
+        let found = self.logs.codex(window.period_start, &mut |l| match l {
+            LogLine::File => sessions.push(parser.take()),
+            LogLine::Line(line) => parser.feed(line),
+        });
+        sessions.push(parser.take());
+        let mut tally = Tally::new(window);
         let mut newest: Option<(u64, Vec<Limit>)> = None;
-        let found = self
-            .logs
-            .scan(LogAgent::Codex, window.period_start, &mut |l| match l {
-                LogLine::File => parser.reset(),
-                LogLine::Line(line) => {
-                    let Some(ev) = parser.feed(line) else { return };
-                    if let Some(r) = ev.record {
-                        tally.add(r);
-                    }
-                    if let Some(limits) = ev.limits {
-                        if newest.as_ref().is_none_or(|(at, _)| ev.at >= *at) {
-                            newest = Some((ev.at, limits));
-                        }
-                    }
+        for s in sessions {
+            if let Some(r) = s.record {
+                tally.add(r);
+            }
+            if let Some((at, limits)) = s.limits {
+                if newest.as_ref().is_none_or(|(t, _)| at >= *t) {
+                    newest = Some((at, limits));
                 }
-            });
+            }
+        }
         if !found {
             return AgentUsage::unavailable("codex", "no local logs found");
         }
@@ -130,14 +107,9 @@ mod tests {
     }
 
     impl UsageLogs for FakeLogs {
-        fn scan(&self, agent: LogAgent, since: u64, visit: &mut dyn FnMut(LogLine<'_>)) -> bool {
+        fn codex(&self, since: u64, visit: &mut dyn FnMut(LogLine<'_>)) -> bool {
             self.since.set(since);
-            let key = if agent == LogAgent::Claude {
-                "claude"
-            } else {
-                "codex"
-            };
-            let Some(files) = self.files.get(key) else {
+            let Some(files) = self.files.get("codex") else {
                 return false;
             };
             for f in files {
@@ -150,9 +122,9 @@ mod tests {
         }
     }
 
-    fn count(ts: &str, total: u64, used: f64) -> String {
+    fn count(ts: &str, input: u64, used: f64) -> String {
         format!(
-            r#"{{"timestamp":"{ts}","type":"event_msg","payload":{{"type":"token_count","info":{{"total_token_usage":{{"total_tokens":{total}}},"last_token_usage":{{"input_tokens":10,"cached_input_tokens":4,"output_tokens":2}}}},"rate_limits":{{"primary":{{"used_percent":{used},"window_minutes":300,"resets_at":1794150000}}}}}}}}"#
+            r#"{{"timestamp":"{ts}","type":"event_msg","payload":{{"type":"token_count","info":{{"total_token_usage":{{"input_tokens":{input},"cached_input_tokens":0,"output_tokens":0}}}},"rate_limits":{{"primary":{{"used_percent":{used},"window_minutes":300,"resets_at":1794150000}}}}}}}}"#
         )
     }
 
@@ -189,28 +161,47 @@ mod tests {
     }
 
     #[test]
-    fn codex_limits_come_from_the_newest_event_across_files() {
+    fn claude_is_never_scanned_and_reported_unavailable() {
+        let mut logs = FakeLogs::default();
+        logs.files.insert("codex", vec![]);
+        let r = report(&logs, 7);
+        assert_eq!(r.agents[0], AgentUsage::unavailable("claude", CLAUDE_NOTE));
+        assert!(r.agents[1].available);
+    }
+
+    #[test]
+    fn codex_counts_each_session_once_and_limits_come_from_the_newest_file() {
         let mut logs = FakeLogs::default();
         logs.files.insert(
             "codex",
             vec![
-                vec![count("2026-11-08T11:00:00Z", 10, 60.0)],
-                vec![count("2026-11-08T10:00:00Z", 10, 20.0)],
+                vec![
+                    count("2026-11-08T10:30:00Z", 5, 10.0),
+                    count("2026-11-08T11:00:00Z", 10, 60.0),
+                ],
+                vec![count("2026-11-08T10:00:00Z", 7, 20.0)],
+                // Ended before the period: not counted, its limits are older.
+                vec![count("2026-10-01T10:00:00Z", 1000, 90.0)],
             ],
         );
-        logs.files.insert("claude", vec![]);
         let r = report(&logs, 7);
         let codex = &r.agents[1];
         assert!(codex.available);
         assert_eq!(codex.note, None);
         assert_eq!(codex.limits[0].used_percent, 60.0);
-        // Same total in two files: each file starts over, both count.
-        assert_eq!(codex.period.total(), 24);
-        let claude = &r.agents[0];
-        assert!(claude.available && claude.limits.is_empty());
+        assert_eq!(codex.period.total(), 17);
+        assert_eq!(codex.today.total(), 17);
+    }
+
+    #[test]
+    fn codex_without_limits_says_so() {
+        let mut logs = FakeLogs::default();
+        logs.files.insert("codex", vec![vec!["{}".into()]]);
+        let codex = &report(&logs, 7).agents[1];
+        assert!(codex.available && codex.limits.is_empty());
         assert_eq!(
-            claude.note.as_deref(),
-            Some("plan limits are not recorded locally")
+            codex.note.as_deref(),
+            Some("no plan limits in recent local logs")
         );
     }
 }

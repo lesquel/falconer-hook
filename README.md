@@ -149,14 +149,17 @@ provider API and never reads credentials.
 
 | Agent | Source | Plan limits |
 |---|---|---|
-| Claude Code | `~/.claude/projects/**/*.jsonl` (`message.usage`; a streamed message counts once by `message.id` + `requestId`) | Not recorded locally: always `[]` with a `note` |
-| Codex | `~/.codex/sessions/**/*.jsonl` (`token_count` events; cached input is reported as `cache_read`) | From the newest `rate_limits` (`5h`, `weekly`) |
+| Codex | `~/.codex/sessions/**/*.jsonl`: one session per file, its usage from the last `token_count` event's `info.total_token_usage` (cached input is reported as `cache_read`) | From the newest `rate_limits` (`5h`, `weekly`) |
+| Claude Code | Not read: it keeps no usage summary, and its transcripts are too large to scan | `available: false` with that `note` |
 | Gemini, Cursor, Copilot, Kiro, OpenCode, Aider | — | `available: false`, `note: "usage not recorded locally"` |
 
-Only files modified inside the period are opened, symlinks inside those directories are not
-followed, and malformed or overlong lines are skipped. "Today" starts at local midnight. Projects
-are the last folder of the agent's working directory (top 10 by tokens), models the top 5. No
-message text is kept or printed.
+The command stays cheap: it opens at most the 200 newest Codex files modified inside the period,
+and from each one reads only its first and last 256 KiB (a file of up to 512 KiB is read whole),
+never the middle. A session counts on the day of its last event, so a session that runs past
+midnight lands entirely on the later day. Symlinks inside the directory are not followed, and
+malformed or cut lines are skipped. "Today" starts at local midnight. Projects are the last folder
+of the agent's working directory (top 10 by tokens), models the top 5. No message text is kept or
+printed.
 
 ```json
 {"ok":true,"data":{"days":7,"generated_at":1794139200,"agents":[{"agent":"codex","available":true,"note":null,

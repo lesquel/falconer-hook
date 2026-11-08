@@ -1,69 +1,96 @@
-//! Filesystem adapter over the agents' log directories, and the local UTC
+//! Filesystem adapter over Codex's session rollouts, and the local UTC
 //! offset. Read-only: no network, no credentials.
 
 use std::fs;
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
-use crate::features::usage::application::{LogAgent, LogLine, UsageLogs};
+use crate::features::usage::application::{LogLine, UsageLogs};
 use crate::features::usage::domain::parse_utc_offset;
 use crate::shared::domain::command::CommandRunner;
 
-/// Longer lines (huge tool outputs) are skipped without being buffered.
+/// Longer lines are skipped without being buffered.
 pub const MAX_LINE: usize = 16 * 1024 * 1024;
+/// Bytes read from the start and from the end of a rollout.
+pub const CHUNK: usize = 256 * 1024;
+/// Rollouts read per run, newest first.
+pub const MAX_FILES: usize = 200;
 const MAX_DEPTH: usize = 8;
 
-/// `~/.claude/projects` and `~/.codex/sessions`. Symlinks inside them are
-/// never followed, so a scan cannot leave those directories.
+/// `~/.codex/sessions`. Symlinks inside it are never followed, so a scan
+/// cannot leave that directory. A rollout reads at most `2 * chunk` bytes:
+/// its head (session metadata, model) and its tail (the last running
+/// total and rate limits), never its middle.
 pub struct FsUsageLogs {
-    pub claude: PathBuf,
     pub codex: PathBuf,
     pub max_line: usize,
+    pub chunk: usize,
+    pub max_files: usize,
 }
 
 impl FsUsageLogs {
     pub fn new(home: &Path) -> Self {
         Self {
-            claude: home.join(".claude/projects"),
             codex: home.join(".codex/sessions"),
             max_line: MAX_LINE,
+            chunk: CHUNK,
+            max_files: MAX_FILES,
+        }
+    }
+
+    fn visit_file(&self, f: &Path, visit: &mut dyn FnMut(LogLine<'_>)) {
+        let Ok(mut file) = fs::File::open(f) else {
+            return;
+        };
+        let Ok(len) = file.metadata().map(|m| m.len()) else {
+            return;
+        };
+        visit(LogLine::File);
+        let emit = &mut |l: &str| visit(LogLine::Line(l));
+        let chunk = self.chunk as u64;
+        if len <= 2 * chunk {
+            for_each_line(BufReader::new(file.take(2 * chunk)), self.max_line, emit);
+            return;
+        }
+        let mut buf = Vec::with_capacity(self.chunk);
+        if (&mut file).take(chunk).read_to_end(&mut buf).is_ok() {
+            // Only whole lines: drop what the chunk cut.
+            let end = buf.iter().rposition(|&b| b == b'\n').map_or(0, |i| i + 1);
+            for_each_line(&buf[..end], self.max_line, emit);
+        }
+        buf.clear();
+        if file.seek(SeekFrom::End(-(chunk as i64))).is_ok()
+            && file.take(chunk).read_to_end(&mut buf).is_ok()
+        {
+            let start = buf
+                .iter()
+                .position(|&b| b == b'\n')
+                .map_or(buf.len(), |i| i + 1);
+            for_each_line(&buf[start..], self.max_line, emit);
         }
     }
 }
 
 impl UsageLogs for FsUsageLogs {
-    fn scan(
-        &self,
-        agent: LogAgent,
-        modified_since: u64,
-        visit: &mut dyn FnMut(LogLine<'_>),
-    ) -> bool {
-        let root = match agent {
-            LogAgent::Claude => &self.claude,
-            LogAgent::Codex => &self.codex,
-        };
-        if !root.is_dir() {
+    fn codex(&self, modified_since: u64, visit: &mut dyn FnMut(LogLine<'_>)) -> bool {
+        if !self.codex.is_dir() {
             return false;
         }
         let mut files = Vec::new();
-        collect(root, 0, modified_since, &mut files);
-        files.sort();
-        for f in files {
-            let Ok(file) = fs::File::open(&f) else {
-                continue;
-            };
-            visit(LogLine::File);
-            for_each_line(BufReader::new(file), self.max_line, &mut |l| {
-                visit(LogLine::Line(l))
-            });
+        collect(&self.codex, 0, modified_since, &mut files);
+        files.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
+        files.truncate(self.max_files);
+        for (_, f) in files {
+            self.visit_file(&f, visit);
         }
         true
     }
 }
 
-/// `*.jsonl` regular files under `dir` modified at or after `since`.
-fn collect(dir: &Path, depth: usize, since: u64, out: &mut Vec<PathBuf>) {
+/// `*.jsonl` regular files under `dir` modified at or after `since`, with
+/// their modification time.
+fn collect(dir: &Path, depth: usize, since: u64, out: &mut Vec<(u64, PathBuf)>) {
     let Ok(entries) = fs::read_dir(dir) else {
         return;
     };
@@ -81,7 +108,7 @@ fn collect(dir: &Path, depth: usize, since: u64, out: &mut Vec<PathBuf>) {
                 .and_then(|m| m.duration_since(UNIX_EPOCH).ok())
                 .map_or(0, |d| d.as_secs());
             if modified >= since {
-                out.push(path);
+                out.push((modified, path));
             }
         }
     }
@@ -147,19 +174,19 @@ mod tests {
     use super::*;
     use std::time::{Duration, SystemTime};
 
-    fn lines_of(logs: &FsUsageLogs, agent: LogAgent, since: u64) -> (bool, Vec<String>) {
+    fn lines_of(logs: &FsUsageLogs, since: u64) -> (bool, Vec<String>) {
         let mut v = Vec::new();
-        let found = logs.scan(agent, since, &mut |l| match l {
+        let found = logs.codex(since, &mut |l| match l {
             LogLine::File => v.push("<file>".into()),
             LogLine::Line(s) => v.push(s.to_string()),
         });
         (found, v)
     }
 
-    fn touch(p: &Path, body: &str, age_days: u64) {
+    fn touch(p: &Path, body: &str, age_secs: u64) {
         fs::create_dir_all(p.parent().unwrap()).unwrap();
         fs::write(p, body).unwrap();
-        let t = SystemTime::now() - Duration::from_secs(age_days * 86_400);
+        let t = SystemTime::now() - Duration::from_secs(age_secs);
         fs::File::options()
             .write(true)
             .open(p)
@@ -168,30 +195,64 @@ mod tests {
             .unwrap();
     }
 
+    fn week_ago() -> u64 {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+            - 7 * 86_400
+    }
+
     #[test]
     fn scans_only_recent_jsonl_files_and_never_follows_symlinks() {
         let home = tempfile::tempdir().unwrap();
         let outside = tempfile::tempdir().unwrap();
         let logs = FsUsageLogs::new(home.path());
-        let root = &logs.claude;
-        touch(&root.join("p/new.jsonl"), "a\nb", 0);
-        touch(&root.join("p/s/subagents/agent.jsonl"), "c\n", 1);
-        touch(&root.join("p/old.jsonl"), "old\n", 30);
-        touch(&root.join("p/notes.txt"), "txt\n", 0);
+        let root = &logs.codex;
+        touch(&root.join("2026/new.jsonl"), "a\nb", 0);
+        touch(&root.join("2026/11/08/older.jsonl"), "c\n", 86_400);
+        touch(&root.join("2026/old.jsonl"), "old\n", 30 * 86_400);
+        touch(&root.join("2026/notes.txt"), "txt\n", 0);
         touch(&outside.path().join("x.jsonl"), "outside\n", 0);
-        std::os::unix::fs::symlink(outside.path().join("x.jsonl"), root.join("p/link.jsonl"))
+        std::os::unix::fs::symlink(outside.path().join("x.jsonl"), root.join("2026/link.jsonl"))
             .unwrap();
         std::os::unix::fs::symlink(outside.path(), root.join("linkdir")).unwrap();
-        let since = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs()
-            - 7 * 86_400;
-        let (found, lines) = lines_of(&logs, LogAgent::Claude, since);
+        let (found, lines) = lines_of(&logs, week_ago());
         assert!(found);
         assert_eq!(lines, ["<file>", "a", "b", "<file>", "c"]);
-        let (found, lines) = lines_of(&logs, LogAgent::Codex, since);
+        let empty = tempfile::tempdir().unwrap();
+        let (found, lines) = lines_of(&FsUsageLogs::new(empty.path()), 0);
         assert!(!found && lines.is_empty());
+    }
+
+    #[test]
+    fn a_big_rollout_is_read_by_its_head_and_tail_only() {
+        let home = tempfile::tempdir().unwrap();
+        let mut logs = FsUsageLogs::new(home.path());
+        logs.chunk = 16;
+        // 0..=16 head (cut at "headcut"), 17.. middle, last 16 bytes tail.
+        let body =
+            "head1\nhead2\nheadcut-middle\nMIDDLE-1\nMIDDLE-2\nMIDDLE-3\ncut-t1\ntail2\ntail3";
+        touch(&logs.codex.join("rollout-big.jsonl"), body, 0);
+        let (_, lines) = lines_of(&logs, week_ago());
+        assert_eq!(lines, ["<file>", "head1", "head2", "tail2", "tail3"]);
+        // At most two chunks: read whole.
+        let body = "a\nbbbbbbbbbbbbbbbbbbbbbbbbb\nc";
+        touch(&logs.codex.join("rollout-big.jsonl"), body, 0);
+        let (_, lines) = lines_of(&logs, week_ago());
+        assert_eq!(lines, ["<file>", "a", "bbbbbbbbbbbbbbbbbbbbbbbbb", "c"]);
+    }
+
+    #[test]
+    fn only_the_newest_files_up_to_the_cap_are_read() {
+        let home = tempfile::tempdir().unwrap();
+        let mut logs = FsUsageLogs::new(home.path());
+        logs.max_files = 2;
+        touch(&logs.codex.join("a/oldest.jsonl"), "oldest", 300);
+        touch(&logs.codex.join("b/newest.jsonl"), "newest", 0);
+        touch(&logs.codex.join("c/middle.jsonl"), "middle", 100);
+        let (_, lines) = lines_of(&logs, week_ago());
+        assert_eq!(lines, ["<file>", "newest", "<file>", "middle"]);
     }
 
     #[test]

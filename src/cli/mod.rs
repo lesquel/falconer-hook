@@ -142,7 +142,9 @@ pub enum Command {
         out: JsonFlag,
     },
     /// Token usage per agent, project and model, read from the agents' own
-    /// local logs (Claude Code, Codex). Never calls a provider or reads credentials.
+    /// local logs (Codex only: the head and tail of its newest 200 session files;
+    /// a session counts on the day of its last event). Claude Code is not read:
+    /// it keeps no usage summary. Never calls a provider or reads credentials.
     Usage {
         /// Calendar days to cover, today included (1..=31).
         #[arg(long, default_value_t = 7, allow_negative_numbers = true)]

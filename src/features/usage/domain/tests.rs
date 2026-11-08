@@ -4,13 +4,6 @@ const DAY: u64 = 86_400;
 // 2026-11-08T12:00:00Z
 const NOW: u64 = 1_794_139_200;
 
-fn claude_line(id: &str, req: &str, ts: &str, cwd: &str, model: &str, u: [u64; 4]) -> String {
-    format!(
-        r#"{{"type":"assistant","cwd":"{cwd}","requestId":"{req}","timestamp":"{ts}","message":{{"id":"{id}","model":"{model}","content":[{{"type":"text","text":"secret"}}],"usage":{{"input_tokens":{},"output_tokens":{},"cache_creation_input_tokens":{},"cache_read_input_tokens":{}}}}}}}"#,
-        u[0], u[1], u[2], u[3]
-    )
-}
-
 fn tokens(input: u64, output: u64, cache_read: u64, cache_write: u64) -> Tokens {
     Tokens {
         input,
@@ -81,7 +74,7 @@ fn tally_splits_today_from_the_period_around_local_midnight() {
     t.add(rec(before_midnight, "a", "m", tokens(1, 0, 0, 0)));
     t.add(rec(w.today_start, "a", "m", tokens(10, 0, 0, 0)));
     t.add(rec(w.period_start - 1, "a", "m", tokens(100, 0, 0, 0)));
-    let u = t.finish("claude", None, vec![]);
+    let u = t.finish("codex", None, vec![]);
     assert_eq!(u.today, tokens(10, 0, 0, 0));
     assert_eq!(u.period, tokens(11, 0, 0, 0));
 }
@@ -96,7 +89,7 @@ fn tally_keeps_top_10_projects_and_top_5_models_by_period_total() {
     }
     // A tie is broken by name.
     t.add(rec(NOW, "p00", "m00", tokens(12, 0, 0, 0)));
-    let u = t.finish("claude", None, vec![]);
+    let u = t.finish("codex", None, vec![]);
     let projects: Vec<_> = u.projects.iter().map(|p| p.project.as_str()).collect();
     assert_eq!(
         projects,
@@ -116,57 +109,6 @@ fn tokens_serialize_with_their_total() {
     );
 }
 
-#[test]
-fn claude_lines_map_tokens_and_repeated_stream_messages_count_once() {
-    let mut p = ClaudeParser::default();
-    let l = claude_line(
-        "msg_1",
-        "req_1",
-        "2026-11-08T12:00:00Z",
-        "/w/OpenMosh",
-        "claude-opus",
-        [2, 493, 60_636, 28_196],
-    );
-    let r = p.feed(&l).unwrap();
-    assert_eq!(r.at, NOW);
-    assert_eq!(r.project.as_deref(), Some("OpenMosh"));
-    assert_eq!(r.model.as_deref(), Some("claude-opus"));
-    assert_eq!(r.tokens, tokens(2, 493, 28_196, 60_636));
-    assert!(p.feed(&l).is_none(), "streaming repeat counted twice");
-    let other_request = claude_line(
-        "msg_1",
-        "req_2",
-        "2026-11-08T12:00:00Z",
-        "/w",
-        "m",
-        [1, 1, 0, 0],
-    );
-    assert!(p.feed(&other_request).is_some());
-}
-
-#[test]
-fn claude_ignores_malformed_unrelated_and_empty_lines() {
-    let mut p = ClaudeParser::default();
-    assert!(p.feed("{not json \"usage\"").is_none());
-    assert!(p
-        .feed(r#"{"type":"user","message":{"content":"hi"}}"#)
-        .is_none());
-    assert!(
-        p.feed(r#"{"message":{"id":"x","usage":{"input_tokens":1}}}"#)
-            .is_none(),
-        "no timestamp"
-    );
-    let zero = claude_line(
-        "m",
-        "r",
-        "2026-11-08T12:00:00Z",
-        "/w",
-        "<synthetic>",
-        [0, 0, 0, 0],
-    );
-    assert!(p.feed(&zero).is_none());
-}
-
 fn codex_meta(cwd: &str) -> String {
     format!(
         r#"{{"timestamp":"2026-11-08T11:00:00Z","type":"session_meta","payload":{{"id":"s","cwd":"{cwd}","base_instructions":{{"text":"secret"}}}}}}"#
@@ -179,60 +121,62 @@ fn codex_turn(cwd: &str, model: &str) -> String {
     )
 }
 
-fn codex_count(ts: &str, last: [u64; 3], total: u64, limits: &str) -> String {
+/// A `token_count` event; `total` is the session's running usage
+/// (input, cached input, output).
+fn codex_count(ts: &str, total: [u64; 3], limits: &str) -> String {
     format!(
-        r#"{{"timestamp":"{ts}","type":"event_msg","payload":{{"type":"token_count","info":{{"total_token_usage":{{"total_tokens":{total}}},"last_token_usage":{{"input_tokens":{},"cached_input_tokens":{},"output_tokens":{},"reasoning_output_tokens":5,"total_tokens":{}}}}},"rate_limits":{limits}}}}}"#,
-        last[0],
-        last[1],
-        last[2],
-        last[0] + last[2]
+        r#"{{"timestamp":"{ts}","type":"event_msg","payload":{{"type":"token_count","info":{{"total_token_usage":{{"input_tokens":{},"cached_input_tokens":{},"output_tokens":{},"reasoning_output_tokens":5,"total_tokens":{}}},"last_token_usage":{{"input_tokens":1,"cached_input_tokens":0,"output_tokens":1,"total_tokens":2}}}},"rate_limits":{limits}}}}}"#,
+        total[0],
+        total[1],
+        total[2],
+        total[0] + total[2]
     )
 }
 
 const LIMITS: &str = r#"{"primary":{"used_percent":42.5,"window_minutes":300,"resets_at":1794150000},"secondary":{"used_percent":7.0,"window_minutes":10080,"resets_in_seconds":3600}}"#;
 
 #[test]
-fn codex_token_counts_map_cached_input_to_cache_read() {
+fn codex_session_total_is_its_last_token_count_with_cached_input_as_cache_read() {
     let mut p = CodexParser::default();
-    assert!(p.feed(&codex_meta("/w/Old")).is_none());
-    assert!(p.feed(&codex_turn("/w/App", "gpt-5")).is_none());
-    let ev = p
-        .feed(&codex_count(
-            "2026-11-08T12:00:00Z",
-            [1000, 800, 50],
-            1050,
-            "null",
-        ))
-        .unwrap();
-    let r = ev.record.unwrap();
+    p.feed(&codex_meta("/w/Old"));
+    p.feed(&codex_turn("/w/App", "gpt-5"));
+    p.feed(&codex_count("2026-11-08T11:30:00Z", [100, 50, 5], "null"));
+    p.feed(&codex_count(
+        "2026-11-08T12:00:00Z",
+        [1000, 800, 50],
+        "null",
+    ));
+    // A rate-limit-only update after the last count keeps the total.
+    p.feed(r#"{"timestamp":"2026-11-08T12:05:00Z","type":"event_msg","payload":{"type":"token_count","info":null,"rate_limits":null}}"#);
+    let s = p.take();
+    let r = s.record.unwrap();
     assert_eq!(r.at, NOW);
     assert_eq!(r.project.as_deref(), Some("App"));
     assert_eq!(r.model.as_deref(), Some("gpt-5"));
     assert_eq!(r.tokens, tokens(200, 50, 800, 0));
-    assert!(ev.limits.is_none());
+    assert!(s.limits.is_none());
 }
 
 #[test]
-fn codex_repeated_token_count_with_the_same_total_counts_once() {
+fn codex_take_starts_the_next_file_over() {
     let mut p = CodexParser::default();
-    let l = codex_count("2026-11-08T12:00:00Z", [10, 0, 1], 11, "null");
-    assert!(p.feed(&l).unwrap().record.is_some());
-    assert!(p.feed(&l).is_none_or(|e| e.record.is_none()));
-    p.reset();
-    assert!(
-        p.feed(&l).unwrap().record.is_some(),
-        "a new file starts over"
-    );
+    p.feed(&codex_turn("/w/App", "gpt-5"));
+    p.feed(&codex_count("2026-11-08T12:00:00Z", [10, 0, 1], LIMITS));
+    assert!(p.take().record.is_some());
+    assert_eq!(p.take(), CodexSession::default());
+    p.feed(&codex_count("2026-11-08T12:00:00Z", [10, 0, 1], "null"));
+    let r = p.take().record.unwrap();
+    assert_eq!((r.project, r.model), (None, None));
 }
 
 #[test]
-fn codex_rate_limits_become_named_limits() {
+fn codex_rate_limits_become_named_limits_and_the_newest_in_a_file_wins() {
     let mut p = CodexParser::default();
-    let ev = p
-        .feed(&codex_count("2026-11-08T12:00:00Z", [10, 0, 1], 11, LIMITS))
-        .unwrap();
-    let limits = ev.limits.unwrap();
-    assert_eq!(ev.at, NOW);
+    p.feed(&codex_count("2026-11-08T12:00:00Z", [10, 0, 1], LIMITS));
+    let odd = r#"{"primary":{"used_percent":1,"window_minutes":60},"secondary":null}"#;
+    p.feed(&codex_count("2026-11-08T11:00:00Z", [10, 0, 1], odd));
+    let (at, limits) = p.take().limits.unwrap();
+    assert_eq!(at, NOW);
     assert_eq!(
         limits,
         vec![
@@ -250,23 +194,23 @@ fn codex_rate_limits_become_named_limits() {
             },
         ]
     );
-    let odd = r#"{"primary":{"used_percent":1,"window_minutes":60},"secondary":null}"#;
-    let ev = p
-        .feed(&codex_count("2026-11-08T12:00:00Z", [1, 0, 1], 99, odd))
-        .unwrap();
-    let l = &ev.limits.unwrap()[0];
-    assert_eq!((l.name.as_str(), l.resets_at), ("primary", None));
+    p.feed(&codex_count("2026-11-08T12:00:00Z", [1, 0, 1], odd));
+    let (_, limits) = p.take().limits.unwrap();
+    assert_eq!(
+        (limits[0].name.as_str(), limits[0].resets_at),
+        ("primary", None)
+    );
 }
 
 #[test]
-fn codex_ignores_malformed_lines_and_counts_without_info() {
+fn codex_ignores_malformed_lines_counts_without_info_and_empty_sessions() {
     let mut p = CodexParser::default();
-    assert!(p.feed("{\"token_count\" broken").is_none());
-    let no_info = r#"{"timestamp":"2026-11-08T12:00:00Z","type":"event_msg","payload":{"type":"token_count","info":null,"rate_limits":null}}"#;
-    assert!(p
-        .feed(no_info)
-        .is_none_or(|e| e.record.is_none() && e.limits.is_none()));
-    assert!(p
-        .feed(r#"{"type":"response_item","payload":{"text":"hi"}}"#)
-        .is_none());
+    p.feed("{\"token_count\" broken");
+    p.feed(r#"{"timestamp":"2026-11-08T12:00:00Z","type":"event_msg","payload":{"type":"token_count","info":null,"rate_limits":null}}"#);
+    p.feed(r#"{"type":"response_item","payload":{"text":"hi"}}"#);
+    // No timestamp: dropped.
+    p.feed(r#"{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":5}}}}"#);
+    assert_eq!(p.take(), CodexSession::default());
+    p.feed(&codex_count("2026-11-08T12:00:00Z", [0, 0, 0], "null"));
+    assert_eq!(p.take().record, None, "a session with no tokens");
 }

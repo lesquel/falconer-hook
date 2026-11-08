@@ -4,7 +4,7 @@
 mod parse;
 mod time;
 
-pub use parse::{ClaudeParser, CodexParser};
+pub use parse::{CodexParser, CodexSession};
 #[cfg(test)]
 use time::parse_rfc3339;
 pub use time::parse_utc_offset;
@@ -108,7 +108,7 @@ impl Serialize for Tokens {
     }
 }
 
-/// One model response.
+/// Tokens attributed to one moment (for Codex, one session at its last event).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Record {
     pub at: u64,

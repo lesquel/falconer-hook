@@ -20,42 +20,84 @@ fn now_rfc3339() -> String {
     utc(&["+%Y-%m-%dT%H:%M:%SZ"])
 }
 
-fn claude_line(id: &str, ts: &str, cwd: &str, u: [u64; 4]) -> String {
+const CLAUDE_NOTE: &str =
+    "not read: Claude Code keeps no usage summary, and its transcripts are too large to scan";
+
+fn count(ts: &str, total: [u64; 3], limits: &str) -> String {
     format!(
-        r#"{{"type":"assistant","cwd":"{cwd}","requestId":"req_{id}","timestamp":"{ts}","message":{{"id":"{id}","model":"claude-opus","content":[{{"type":"text","text":"do not print me"}}],"usage":{{"input_tokens":{},"output_tokens":{},"cache_creation_input_tokens":{},"cache_read_input_tokens":{}}}}}}}"#,
-        u[0], u[1], u[2], u[3]
+        r#"{{"timestamp":"{ts}","type":"event_msg","payload":{{"type":"token_count","info":{{"total_token_usage":{{"input_tokens":{},"cached_input_tokens":{},"output_tokens":{},"total_tokens":{}}},"last_token_usage":{{"input_tokens":1,"output_tokens":1}}}},"rate_limits":{limits}}}}}"#,
+        total[0],
+        total[1],
+        total[2],
+        total[0] + total[2]
     )
 }
 
+fn turn(ts: &str, cwd: &str, model: &str) -> String {
+    format!(
+        r#"{{"timestamp":"{ts}","type":"turn_context","payload":{{"cwd":"{cwd}","model":"{model}"}}}}"#
+    )
+}
+
+/// Claude transcripts that must not be opened (unreadable), and two Codex
+/// rollouts: a 1 MiB one whose middle would change the model and the totals
+/// if it were read, and a small one read whole.
 fn write_fixtures(env: &Env) {
+    use std::os::unix::fs::PermissionsExt;
     let ts = now_rfc3339();
     let home = env.home();
     let claude = home.join(".claude/projects/-w-OpenMosh");
     fs::create_dir_all(&claude).unwrap();
-    let line = claude_line("m1", &ts, "/w/OpenMosh", [10, 20, 30, 40]);
-    let body = [
-        line.clone(),
-        // The same streamed message again: counted once.
-        line,
-        "{broken \"usage\"".to_string(),
-        claude_line("m2", "2020-01-01T00:00:00Z", "/w/Old", [1000, 0, 0, 0]),
-        claude_line("m3", &ts, "/w/Other", [1, 1, 1, 1]),
-    ]
-    .join("\n");
-    fs::write(claude.join("s.jsonl"), body).unwrap();
+    let transcript = claude.join("s.jsonl");
+    fs::write(
+        &transcript,
+        r#"{"type":"assistant","timestamp":"2026-11-08T12:00:00Z","message":{"usage":{"input_tokens":9}}}"#,
+    )
+    .unwrap();
+    fs::set_permissions(&transcript, fs::Permissions::from_mode(0o000)).unwrap();
 
     let codex = home.join(".codex/sessions/2026/11/08");
     fs::create_dir_all(&codex).unwrap();
     let resets_at = utc(&["+%s"]).parse::<u64>().unwrap() + 3600;
-    let body = [
-        format!(r#"{{"timestamp":"{ts}","type":"session_meta","payload":{{"id":"s","cwd":"/w/App"}}}}"#),
-        format!(r#"{{"timestamp":"{ts}","type":"turn_context","payload":{{"cwd":"/w/App","model":"gpt-5"}}}}"#),
+    let limits = format!(
+        r#"{{"primary":{{"used_percent":42.0,"window_minutes":300,"resets_at":{resets_at}}},"secondary":{{"used_percent":7.5,"window_minutes":10080,"resets_at":null}}}}"#
+    );
+    let filler = format!(
+        r#"{{"timestamp":"{ts}","type":"response_item","payload":{{"text":"do not print me {}"}}}}"#,
+        "x".repeat(1000)
+    );
+    let mut big = vec![
         format!(
-            r#"{{"timestamp":"{ts}","type":"event_msg","payload":{{"type":"token_count","info":{{"total_token_usage":{{"total_tokens":1050}},"last_token_usage":{{"input_tokens":1000,"cached_input_tokens":800,"output_tokens":50,"reasoning_output_tokens":10,"total_tokens":1050}}}},"rate_limits":{{"primary":{{"used_percent":42.0,"window_minutes":300,"resets_at":{resets_at}}},"secondary":{{"used_percent":7.5,"window_minutes":10080,"resets_at":null}}}}}}}}"#
+            r#"{{"timestamp":"{ts}","type":"session_meta","payload":{{"id":"s","cwd":"/w/App"}}}}"#
         ),
+        turn(&ts, "/w/App", "gpt-5"),
+    ];
+    big.extend(std::iter::repeat_n(filler.clone(), 400));
+    big.push(turn(&ts, "/w/Middle", "gpt-middle"));
+    big.push(count(
+        &ts,
+        [9_000_000, 0, 0],
+        &limits.replace("42.0", "99.0"),
+    ));
+    big.extend(std::iter::repeat_n(filler.clone(), 600));
+    big.push(count(&ts, [500, 0, 10], "null"));
+    big.push(count(&ts, [1000, 800, 50], &limits));
+    let big = big.join("\n");
+    assert!(big.len() > 1024 * 1024);
+    fs::write(codex.join("rollout-big.jsonl"), big).unwrap();
+
+    let small = [
+        turn(&ts, "/w/Small", "gpt-5-mini"),
+        filler,
+        count(
+            "2020-01-01T00:00:00Z",
+            [1, 0, 1],
+            &limits.replace("42.0", "1.0"),
+        ),
+        count(&ts, [30, 10, 4], "null"),
     ]
     .join("\n");
-    fs::write(codex.join("rollout-x.jsonl"), body).unwrap();
+    fs::write(codex.join("rollout-small.jsonl"), small).unwrap();
 }
 
 fn t(input: u64, output: u64, cache_read: u64, cache_write: u64) -> Value {
@@ -81,20 +123,17 @@ fn usage_json_has_the_contract_shape() {
         ["claude", "codex", "gemini", "cursor", "copilot", "kiro", "opencode", "aider"]
     );
 
-    let claude_total = t(11, 21, 41, 31);
     assert_eq!(
         agents[0],
         json!({
-            "agent": "claude", "available": true,
-            "note": "plan limits are not recorded locally",
-            "today": claude_total, "period": claude_total,
-            "projects": [{"project": "OpenMosh", "tokens": t(10, 20, 40, 30)},
-                         {"project": "Other", "tokens": t(1, 1, 1, 1)}],
-            "models": [{"model": "claude-opus", "tokens": claude_total}],
-            "limits": []
+            "agent": "claude", "available": false, "note": CLAUDE_NOTE,
+            "today": t(0, 0, 0, 0), "period": t(0, 0, 0, 0),
+            "projects": [], "models": [], "limits": []
         })
     );
-    let codex_total = t(200, 50, 800, 0);
+    let app = t(200, 50, 800, 0);
+    let small = t(20, 4, 10, 0);
+    let codex_total = t(220, 54, 810, 0);
     let resets_at = &agents[1]["limits"][0]["resets_at"];
     assert!(resets_at.is_u64());
     assert_eq!(
@@ -102,8 +141,10 @@ fn usage_json_has_the_contract_shape() {
         json!({
             "agent": "codex", "available": true, "note": null,
             "today": codex_total, "period": codex_total,
-            "projects": [{"project": "App", "tokens": codex_total}],
-            "models": [{"model": "gpt-5", "tokens": codex_total}],
+            "projects": [{"project": "App", "tokens": app},
+                         {"project": "Small", "tokens": small}],
+            "models": [{"model": "gpt-5", "tokens": app},
+                       {"model": "gpt-5-mini", "tokens": small}],
             "limits": [
                 {"name": "5h", "used_percent": 42.0, "window_minutes": 300, "resets_at": resets_at},
                 {"name": "weekly", "used_percent": 7.5, "window_minutes": 10080, "resets_at": null}
@@ -127,8 +168,9 @@ fn usage_without_logs_reports_every_agent_unavailable() {
     let (code, v) = env.json(&["usage", "--days", "1", "--json"], None, &[]);
     let d = ok_data(code, &v);
     assert_eq!(d["days"], 1);
-    assert_eq!(d["agents"][0]["available"], false);
-    assert_eq!(d["agents"][0]["note"], "no local logs found");
+    assert_eq!(d["agents"][0]["note"], CLAUDE_NOTE);
+    assert_eq!(d["agents"][1]["available"], false);
+    assert_eq!(d["agents"][1]["note"], "no local logs found");
 }
 
 #[test]
@@ -151,8 +193,9 @@ fn usage_human_output_lists_each_agent() {
     let out = env.run(&["usage"], None, &[("TZ", "UTC")]);
     assert!(out.status.success());
     let s = String::from_utf8(out.stdout).unwrap();
-    assert!(s.contains("claude\n  today     104 (in 11"), "{s}");
-    assert!(s.contains("  projects  OpenMosh 100, Other 4"), "{s}");
+    assert!(s.contains(&format!("claude    {CLAUDE_NOTE}")), "{s}");
+    assert!(s.contains("codex\n  today     1.1k (in 220"), "{s}");
+    assert!(s.contains("  projects  App 1.1k, Small 34"), "{s}");
     assert!(
         s.contains("  limit     5h 42% used, resets in 0h59m") || s.contains("resets in 1h00m"),
         "{s}"
