@@ -255,10 +255,35 @@ mod tests {
     }
 }
 
+/// Tells paired devices about an event (implemented by the push feature).
+/// Returns how many devices received it. Delivery failures never fail the caller.
+pub trait EventNotifier {
+    fn notify(&self, event: &Event) -> u32;
+    /// Publishes a `resolved` push so other devices clear the notification.
+    fn notify_resolved(&self, event: &Event) -> u32;
+}
+
 #[cfg(test)]
 pub mod fakes {
     use super::*;
     use std::cell::RefCell;
+
+    #[derive(Default)]
+    pub struct RecordingNotifier {
+        pub notified: RefCell<Vec<String>>,
+        pub resolved: RefCell<Vec<String>>,
+    }
+
+    impl EventNotifier for RecordingNotifier {
+        fn notify(&self, event: &Event) -> u32 {
+            self.notified.borrow_mut().push(event.id.clone());
+            1
+        }
+        fn notify_resolved(&self, event: &Event) -> u32 {
+            self.resolved.borrow_mut().push(event.id.clone());
+            1
+        }
+    }
 
     /// In-memory `EventStore` with the same seq semantics as SQLite.
     #[derive(Default)]

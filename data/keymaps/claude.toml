@@ -1,0 +1,18 @@
+# Keystrokes that answer a Claude Code prompt, per action.
+#
+# NEEDS FIELD VERIFICATION: confirm these against the Claude Code version in
+# use before relying on them. Claude Code's permission prompt selects
+# "Yes" by default (Enter accepts it) and Escape cancels it.
+#
+# Allowed key names: enter esc tab space backspace up down left right y n 1 2 3
+
+agent = "claude"
+version = 1
+verified = false
+
+# Approve the pending permission prompt.
+allow = ["enter"]
+# Reject the pending permission prompt.
+deny = ["esc"]
+# Sent after a text answer to submit it.
+submit = ["enter"]
