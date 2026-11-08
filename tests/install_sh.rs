@@ -6,6 +6,30 @@ use std::os::unix::fs::PermissionsExt;
 use std::process::Command;
 
 fn dry_run(args: &[&str]) -> (tempfile::TempDir, String) {
+    dry_run_with(args, &[("OPENMOSH_NO_GH", "1")], &[])
+}
+
+/// Fake `uname` reporting `os`/`arch`.
+fn uname(os: &str, arch: &str) -> (&'static str, String) {
+    (
+        "uname",
+        format!("#!/bin/sh\ncase \"$1\" in -s) echo {os} ;; -m) echo {arch} ;; esac\n"),
+    )
+}
+
+/// A logged-in GitHub CLI: only `gh auth status` may run in a dry run.
+fn gh_logged_in() -> (&'static str, String) {
+    (
+        "gh",
+        "#!/bin/sh\n[ \"$1 $2\" = \"auth status\" ] && exit 0\necho 'gh must not download in dry-run' >&2\nexit 99\n".into(),
+    )
+}
+
+fn dry_run_with(
+    args: &[&str],
+    env: &[(&str, &str)],
+    fakes: &[(&str, String)],
+) -> (tempfile::TempDir, String) {
     let t = tempfile::tempdir().unwrap();
     let home = t.path().join("home");
     let bin = t.path().join("bin");
@@ -20,6 +44,11 @@ fn dry_run(args: &[&str]) -> (tempfile::TempDir, String) {
         .unwrap();
         fs::set_permissions(&p, fs::Permissions::from_mode(0o755)).unwrap();
     }
+    for (name, script) in fakes {
+        let p = bin.join(name);
+        fs::write(&p, script).unwrap();
+        fs::set_permissions(&p, fs::Permissions::from_mode(0o755)).unwrap();
+    }
     let out = Command::new("sh")
         .arg(concat!(env!("CARGO_MANIFEST_DIR"), "/install.sh"))
         .arg("--dry-run")
@@ -27,6 +56,7 @@ fn dry_run(args: &[&str]) -> (tempfile::TempDir, String) {
         .env_clear()
         .env("HOME", &home)
         .env("PATH", format!("{}:/usr/bin:/bin", bin.display()))
+        .envs(env.iter().copied())
         .output()
         .unwrap();
     let stdout = String::from_utf8(out.stdout).unwrap();
@@ -48,7 +78,8 @@ fn release_dry_run_prints_every_step() {
     let (_t, out) = dry_run(&[]);
     assert!(out.contains("(dry run: nothing will be changed)"));
     assert!(out.contains("releases/latest/download/openmosh-hook-"));
-    assert!(out.contains(".tar.gz.sha256"));
+    assert!(out.contains("releases/latest/download/SHA256SUMS"));
+    assert!(out.contains("would verify openmosh-hook-"));
     assert!(out.contains("openmosh-hook service install"));
     assert!(out.contains("openmosh-hook doctor"));
     assert!(out.contains("config.toml (mode 0600)"));
@@ -73,4 +104,66 @@ fn from_source_and_binary_modes() {
 fn yes_never_runs_installers_in_dry_run() {
     let (_t, out) = dry_run(&["--yes", "--no-service"]);
     assert!(!out.contains("+ curl -fsSL https://herdr.dev/install.sh | sh"));
+}
+
+#[test]
+fn release_asset_matches_the_platform() {
+    for (os, arch, target) in [
+        ("Linux", "x86_64", "x86_64-unknown-linux-musl"),
+        ("Linux", "aarch64", "aarch64-unknown-linux-musl"),
+        ("Darwin", "x86_64", "x86_64-apple-darwin"),
+        ("Darwin", "arm64", "aarch64-apple-darwin"),
+    ] {
+        let (_t, out) = dry_run_with(
+            &["--no-service"],
+            &[("OPENMOSH_NO_GH", "1")],
+            &[uname(os, arch)],
+        );
+        assert!(
+            out.contains(&format!(
+                "releases/latest/download/openmosh-hook-{target}.tar.gz"
+            )),
+            "{os}/{arch}: {out}"
+        );
+    }
+}
+
+#[test]
+fn version_tag_selects_the_release() {
+    let (_t, out) = dry_run_with(
+        &["--version", "v0.1.0", "--no-service"],
+        &[("OPENMOSH_NO_GH", "1")],
+        &[uname("Linux", "x86_64")],
+    );
+    assert!(out.contains("releases/download/v0.1.0/openmosh-hook-x86_64-unknown-linux-musl.tar.gz"));
+    assert!(out.contains("releases/download/v0.1.0/SHA256SUMS"));
+}
+
+#[test]
+fn logged_in_gh_downloads_the_private_release() {
+    let (_t, out) = dry_run_with(
+        &["--no-service"],
+        &[],
+        &[uname("Darwin", "arm64"), gh_logged_in()],
+    );
+    assert!(out.contains("Using the GitHub CLI"), "{out}");
+    assert!(out.contains(
+        "+ gh release download --repo lesquel/openmosh-hook --pattern openmosh-hook-aarch64-apple-darwin.tar.gz --pattern SHA256SUMS --dir <tmpdir>"
+    ), "{out}");
+    assert!(!out.contains("curl"));
+    let (_t, out) = dry_run_with(
+        &["--version", "v0.2.0", "--no-service"],
+        &[],
+        &[uname("Linux", "x86_64"), gh_logged_in()],
+    );
+    assert!(out.contains("+ gh release download v0.2.0 --repo lesquel/openmosh-hook"));
+    let (_t, out) = dry_run_with(
+        &["--no-service"],
+        &[("OPENMOSH_NO_GH", "1")],
+        &[uname("Linux", "x86_64"), gh_logged_in()],
+    );
+    assert!(
+        !out.contains("gh release download"),
+        "OPENMOSH_NO_GH opts out"
+    );
 }

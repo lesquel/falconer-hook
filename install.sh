@@ -3,6 +3,10 @@
 #
 #   curl -fsSL https://raw.githubusercontent.com/lesquel/openmosh-hook/main/install.sh | sh
 #
+# While the repository is private, anonymous downloads fail: install and
+# log in to the GitHub CLI (`gh auth login`) and the installer downloads the
+# release with `gh release download` instead (or run it from a clone).
+#
 # Installs openmosh-hook to ~/.local/bin, checks sshd, Herdr/tmux and
 # Tailscale, writes a default config, registers the user service and runs
 # `openmosh-hook doctor`. It prints every command before running it and
@@ -29,11 +33,16 @@ Usage: install.sh [options]
                      repository is private, git access to it).
   --binary <path>    Install an already-built openmosh-hook binary.
   --version <tag>    Release tag to download (default: latest).
+                     Downloads use `gh release download` when the GitHub CLI
+                     is installed and logged in (needed while the repository
+                     is private), else curl/wget. Every download is checked
+                     against the release's SHA256SUMS.
   --yes              Accept offers to install missing Herdr/Tailscale.
   --no-service       Do not run `openmosh-hook service install`.
   -h, --help         Show this help.
 
-Environment: OPENMOSH_BIN_DIR (default ~/.local/bin).
+Environment: OPENMOSH_BIN_DIR (default ~/.local/bin),
+             OPENMOSH_NO_GH=1 (never use the GitHub CLI).
 EOF
 }
 
@@ -116,7 +125,7 @@ detect_target() {
 	esac
 	case "$os" in
 	Linux) TARGET="$arch-unknown-linux-musl" ;;
-	Darwin) TARGET="universal-apple-darwin" ;;
+	Darwin) TARGET="$arch-apple-darwin" ;;
 	*) die "unsupported OS: $os (Linux and macOS are supported)" ;;
 	esac
 }
@@ -131,8 +140,11 @@ download() {
 	fi
 }
 
+# verify_sha256 <file> <SHA256SUMS>: the file's line in SHA256SUMS must match.
 verify_sha256() {
-	expected=$(cut -d ' ' -f 1 <"$2")
+	name=$(basename "$1")
+	expected=$(awk -v n="$name" '$2 == n || $2 == "*" n { print $1 }' "$2")
+	[ -n "$expected" ] || die "$name is not listed in SHA256SUMS"
 	if have sha256sum; then
 		actual=$(sha256sum "$1" | cut -d ' ' -f 1)
 	elif have shasum; then
@@ -140,29 +152,48 @@ verify_sha256() {
 	else
 		die "sha256sum or shasum is required to verify the download"
 	fi
-	[ "$expected" = "$actual" ] || die "checksum mismatch for $1"
+	[ "$expected" = "$actual" ] || die "checksum mismatch for $name"
+}
+
+# The GitHub CLI is used when installed and logged in (private repository).
+use_gh() {
+	[ "${OPENMOSH_NO_GH:-0}" != 1 ] && have gh && gh auth status >/dev/null 2>&1
 }
 
 install_release() {
 	detect_target
 	asset="openmosh-hook-$TARGET.tar.gz"
-	if [ "$VERSION" = latest ]; then
-		base="https://github.com/$REPO/releases/latest/download"
-	else
-		base="https://github.com/$REPO/releases/download/$VERSION"
-	fi
-	say "Installing openmosh-hook ($TARGET) from GitHub Releases"
+	say "Installing openmosh-hook ($TARGET) from GitHub Releases ($VERSION)"
 	if [ "$DRY_RUN" -eq 1 ]; then
 		tmp="<tmpdir>"
 	else
 		tmp=$(mktemp -d)
 		trap 'rm -rf "$tmp"' EXIT
 	fi
-	if ! download "$base/$asset" "$tmp/$asset" || ! download "$base/$asset.sha256" "$tmp/$asset.sha256"; then
-		die "download failed. If no release is published yet (or the repository is private), use --from-source or --binary <path>"
+	if use_gh; then
+		say "Using the GitHub CLI (logged in)"
+		if [ "$VERSION" = latest ]; then
+			tag=""
+		else
+			tag="$VERSION"
+		fi
+		# shellcheck disable=SC2086 # empty $tag means "latest release"
+		run gh release download $tag --repo "$REPO" --pattern "$asset" --pattern SHA256SUMS --dir "$tmp" ||
+			die "gh release download failed (is a release published for $TARGET?)"
+	else
+		if [ "$VERSION" = latest ]; then
+			base="https://github.com/$REPO/releases/latest/download"
+		else
+			base="https://github.com/$REPO/releases/download/$VERSION"
+		fi
+		if ! download "$base/$asset" "$tmp/$asset" || ! download "$base/SHA256SUMS" "$tmp/SHA256SUMS"; then
+			die "download failed. While the repository is private, run 'gh auth login' first (the installer then uses 'gh release download'), or use --from-source or --binary <path>"
+		fi
 	fi
 	if [ "$DRY_RUN" -eq 0 ]; then
-		verify_sha256 "$tmp/$asset" "$tmp/$asset.sha256"
+		verify_sha256 "$tmp/$asset" "$tmp/SHA256SUMS"
+	else
+		say "(dry run: would verify $asset against SHA256SUMS)"
 	fi
 	run mkdir -p "$BIN_DIR"
 	run tar -xzf "$tmp/$asset" -C "$tmp"
@@ -294,4 +325,6 @@ case ":$PATH:" in
 *) say "Note: add $BIN_DIR to your PATH." ;;
 esac
 say ""
+say "Wire your AI agents' hooks (Claude Code, Codex, Gemini, Cursor, Copilot, Kiro, OpenCode, Aider):"
+say "  $HOOK integration list && $HOOK setup"
 say "Next: open OpenMosh on your phone and add this host, then run: openmosh-hook pair"
