@@ -1,0 +1,21 @@
+name: Bug report
+description: Something does not work as expected
+labels: [bug]
+body:
+  - type: textarea
+    attributes:
+      label: What happened
+      description: Steps, what you expected and what you got.
+    validations:
+      required: true
+  - type: input
+    attributes:
+      label: Versions
+      description: "`openmosh-hook version`, app version (Settings), OS and phone model"
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: Logs
+      description: Remove keys, tokens, IP addresses and hostnames first.
+      render: text

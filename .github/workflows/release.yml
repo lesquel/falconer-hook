@@ -99,6 +99,10 @@ jobs:
           rsign verify -q -p ../src/minisign.pub SHA256SUMS
       - uses: softprops/action-gh-release@v2
         with:
+          # v1.2.0-rc.1 and similar test builds are pre-releases: the installer's
+          # "latest" never picks them.
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          make_latest: ${{ !contains(github.ref_name, '-') }}
           files: |
             dist/openmosh-hook-*.tar.gz
             dist/SHA256SUMS
