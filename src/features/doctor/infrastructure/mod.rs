@@ -55,10 +55,22 @@ pub fn check_ssh(host_key_pub: &Path) -> Check {
 /// Read-only: `sshd -G` effective settings. Password or keyboard-interactive
 /// logins bypass every key restriction OpenMosh adds, so they are a warning.
 pub fn check_sshd_auth(runner: &dyn CommandRunner, sshd: &str) -> Check {
-    match runner.run(sshd, &["-G".to_string()]) {
-        Ok(o) if o.success() => sshd_auth_check(&o.stdout),
-        _ => Check::ok("sshd auth", "not checked (`sshd -G` unavailable)"),
+    match sshd_password_logins(runner, sshd) {
+        Some(effective) => sshd_auth_check(&effective),
+        None => Check::ok("sshd auth", "not checked (`sshd -G` unavailable)"),
     }
+}
+
+/// `sshd -G` output, or None when it cannot run (sshd outside a non-root
+/// PATH, as on Debian, or an OpenSSH without `-G`).
+pub fn sshd_password_logins(runner: &dyn CommandRunner, sshd: &str) -> Option<String> {
+    [sshd, "/usr/sbin/sshd"].iter().find_map(|bin| {
+        runner
+            .run(bin, &["-G".to_string()])
+            .ok()
+            .filter(|o| o.success())
+            .map(|o| o.stdout)
+    })
 }
 
 pub fn sshd_auth_check(effective: &str) -> Check {

@@ -165,7 +165,11 @@ pub fn titled_with_project(title: String, cwd: Option<&str>) -> String {
         .and_then(|c| c.rsplit('/').next())
         .map(|p| {
             p.chars()
-                .filter(|c| !c.is_control())
+                // Control, bidi and zero-width characters could spoof the title.
+                .filter(|c| {
+                    !c.is_control()
+                        && !matches!(*c, '\u{200B}'..='\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}' | '\u{FEFF}')
+                })
                 .take(40)
                 .collect::<String>()
         })

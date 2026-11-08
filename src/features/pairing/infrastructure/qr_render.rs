@@ -50,7 +50,7 @@ mod tests {
 
     #[test]
     fn pairing_uri_fits_in_45_columns() {
-        // v3 pairing URI length (113 chars) → version 6, 41 modules + 2×2 quiet zone.
+        // v3 pairing URI (113 chars) → version 5, 37 modules + 2×2 quiet zone = 41 columns.
         let uri = format!(
             "openmosh://pair?v=3&i=100.100.100.100&k={}&p=40404&t={}",
             "A".repeat(43),

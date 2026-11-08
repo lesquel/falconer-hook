@@ -12,7 +12,7 @@ use serde_json::json;
 
 use super::{CliError, Ctx, Reply};
 use crate::features::doctor::domain::Status;
-use crate::features::doctor::infrastructure::check_sshd_auth;
+use crate::features::doctor::infrastructure::{sshd_auth_check, sshd_password_logins};
 use crate::shared::domain::command::{CommandError, CommandOutput, CommandRunner};
 
 pub const DROP_IN: &str = "/etc/ssh/sshd_config.d/10-openmosh.conf";
@@ -75,7 +75,7 @@ pub fn describe(macos: bool) -> String {
     )
 }
 
-/// Runs the privileged steps. `staged` is a private file holding
+/// Runs the privileged steps. `staged` is a 0600 file holding
 /// [`DROP_IN_CONTENT`].
 pub fn apply(runner: &dyn CommandRunner, staged: &Path, macos: bool) -> Result<(), CliError> {
     let ok = |c: &[String]| {
@@ -136,11 +136,23 @@ fn ask(question: &str) -> bool {
 
 pub fn harden_ssh(ctx: &Ctx, dry_run: bool, yes: bool, json: bool) -> Result<Reply, CliError> {
     let macos = cfg!(target_os = "macos");
-    let before = check_sshd_auth(&ctx.runner, "sshd");
-    if before.status == Status::Ok && !dry_run {
-        return Ok(Reply::new(
-            &json!({"changed": false, "sshd_auth": before.detail}),
-            format!("sshd already accepts public keys only ({}).", before.detail),
+    // Unknown (sshd -G unavailable) is not "hardened": go on and let sshd -t judge.
+    let before = sshd_password_logins(&ctx.runner, "sshd").map(|g| sshd_auth_check(&g));
+    if let Some(check) = before.filter(|c| c.status == Status::Ok) {
+        if !dry_run {
+            return Ok(Reply::new(
+                &json!({"changed": false, "sshd_auth": check.detail}),
+                format!("sshd already accepts public keys only ({}).", check.detail),
+            ));
+        }
+    }
+    let keys =
+        std::fs::read_to_string(ctx.paths.home.join(".ssh/authorized_keys")).unwrap_or_default();
+    if !has_key(&keys) {
+        return Err(CliError::new(
+            "no_authorized_keys",
+            "~/.ssh/authorized_keys has no key: turning off passwords would lock out every remote \
+             login. Pair a phone or add your key first",
         ));
     }
     let main = std::fs::read_to_string(MAIN_CONFIG).unwrap_or_default();
@@ -176,17 +188,41 @@ pub fn harden_ssh(ctx: &Ctx, dry_run: bool, yes: bool, json: bool) -> Result<Rep
         }
     }
     let staged = ctx.paths.state_dir.join("sshd-drop-in.conf");
-    std::fs::create_dir_all(&ctx.paths.state_dir)
-        .and_then(|_| std::fs::write(&staged, DROP_IN_CONTENT))
-        .map_err(|_| CliError::new("io", "could not stage the sshd drop-in"))?;
+    stage(&staged).map_err(|_| CliError::new("io", "could not stage the sshd drop-in"))?;
     let result = apply(&InteractiveRunner, &staged, macos);
     let _ = std::fs::remove_file(&staged);
     result?;
-    let after = check_sshd_auth(&ctx.runner, "sshd");
+    let detail = match sshd_password_logins(&ctx.runner, "sshd") {
+        Some(g) => sshd_auth_check(&g).detail,
+        None => "drop-in installed and sshd reloaded".to_string(),
+    };
     Ok(Reply::new(
-        &json!({"changed": true, "file": DROP_IN, "sshd_auth": after.detail}),
-        format!("sshd now: {}.", after.detail),
+        &json!({"changed": true, "file": DROP_IN, "sshd_auth": detail}),
+        format!("sshd now: {detail}."),
     ))
+}
+
+/// At least one non-comment line in an authorized_keys file.
+pub fn has_key(authorized_keys: &str) -> bool {
+    authorized_keys
+        .lines()
+        .map(str::trim)
+        .any(|l| !l.is_empty() && !l.starts_with('#'))
+}
+
+/// Writes the drop-in content to a fresh 0600 file (never through a link).
+fn stage(path: &Path) -> std::io::Result<()> {
+    use std::os::unix::fs::OpenOptionsExt;
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    let _ = std::fs::remove_file(path);
+    let mut f = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(path)?;
+    f.write_all(DROP_IN_CONTENT.as_bytes())
 }
 
 #[cfg(test)]
@@ -237,6 +273,21 @@ mod tests {
         status(r.reply_ok("").reply_ok(""), 5).reply_ok("");
         apply(&r, Path::new("/s/x.conf"), false).unwrap();
         assert_eq!(calls(&r).last().unwrap(), "sudo systemctl reload ssh");
+    }
+
+    #[test]
+    fn needs_an_authorized_key_before_turning_passwords_off() {
+        assert!(has_key("ssh-ed25519 AAAA openmosh:x\n"));
+        assert!(!has_key("# only a comment\n\n"));
+        assert!(!has_key(""));
+    }
+
+    #[test]
+    fn an_unrunnable_sshd_is_unknown_not_hardened() {
+        let r = RecordingRunner::default();
+        r.reply(Err(CommandError::NotFound("sshd".into())))
+            .reply(Err(CommandError::NotFound("/usr/sbin/sshd".into())));
+        assert_eq!(sshd_password_logins(&r, "sshd"), None);
     }
 
     #[test]

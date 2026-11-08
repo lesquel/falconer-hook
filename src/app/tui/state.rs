@@ -734,12 +734,12 @@ impl App {
         }
     }
 
-    /// Records the outcome of the pairing flow run outside the TUI.
     /// Result of a command run while the TUI was suspended.
     pub fn after_suspended(&mut self, r: Result<Reply, CliError>) {
         self.after_pair(r)
     }
 
+    /// Records the outcome of the pairing flow run outside the TUI.
     pub fn after_pair(&mut self, r: Result<Reply, CliError>) {
         match r {
             Ok(reply) => self.info(reply.human),
