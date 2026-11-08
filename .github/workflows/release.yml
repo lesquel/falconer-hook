@@ -80,8 +80,9 @@ jobs:
           path: src
           sparse-checkout: minisign.pub
           sparse-checkout-cone-mode: false
-      - name: Install minisign
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends minisign
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install rsign2 (minisign-compatible; Ubuntu's minisign cannot read unencrypted keys)
+        run: cargo install rsign2 --version 0.6.7 --locked
       - name: Sign SHA256SUMS
         working-directory: dist
         env:
@@ -92,10 +93,10 @@ jobs:
           trap 'rm -f "$key"' EXIT
           (umask 077 && printf '%s\n' "$MINISIGN_SECRET_KEY" > "$key")
           # Unencrypted key: no password prompt (stdin closed so it never waits).
-          minisign -S -s "$key" -m SHA256SUMS -t "openmosh-hook $GITHUB_REF_NAME" < /dev/null
+          rsign sign -W -s "$key" -t "openmosh-hook $GITHUB_REF_NAME" SHA256SUMS < /dev/null
           rm -f "$key"
           # The secret must match the public key committed in the repository.
-          minisign -V -p ../src/minisign.pub -m SHA256SUMS
+          rsign verify -q -p ../src/minisign.pub SHA256SUMS
       - uses: softprops/action-gh-release@v2
         with:
           files: |
