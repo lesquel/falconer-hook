@@ -104,6 +104,14 @@ while [ $# -gt 0 ]; do
 	--version)
 		[ $# -ge 2 ] || die "--version needs a tag"
 		VERSION="$2"
+		# A tag goes into a download URL and a gh argument: allow release tags only.
+		case "$VERSION" in
+		v[0-9]*) ;;
+		*) die "--version must be a release tag like v0.1.0" ;;
+		esac
+		case "$VERSION" in
+		*[!0-9A-Za-z.+-]*) die "--version must be a release tag like v0.1.0" ;;
+		esac
 		shift
 		;;
 	--yes) ASSUME_YES=1 ;;

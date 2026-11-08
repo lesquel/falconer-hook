@@ -82,10 +82,19 @@ pub trait AuthorizedKeys {
 }
 
 /// Whether an `authorized_keys` line belongs to a paired phone.
+/// A line OpenMosh wrote: its comment is exactly `openmosh:<device id>`, where the id is
+/// 16 random bytes in b64url (22 characters). Hand-written comments that merely start with
+/// `openmosh:` are left alone.
 pub fn is_tagged_line(line: &str) -> bool {
     line.split_whitespace()
         .last()
-        .is_some_and(|c| c.starts_with("openmosh:"))
+        .and_then(|c| c.strip_prefix("openmosh:"))
+        .is_some_and(|id| {
+            id.len() == 22
+                && id
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+        })
 }
 
 /// Snapshot of the local Tailscale node.
@@ -252,5 +261,21 @@ pub mod tailnet_fakes {
             }
             Ok(self.peers.get(&ip).cloned())
         }
+    }
+
+    #[test]
+    fn only_lines_with_a_device_id_comment_are_ours() {
+        assert!(is_tagged_line(
+            "ssh-ed25519 AAAA openmosh:AAAAAAAAAAAAAAAAAAAA01"
+        ));
+        assert!(is_tagged_line(
+            "from=\"100.64.0.0/10\" ssh-ed25519 AAAA openmosh:abc-DEF_1234567890abcd"
+        ));
+        assert!(!is_tagged_line("ssh-ed25519 BBBB openmosh:mine-by-hand"));
+        assert!(!is_tagged_line("ssh-ed25519 BBBB openmosh:"));
+        assert!(!is_tagged_line("ssh-ed25519 BBBB laptop"));
+        assert!(!is_tagged_line(
+            "ssh-ed25519 BBBB openmosh:AAAAAAAAAAAAAAAAAAAA0!"
+        ));
     }
 }

@@ -38,7 +38,7 @@ jobs:
           targets: ${{ matrix.target }}
       - name: Install cross
         if: matrix.cross
-        run: cargo install cross --locked
+        run: cargo install cross --version 0.2.5 --locked
       - name: Build
         shell: bash
         run: |

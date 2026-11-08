@@ -308,3 +308,27 @@ fn require_signature_is_listed_in_help() {
     let stdout = String::from_utf8(out.stdout).unwrap();
     assert!(stdout.contains("--require-signature"), "{stdout}");
 }
+
+#[test]
+fn version_must_be_a_plain_release_tag() {
+    for bad in [
+        "v1 --repo evil/x",
+        "../../../../evil/repo/releases/download/v1",
+        "latest",
+        "v1/../x",
+    ] {
+        let (_t, out) = dry_run_output(&["--version", bad], &[], &[]);
+        assert!(!out.status.success(), "{bad} was accepted");
+        assert!(
+            String::from_utf8_lossy(&out.stderr).contains("release tag"),
+            "{bad}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+    let (_t, out) = dry_run_output(&["--version", "v0.1.0"], &[], &[]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}

@@ -82,6 +82,11 @@ impl<F: SettingsFile> Integration<'_, F> {
             None => return Ok(false),
         };
         let changed = f(&mut v)?;
+        if changed && !create && is_empty_config(&v) {
+            // Nothing but our hooks was there: remove the file instead of leaving `{}`.
+            self.file.remove()?;
+            return Ok(true);
+        }
         if changed {
             let mut out = serde_json::to_string_pretty(&v).map_err(|_| IntegrationError::Io)?;
             out.push('\n');
@@ -171,6 +176,19 @@ impl<F: SettingsFile> Integration<'_, F> {
     }
 }
 
+/// A config object that holds nothing a person wrote: only empty objects/arrays and a
+/// schema `version` number (Cursor and Copilot hook files carry one).
+fn is_empty_config(v: &serde_json::Value) -> bool {
+    match v {
+        serde_json::Value::Object(m) => m.iter().all(|(k, v)| {
+            (k == "version" && v.is_number())
+                || matches!(v, serde_json::Value::Object(o) if o.is_empty())
+                || matches!(v, serde_json::Value::Array(a) if a.is_empty())
+        }),
+        _ => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -214,7 +232,11 @@ mod tests {
         assert_eq!(*f.1.borrow(), 1, "unchanged settings are not rewritten");
         assert!(uc.installed().unwrap());
         assert!(uc.uninstall().unwrap().changed);
-        assert_eq!(f.0.borrow().as_deref(), Some("{}\n"));
+        assert_eq!(
+            f.0.borrow().as_deref(),
+            None,
+            "a file holding only our hooks is removed"
+        );
         assert!(!uc.installed().unwrap());
     }
 
@@ -281,5 +303,34 @@ mod tests {
         assert_eq!(uc.install().unwrap_err(), IntegrationError::NotAnObject);
         assert_eq!(uc.installed().unwrap_err(), IntegrationError::NotAnObject);
         assert_eq!(*f.1.borrow(), 0, "malformed file never written");
+    }
+
+    #[test]
+    fn uninstall_deletes_a_config_file_left_with_nothing_but_our_removed_hooks() {
+        for id in [
+            AgentId::Codex,
+            AgentId::Cursor,
+            AgentId::Gemini,
+            AgentId::Claude,
+        ] {
+            let f = Mem::default();
+            let uc = uc(&f, id);
+            uc.install().unwrap();
+            assert!(f.0.borrow().is_some());
+            assert!(uc.uninstall().unwrap().changed);
+            assert!(f.0.borrow().is_none(), "{id:?} left an empty config behind");
+        }
+    }
+
+    #[test]
+    fn uninstall_keeps_a_config_file_with_user_content() {
+        let f = Mem::default();
+        *f.0.borrow_mut() = Some("{\"keep\": true}".into());
+        let uc = uc(&f, AgentId::Codex);
+        uc.install().unwrap();
+        uc.uninstall().unwrap();
+        let left: serde_json::Value =
+            serde_json::from_str(f.0.borrow().as_deref().unwrap()).unwrap();
+        assert_eq!(left["keep"], true);
     }
 }
