@@ -36,7 +36,7 @@ tests/
 ├── cli.rs                   # the binary end to end
 ├── agents.rs                # agent integrations and `emit --kind`
 ├── lifecycle.rs             # setup and uninstall
-├── install_sh.rs            # install.sh --dry-run (fake uname/gh)
+├── install_sh.rs            # install.sh --dry-run (fake uname/gh/minisign/rsign)
 └── vectors/                 # shared wire-format vectors (push_v1.json, pair_v1.json)
 data/
 └── keymaps/                 # per-agent keystrokes (versioned data, embedded at build time)

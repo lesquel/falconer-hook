@@ -1,7 +1,8 @@
 name: release
 
 # On a `v*` tag: build static/standalone binaries for every supported
-# platform, then publish them with one SHA256SUMS file to the GitHub release.
+# platform, then publish them with one SHA256SUMS file, signed with minisign
+# (SHA256SUMS.minisig, key in minisign.pub), to the GitHub release.
 # Asset names: openmosh-hook-<target>.tar.gz (install.sh relies on them).
 
 on:
@@ -74,9 +75,31 @@ jobs:
           sha256sum openmosh-hook-*.tar.gz > SHA256SUMS
           cat SHA256SUMS
           test "$(wc -l < SHA256SUMS)" -eq 4
+      - uses: actions/checkout@v4
+        with:
+          path: src
+          sparse-checkout: minisign.pub
+          sparse-checkout-cone-mode: false
+      - name: Install minisign
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends minisign
+      - name: Sign SHA256SUMS
+        working-directory: dist
+        env:
+          MINISIGN_SECRET_KEY: ${{ secrets.MINISIGN_SECRET_KEY }}
+        run: |
+          test -n "$MINISIGN_SECRET_KEY" || { echo "MINISIGN_SECRET_KEY is not set" >&2; exit 1; }
+          key="$RUNNER_TEMP/minisign.key"
+          trap 'rm -f "$key"' EXIT
+          (umask 077 && printf '%s\n' "$MINISIGN_SECRET_KEY" > "$key")
+          # Unencrypted key: no password prompt (stdin closed so it never waits).
+          minisign -S -s "$key" -m SHA256SUMS -t "openmosh-hook $GITHUB_REF_NAME" < /dev/null
+          rm -f "$key"
+          # The secret must match the public key committed in the repository.
+          minisign -V -p ../src/minisign.pub -m SHA256SUMS
       - uses: softprops/action-gh-release@v2
         with:
           files: |
             dist/openmosh-hook-*.tar.gz
             dist/SHA256SUMS
+            dist/SHA256SUMS.minisig
           fail_on_unmatched_files: true

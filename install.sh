@@ -15,6 +15,8 @@
 set -eu
 
 REPO="lesquel/openmosh-hook"
+# Release signing key (minisign, key id 59E37F1EF15B67E2); also in minisign.pub.
+PUBKEY="RWTiZ1vxHn/jWfqAEjobeqloI9cL9pOA0/in+ayyCgPqT0gYDRKR1Ox5"
 BIN_DIR="${OPENMOSH_BIN_DIR:-$HOME/.local/bin}"
 CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/openmosh"
 DRY_RUN=0
@@ -23,6 +25,7 @@ BINARY=""
 VERSION="latest"
 ASSUME_YES=0
 NO_SERVICE=0
+REQUIRE_SIG=0
 
 usage() {
 	cat <<'EOF'
@@ -36,7 +39,11 @@ Usage: install.sh [options]
                      Downloads use `gh release download` when the GitHub CLI
                      is installed and logged in (needed while the repository
                      is private), else curl/wget. Every download is checked
-                     against the release's SHA256SUMS.
+                     against the release's SHA256SUMS, and SHA256SUMS against
+                     its minisign signature when minisign or rsign is installed.
+  --require-signature
+                     Abort unless the signature can be verified (needs
+                     minisign or rsign).
   --yes              Accept offers to install missing Herdr/Tailscale.
   --no-service       Do not run `openmosh-hook service install`.
   -h, --help         Show this help.
@@ -101,6 +108,7 @@ while [ $# -gt 0 ]; do
 		;;
 	--yes) ASSUME_YES=1 ;;
 	--no-service) NO_SERVICE=1 ;;
+	--require-signature) REQUIRE_SIG=1 ;;
 	-h | --help)
 		usage
 		exit 0
@@ -155,6 +163,41 @@ verify_sha256() {
 	[ "$expected" = "$actual" ] || die "checksum mismatch for $name"
 }
 
+# The minisign-compatible verifier on PATH, or empty.
+sig_tool() {
+	if have minisign; then
+		echo minisign
+	elif have rsign; then
+		echo rsign
+	fi
+}
+
+# verify_signature <SHA256SUMS> <SHA256SUMS.minisig>: checked with the pinned key.
+verify_signature() {
+	case "$(sig_tool)" in
+	minisign) minisign -V -q -P "$PUBKEY" -m "$1" -x "$2" >/dev/null ||
+		die "signature verification failed for SHA256SUMS" ;;
+	rsign) rsign verify -q -P "$PUBKEY" -x "$2" "$1" >/dev/null ||
+		die "signature verification failed for SHA256SUMS" ;;
+	*) die "minisign or rsign is required to verify the signature" ;;
+	esac
+	say "ok: SHA256SUMS signature verified (key 59E37F1EF15B67E2)"
+}
+
+# Says how the download will be authenticated; aborts early when a required
+# signature cannot be checked.
+signature_policy() {
+	tool=$(sig_tool)
+	if [ -n "$tool" ]; then
+		say "Signature: SHA256SUMS is verified with $tool and the pinned key 59E37F1EF15B67E2"
+	elif [ "$REQUIRE_SIG" -eq 1 ]; then
+		die "--require-signature: install minisign (https://jedisct1.github.io/minisign/) or rsign2 first"
+	else
+		warn "minisign/rsign not found: checking SHA256SUMS only, without its signature."
+		warn "Install minisign to verify releases, or pass --require-signature to insist."
+	fi
+}
+
 # The GitHub CLI is used when installed and logged in (private repository).
 use_gh() {
 	[ "${OPENMOSH_NO_GH:-0}" != 1 ] && have gh && gh auth status >/dev/null 2>&1
@@ -164,6 +207,7 @@ install_release() {
 	detect_target
 	asset="openmosh-hook-$TARGET.tar.gz"
 	say "Installing openmosh-hook ($TARGET) from GitHub Releases ($VERSION)"
+	signature_policy
 	if [ "$DRY_RUN" -eq 1 ]; then
 		tmp="<tmpdir>"
 	else
@@ -178,7 +222,7 @@ install_release() {
 			tag="$VERSION"
 		fi
 		# shellcheck disable=SC2086 # empty $tag means "latest release"
-		run gh release download $tag --repo "$REPO" --pattern "$asset" --pattern SHA256SUMS --dir "$tmp" ||
+		run gh release download $tag --repo "$REPO" --pattern "$asset" --pattern SHA256SUMS --pattern SHA256SUMS.minisig --dir "$tmp" ||
 			die "gh release download failed (is a release published for $TARGET?)"
 	else
 		if [ "$VERSION" = latest ]; then
@@ -189,10 +233,21 @@ install_release() {
 		if ! download "$base/$asset" "$tmp/$asset" || ! download "$base/SHA256SUMS" "$tmp/SHA256SUMS"; then
 			die "download failed. While the repository is private, run 'gh auth login' first (the installer then uses 'gh release download'), or use --from-source or --binary <path>"
 		fi
+		if [ -n "$(sig_tool)" ]; then
+			download "$base/SHA256SUMS.minisig" "$tmp/SHA256SUMS.minisig" ||
+				die "could not download SHA256SUMS.minisig"
+		fi
 	fi
 	if [ "$DRY_RUN" -eq 0 ]; then
+		if [ -n "$(sig_tool)" ]; then
+			[ -f "$tmp/SHA256SUMS.minisig" ] || die "the release has no SHA256SUMS.minisig"
+			verify_signature "$tmp/SHA256SUMS" "$tmp/SHA256SUMS.minisig"
+		fi
 		verify_sha256 "$tmp/$asset" "$tmp/SHA256SUMS"
 	else
+		if [ -n "$(sig_tool)" ]; then
+			say "(dry run: would verify SHA256SUMS.minisig with $(sig_tool) and key $PUBKEY)"
+		fi
 		say "(dry run: would verify $asset against SHA256SUMS)"
 	fi
 	run mkdir -p "$BIN_DIR"
