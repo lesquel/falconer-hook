@@ -15,11 +15,13 @@ jobs:
   check:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
           components: rustfmt, clippy
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - name: Format
         run: cargo fmt --all --check
       - name: Lint
@@ -31,14 +33,35 @@ jobs:
       - name: Shellcheck install.sh
         run: shellcheck -s sh install.sh
 
+  pinned-actions:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - name: Every action is pinned to a full commit SHA
+        run: |
+          # Local actions (./…) and docker:// references are not tags; anything
+          # else must be owner/repo[/path]@<40 hex> followed by a version comment.
+          bad=$(grep -nE '^\s*(-\s*)?uses:' .github/workflows/*.yml \
+            | grep -vE 'uses:\s*\./' \
+            | grep -vE 'uses:\s*[^@[:space:]]+@[0-9a-f]{40}\s+#\s*\S+' || true)
+          if [ -n "$bad" ]; then
+            echo "These actions are not pinned to a commit SHA with a version comment:" >&2
+            echo "$bad" >&2
+            exit 1
+          fi
+
   supply-chain:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: EmbarkStudios/cargo-deny-action@v2
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
         with:
           command: check advisories bans licenses sources
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
       - name: cargo audit
         run: |
           cargo install cargo-audit --locked

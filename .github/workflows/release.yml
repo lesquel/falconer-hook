@@ -4,6 +4,11 @@ name: release
 # platform, then publish them with one SHA256SUMS file, signed with minisign
 # (SHA256SUMS.minisig, key in minisign.pub), to the GitHub release.
 # Asset names: openmosh-hook-<target>.tar.gz (install.sh relies on them).
+#
+# Supply chain: every action is pinned to a full commit SHA, only `actions/*`
+# actions are used, nothing is cached, and the signing key is only visible to
+# the `sign` job, which runs no third-party action and only sees SHA256SUMS.
+# Its trusted comment is `openmosh-hook <tag>` (install.sh checks it).
 
 on:
   push:
@@ -11,6 +16,13 @@ on:
 
 permissions:
   contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  # rsign2 (minisign-compatible; Ubuntu's minisign cannot read unencrypted keys),
+  # pinned by version and by the SHA-256 of its crate from crates.io.
+  RSIGN2_VERSION: "0.6.7"
+  RSIGN2_SHA256: "8d782ff513d21d337d3bcc2db62d0ea494e2e1b761e3c5678f60660d343a79f5"
 
 jobs:
   build:
@@ -32,10 +44,14 @@ jobs:
             cross: false
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
-          targets: ${{ matrix.target }}
+          persist-credentials: false
+      - name: Rust toolchain
+        shell: bash
+        run: |
+          rustup toolchain install stable --profile minimal --target "${{ matrix.target }}"
+          rustup default stable
       - name: Install cross
         if: matrix.cross
         run: cargo install cross --version 0.2.5 --locked
@@ -53,20 +69,19 @@ jobs:
           mkdir -p dist pkg
           cp target/${{ matrix.target }}/release/openmosh-hook pkg/
           tar -czf dist/openmosh-hook-${{ matrix.target }}.tar.gz -C pkg openmosh-hook
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: openmosh-hook-${{ matrix.target }}
           path: dist/openmosh-hook-${{ matrix.target }}.tar.gz
           if-no-files-found: error
 
-  publish:
+  checksums:
     needs: build
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
+          pattern: openmosh-hook-*
           path: dist
           merge-multiple: true
       - name: Checksums
@@ -75,14 +90,36 @@ jobs:
           sha256sum openmosh-hook-*.tar.gz > SHA256SUMS
           cat SHA256SUMS
           test "$(wc -l < SHA256SUMS)" -eq 4
-      - uses: actions/checkout@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: sha256sums
+          path: dist/SHA256SUMS
+          if-no-files-found: error
+
+  sign:
+    needs: checksums
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: sha256sums
+          path: dist
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           path: src
+          persist-credentials: false
           sparse-checkout: minisign.pub
           sparse-checkout-cone-mode: false
-      - uses: dtolnay/rust-toolchain@stable
-      - name: Install rsign2 (minisign-compatible; Ubuntu's minisign cannot read unencrypted keys)
-        run: cargo install rsign2 --version 0.6.7 --locked
+      - name: Install rsign2 (pinned crate checksum, locked dependencies)
+        run: |
+          work="$RUNNER_TEMP/rsign2"
+          mkdir -p "$work"
+          curl -fsSL --proto '=https' --tlsv1.2 -o "$work/rsign2.crate" \
+            "https://static.crates.io/crates/rsign2/rsign2-${RSIGN2_VERSION}.crate"
+          echo "${RSIGN2_SHA256}  $work/rsign2.crate" | sha256sum -c -
+          tar -xzf "$work/rsign2.crate" -C "$work"
+          cargo install --locked --path "$work/rsign2-${RSIGN2_VERSION}" --root "$work/root"
+          echo "$work/root/bin" >> "$GITHUB_PATH"
       - name: Sign SHA256SUMS
         working-directory: dist
         env:
@@ -97,14 +134,39 @@ jobs:
           rm -f "$key"
           # The secret must match the public key committed in the repository.
           rsign verify -q -p ../src/minisign.pub SHA256SUMS
-      - uses: softprops/action-gh-release@v2
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          # v1.2.0-rc.1 and similar test builds are pre-releases: the installer's
-          # "latest" never picks them.
-          prerelease: ${{ contains(github.ref_name, '-') }}
-          make_latest: ${{ !contains(github.ref_name, '-') }}
-          files: |
-            dist/openmosh-hook-*.tar.gz
-            dist/SHA256SUMS
-            dist/SHA256SUMS.minisig
-          fail_on_unmatched_files: true
+          name: sha256sums-minisig
+          path: dist/SHA256SUMS.minisig
+          if-no-files-found: error
+
+  publish:
+    needs: sign
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Publish the GitHub release
+        working-directory: dist
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          ls -l
+          test "$(ls openmosh-hook-*.tar.gz | wc -l)" -eq 4
+          test -s SHA256SUMS && test -s SHA256SUMS.minisig
+          sha256sum -c SHA256SUMS
+          # v1.2.0-rc.1 and similar test builds are pre-releases: the
+          # installer's "latest" never picks them.
+          case "$TAG" in
+            *-*) flags="--prerelease --latest=false" ;;
+            *) flags="--latest" ;;
+          esac
+          # shellcheck disable=SC2086
+          gh release create "$TAG" --verify-tag --title "$TAG" --notes "" $flags \
+            openmosh-hook-*.tar.gz SHA256SUMS SHA256SUMS.minisig
