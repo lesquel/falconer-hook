@@ -190,6 +190,8 @@ pub struct DeviceRow {
     pub name: String,
     pub stale: bool,
     pub ssh: bool,
+    /// Paired without a push endpoint: no notifications.
+    pub no_push: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -593,6 +595,7 @@ impl App {
                         name: text(d, "name"),
                         stale: d["endpoint_stale"].as_bool().unwrap_or(false),
                         ssh: d["ssh_authorized"].as_bool().unwrap_or(false),
+                        no_push: d["endpoint"].as_str() == Some(""),
                     });
                 }
                 Screen::Integrations => {

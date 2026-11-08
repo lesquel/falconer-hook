@@ -87,7 +87,7 @@ the same commands as the CLI. Without a terminal, no command prints the help as 
 |---|---|
 | 1 Status | `doctor` (config, Tailscale, Herdr/tmux, permissions, sshd, devices, service) and the version; `r` refreshes |
 | 2 Agents & inbox | Agents with their state and the inbox, newest first; `a` allow, `d` deny, `t` reply with text to the selected pending event, each after a `y` confirmation |
-| 3 Devices | Paired devices, `(endpoint stale)` marks; `x` revokes after confirmation |
+| 3 Devices | Paired devices, `(endpoint stale)` / `(no notifications)` marks; `x` revokes after confirmation |
 | 4 Pair | `Enter` suspends the TUI and runs `openmosh-hook pair` in the terminal (`i` toggles `--invert`); Enter returns |
 | 5 Integrations | Every supported agent, detected or not, installed or not; `i` installs, `u` uninstalls after confirmation |
 | 6 Setup | `s` runs `setup`, `a` runs `setup --yes` (also installs every detected agent's integration), after confirmation |
@@ -111,7 +111,7 @@ else (it would recreate state); quit with `q`.
 | `openmosh-hook respond <event-id> --action allow\|deny\|text [--text <msg>] --json` | Deliver the answer into the agent's pane and push `resolved` to every device. Text answers are sent as one line (newlines become spaces, control characters are removed), then Enter |
 | `openmosh-hook devices list --json` | Paired devices |
 | `openmosh-hook devices revoke <id> [--json]` | Remove the device's `authorized_keys` line and its record |
-| `openmosh-hook devices set-endpoint <id> <url> [--json]` | Rotate the push endpoint (clears `endpoint_stale`) |
+| `openmosh-hook devices set-endpoint <id> <url> [--json]` | Rotate the push endpoint (clears `endpoint_stale`); also turns notifications on for a device paired without one |
 | `openmosh-hook integration install\|uninstall <agent> [--settings <path>] [--json]` | Add/remove the [agent's hooks](#agents) calling `emit --source <agent>`; `--settings` overrides the default file |
 | `openmosh-hook integration list [--json]` | Every supported agent: detected on this machine (binary on `PATH` or config dir present), integration installed, file, docs link |
 | `openmosh-hook setup [--yes] [--no-service] [--json]` | First-time [setup](#setup-and-uninstall) |
@@ -167,7 +167,9 @@ from="100.64.0.0/10,fd7a:115c:a1e0::/48",no-agent-forwarding,no-X11-forwarding,n
 **SSH (secondary).** `pair-ssh --json` registers push keys for a phone that already reaches the
 host over SSH with its own key; no key is added.
 
-Push endpoints must be `https://`; `http://` is accepted only for a `100.64.0.0/10` address or a
+The endpoint is optional: a phone without a push distributor pairs with an empty one, gets no
+notifications (`devices list` shows `(no notifications)`) and adds one later with
+`devices set-endpoint`. Push endpoints must be `https://`; `http://` is accepted only for a `100.64.0.0/10` address or a
 `*.ts.net` name. URLs with credentials, and loopback (`127.0.0.0/8`, `::1`, `localhost`),
 link-local, unspecified, multicast or broadcast hosts are refused. Pushes ignore proxy environment
 variables, send `User-Agent: openmosh`, never follow redirects, and `404`/`410` mark the device

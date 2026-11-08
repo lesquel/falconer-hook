@@ -25,12 +25,12 @@ pub struct PublishEvent<'a, R, S, P> {
 }
 
 impl<R: DeviceRegistry, S: Sealer, P: PushPublisher> PublishEvent<'_, R, S, P> {
-    /// Seals and posts `plaintext` for each device. Devices with a stale
+    /// Seals and posts `plaintext` for each device. Devices with a stale or no
     /// endpoint are skipped; a `404`/`410` marks the device `endpoint_stale`.
     pub fn publish(&self, plaintext: &PushPlaintext) -> Result<PublishReport, RegistryError> {
         let mut report = PublishReport::default();
         for device in self.registry.list()? {
-            if device.endpoint_stale {
+            if device.endpoint_stale || device.endpoint.is_empty() {
                 report.skipped += 1;
                 continue;
             }
@@ -121,6 +121,7 @@ mod tests {
             device("b", "https://gone", false),
             device("c", "https://skip", true),
             device("d", "https://fail", false),
+            device("e", "", false),
         ]);
         let publisher = ScriptedPublisher(RefCell::new(vec![]), |e| match e {
             "https://ok" => PostOutcome::Delivered,
@@ -140,7 +141,7 @@ mod tests {
                 delivered: 1,
                 stale: 1,
                 failed: 1,
-                skipped: 1
+                skipped: 2
             }
         );
         assert_eq!(

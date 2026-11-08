@@ -259,7 +259,9 @@ where
         let Some(ssh_key) = normalize_ssh_ed25519(&req.ssh_pub) else {
             return self.reject("bad_ssh_key");
         };
-        if validate_endpoint(&req.endpoint).is_err() {
+        // An empty endpoint pairs without notifications (no push distributor
+        // yet); `devices set-endpoint` adds one later.
+        if !req.endpoint.is_empty() && validate_endpoint(&req.endpoint).is_err() {
             return self.reject("bad_endpoint");
         }
         let Some(name) = sanitize_name(&req.name) else {

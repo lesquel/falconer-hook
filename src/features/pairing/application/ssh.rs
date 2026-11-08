@@ -38,7 +38,9 @@ impl<R: DeviceRegistry, K: Clock, I: IdGenerator> SshPairing<'_, R, K, I> {
     pub fn pair(&self, input: &str) -> Result<SshPairResult, PairError> {
         let req: Request = serde_json::from_str(input).map_err(|_| PairError::InvalidInput)?;
         let name = sanitize_name(&req.name).ok_or(PairError::InvalidInput)?;
-        if !valid_ppk(&req.ppk) || validate_endpoint(&req.endpoint).is_err() {
+        // An empty endpoint pairs without notifications.
+        let bad_endpoint = !req.endpoint.is_empty() && validate_endpoint(&req.endpoint).is_err();
+        if !valid_ppk(&req.ppk) || bad_endpoint {
             return Err(PairError::InvalidInput);
         }
         let device = Device {
@@ -96,6 +98,25 @@ mod tests {
             (d.name.as_str(), d.paired_at, d.ssh_key.is_none()),
             ("Pixel", 5, true)
         );
+    }
+
+    #[test]
+    fn pairs_without_a_push_endpoint() {
+        let reg = MemRegistry::default();
+        let (clock, ids) = (FixedClock::at(5), SeqIds::default());
+        let uc = SshPairing {
+            registry: &reg,
+            clock: &clock,
+            ids: &ids,
+            alias: "devbox".into(),
+            hpk: [1; 32],
+        };
+        let input = format!(
+            r#"{{"name":"Pixel","ppk":"{}","endpoint":""}}"#,
+            b64u_encode(&[7; 32])
+        );
+        let r = uc.pair(&input).unwrap();
+        assert_eq!(reg.get(&r.device_id).unwrap().endpoint, "");
     }
 
     #[test]

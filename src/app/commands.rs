@@ -197,7 +197,9 @@ pub fn devices_list(ctx: &Ctx) -> Result<Reply, CliError> {
             "{} {}{}",
             d.id,
             d.name,
-            if d.endpoint_stale {
+            if d.endpoint.is_empty() {
+                " (no notifications)"
+            } else if d.endpoint_stale {
                 " (endpoint stale)"
             } else {
                 ""

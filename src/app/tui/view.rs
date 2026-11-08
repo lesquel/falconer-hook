@@ -163,7 +163,13 @@ fn devices(f: &mut Frame, app: &App, area: Rect) {
                 d.id,
                 d.name,
                 if d.ssh { "ssh" } else { "no ssh key" },
-                if d.stale { "  (endpoint stale)" } else { "" }
+                if d.no_push {
+                    "  (no notifications)"
+                } else if d.stale {
+                    "  (endpoint stale)"
+                } else {
+                    ""
+                }
             ))
         })
         .collect();

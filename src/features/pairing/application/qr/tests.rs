@@ -244,6 +244,19 @@ fn expired_token_is_refused() {
 }
 
 #[test]
+fn a_phone_without_push_pairs_with_an_empty_endpoint() {
+    let w = World::new();
+    let mut p = w.pairing();
+    let Attempt::Paired { device, .. } = p.handle(ip(PHONE), || {
+        Some(request(&TOKEN, |r| r.endpoint = String::new()))
+    }) else {
+        panic!("expected success")
+    };
+    assert_eq!(device.endpoint, "");
+    assert_eq!(w.registry.list().unwrap(), vec![device]);
+}
+
+#[test]
 fn bad_ssh_key_endpoint_name_and_ppk_are_refused() {
     let w = World::new();
     let mut p = w.pairing();
