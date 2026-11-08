@@ -141,6 +141,15 @@ pub enum Command {
         #[command(flatten)]
         out: JsonFlag,
     },
+    /// Token usage per agent, project and model, read from the agents' own
+    /// local logs (Claude Code, Codex). Never calls a provider or reads credentials.
+    Usage {
+        /// Calendar days to cover, today included (1..=31).
+        #[arg(long, default_value_t = 7, allow_negative_numbers = true)]
+        days: i64,
+        #[command(flatten)]
+        out: JsonFlag,
+    },
     /// Register or remove the user service.
     Service {
         #[command(subcommand)]
@@ -307,6 +316,7 @@ impl Command {
             | Command::HardenSsh { out, .. }
             | Command::Setup { out, .. }
             | Command::Uninstall { out, .. }
+            | Command::Usage { out, .. }
             | Command::Version { out } => out.json,
             Command::Sessions {
                 cmd: ListCmd::List { out },

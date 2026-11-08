@@ -116,6 +116,7 @@ else (it would recreate state); quit with `q`.
 | `openmosh-hook integration list [--json]` | Every supported agent: detected on this machine (binary on `PATH` or config dir present), integration installed, file, docs link |
 | `openmosh-hook setup [--yes] [--no-service] [--json]` | First-time [setup](#setup-and-uninstall) |
 | `openmosh-hook uninstall [--all] [--dry-run] [--yes] [--json]` | Remove everything openmosh-hook created ([details](#setup-and-uninstall)) |
+| `openmosh-hook usage [--days <n>] [--json]` | Token [usage](#usage) per agent, project and model over the last `n` calendar days (1-31, default 7), from the agents' own local logs |
 | `openmosh-hook doctor [--json]` | Check Tailscale, Herdr/tmux, permissions, sshd host key, sshd password logins (`sshd -G`; warns when password or keyboard-interactive login is on), devices, keymaps, service |
 | `openmosh-hook harden-ssh [--dry-run] [--yes] [--json]` | Make sshd accept SSH keys only: writes `/etc/ssh/sshd_config.d/10-openmosh.conf` with `sudo`, validates it with `sshd -t` (removed again on failure) and reloads sshd. Asks before changing anything; also `s` on the TUI Status screen |
 | `openmosh-hook service install\|uninstall [--dry-run] [--json]` | Register/remove the user service |
@@ -140,6 +141,29 @@ Exit code is `0` on success and `1` on error. Messages never contain secrets. Er
 `config_error`, `io_error`, `store_error`, `registry_corrupt`, `storage_error`,
 `tailscale_missing`, `tailscale_not_running`, `tailscale_tagged`, `tailscale_error`, `ssh_host_key_missing`,
 `listen_failed`, `pair_closed`, `pair_cancelled`, `settings_invalid`, `service_error`, `internal`.
+
+## Usage
+
+`openmosh-hook usage` reads only what the agents already wrote on this machine; it never calls a
+provider API and never reads credentials.
+
+| Agent | Source | Plan limits |
+|---|---|---|
+| Claude Code | `~/.claude/projects/**/*.jsonl` (`message.usage`; a streamed message counts once by `message.id` + `requestId`) | Not recorded locally: always `[]` with a `note` |
+| Codex | `~/.codex/sessions/**/*.jsonl` (`token_count` events; cached input is reported as `cache_read`) | From the newest `rate_limits` (`5h`, `weekly`) |
+| Gemini, Cursor, Copilot, Kiro, OpenCode, Aider | — | `available: false`, `note: "usage not recorded locally"` |
+
+Only files modified inside the period are opened, symlinks inside those directories are not
+followed, and malformed or overlong lines are skipped. "Today" starts at local midnight. Projects
+are the last folder of the agent's working directory (top 10 by tokens), models the top 5. No
+message text is kept or printed.
+
+```json
+{"ok":true,"data":{"days":7,"generated_at":1794139200,"agents":[{"agent":"codex","available":true,"note":null,
+  "today":{"input":200,"output":50,"cache_read":800,"cache_write":0,"total":1050},"period":{…},
+  "projects":[{"project":"App","tokens":{…}}],"models":[{"model":"gpt-5","tokens":{…}}],
+  "limits":[{"name":"5h","used_percent":42.0,"window_minutes":300,"resets_at":1794150000}]}]}}
+```
 
 ## Pairing
 

@@ -10,6 +10,7 @@ mod lifecycle;
 mod pair;
 mod serve;
 pub mod tui;
+mod usage;
 
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
@@ -237,6 +238,7 @@ pub fn run(ctx: &Ctx, command: Command) -> Result<Reply, CliError> {
             out,
         } => lifecycle::uninstall(ctx, all, dry_run, yes, out.json),
         Command::Doctor { .. } => commands::doctor(ctx),
+        Command::Usage { days, .. } => usage::usage(ctx, days),
         Command::HardenSsh { dry_run, yes, out } => harden::harden_ssh(ctx, dry_run, yes, out.json),
         Command::Service { cmd } => match cmd {
             ServiceCmd::Install { dry_run, .. } => commands::service(ctx, true, dry_run),
