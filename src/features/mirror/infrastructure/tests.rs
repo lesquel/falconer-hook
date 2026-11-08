@@ -74,6 +74,10 @@ fn socket_path_follows_herdr_resolution_order() {
         socket_path(Some("work"), none, cfg),
         PathBuf::from("/h/.config/herdr/sessions/work/herdr.sock")
     );
+    assert_eq!(
+        socket_path(Some("default"), none, cfg),
+        PathBuf::from("/h/.config/herdr/herdr.sock")
+    );
     let env = |k: &str| match k {
         "HERDR_SOCKET_PATH" => Some("/run/x.sock".to_string()),
         "HERDR_SESSION" => Some("side".to_string()),

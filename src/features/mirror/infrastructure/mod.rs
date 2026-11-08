@@ -27,7 +27,14 @@ pub fn socket_path(
     xdg_config_home: &Path,
 ) -> PathBuf {
     let base = xdg_config_home.join("herdr");
-    let named = |name: &str| base.join("sessions").join(name).join("herdr.sock");
+    // `default` is Herdr's name for the default session, served on the base socket.
+    let named = |name: &str| {
+        if name == "default" {
+            base.join("herdr.sock")
+        } else {
+            base.join("sessions").join(name).join("herdr.sock")
+        }
+    };
     if let Some(name) = session.filter(|n| valid_session_name(n)) {
         return named(name);
     }
