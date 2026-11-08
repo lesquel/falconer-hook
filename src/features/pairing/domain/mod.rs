@@ -115,6 +115,8 @@ pub mod fakes {
     use super::*;
     use std::cell::RefCell;
 
+    pub use super::tailnet_fakes::FakeTailnet;
+
     /// In-memory registry for use-case tests.
     #[derive(Default)]
     pub struct MemRegistry(pub RefCell<Vec<Device>>);
@@ -173,6 +175,56 @@ pub mod fakes {
             let before = v.len();
             v.retain(|l| !l.ends_with(&tag));
             Ok(v.len() != before)
+        }
+    }
+}
+
+#[cfg(test)]
+pub mod tailnet_fakes {
+    use super::*;
+    use std::collections::HashMap;
+
+    /// Scripted Tailscale: node `100.88.77.66`, MagicDNS `host.tail.ts.net`.
+    pub struct FakeTailnet {
+        pub status: TailnetStatus,
+        pub peers: HashMap<IpAddr, String>,
+        pub missing: bool,
+        pub whois_fails: bool,
+    }
+
+    impl FakeTailnet {
+        pub fn running(login: &str, peers: &[(&str, &str)]) -> Self {
+            Self {
+                status: TailnetStatus {
+                    running: true,
+                    login_name: Some(login.into()),
+                    dns_name: Some("host.tail.ts.net".into()),
+                },
+                peers: peers
+                    .iter()
+                    .map(|(ip, l)| (ip.parse().unwrap(), l.to_string()))
+                    .collect(),
+                missing: false,
+                whois_fails: false,
+            }
+        }
+    }
+
+    impl Tailnet for FakeTailnet {
+        fn status(&self) -> Result<TailnetStatus, TailnetError> {
+            if self.missing {
+                return Err(TailnetError::Missing);
+            }
+            Ok(self.status.clone())
+        }
+        fn ipv4(&self) -> Result<Ipv4Addr, TailnetError> {
+            Ok("100.88.77.66".parse().unwrap())
+        }
+        fn whois_login(&self, ip: IpAddr) -> Result<Option<String>, TailnetError> {
+            if self.whois_fails {
+                return Err(TailnetError::Failed);
+            }
+            Ok(self.peers.get(&ip).cloned())
         }
     }
 }

@@ -120,6 +120,29 @@ pub fn write_atomic(path: &Path, contents: &[u8], mode: u32) -> Result<(), FsErr
     Ok(())
 }
 
+/// Exclusive advisory lock held for the lifetime of the guard (`flock`).
+pub struct LockGuard(File);
+
+impl Drop for LockGuard {
+    fn drop(&mut self) {
+        let _ = self.0.unlock();
+    }
+}
+
+/// Takes an exclusive lock on `lock_path` (created `0600`), blocking until free.
+pub fn lock_exclusive(lock_path: &Path) -> Result<LockGuard, FsError> {
+    let f = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .mode(0o600)
+        .open(lock_path)
+        .map_err(|e| io_err(lock_path, e))?;
+    f.lock().map_err(|e| io_err(lock_path, e))?;
+    Ok(LockGuard(f))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
