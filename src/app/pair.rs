@@ -70,6 +70,7 @@ pub fn pair(
         .port();
     let crypto = X25519PairCrypto::new(st.identity.secret());
     let ip = preflight.ipv4;
+    let alias_shown = facts.alias.clone();
     let mut session = QrPairing::new(
         &tailscale,
         &crypto,
@@ -79,7 +80,7 @@ pub fn pair(
         &OsIds,
         preflight,
         facts,
-        random_bytes::<32>(),
+        random_bytes::<{ crate::features::pairing::domain::PAIR_TOKEN_LEN }>(),
         timeout,
     );
     let offer = session.offer(port);
@@ -91,7 +92,7 @@ pub fn pair(
     }
     println!(
         "Scan with OpenMosh: Add host > Scan QR  (host \"{}\")",
-        offer.alias
+        alias_shown
     );
     println!("Listening on {ip}:{port} (Tailscale only) for {timeout} s. Ctrl+C cancels.");
     use std::io::Write as _;

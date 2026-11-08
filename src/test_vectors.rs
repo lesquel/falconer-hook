@@ -99,7 +99,7 @@ fn build_push() -> PushVector {
 fn build_pair() -> PairVector {
     let host: [u8; 32] = seq(HOST_PRIV);
     let eph: [u8; 32] = seq(EPH_PRIV);
-    let token: [u8; 32] = seq(0x80);
+    let token: [u8; 16] = seq(0x80);
     let nonce_req: [u8; 24] = seq(0x30);
     let nonce_resp: [u8; 24] = seq(0x50);
     let device_pub = public_key(&seq::<32>(DEVICE_PRIV));
@@ -118,6 +118,9 @@ fn build_pair() -> PairVector {
     let resp_plaintext = serde_json::to_string(&PairResponsePlain {
         device_id: b64u_encode(&seq::<16>(0xA0)),
         alias: "devbox".into(),
+        ssh_user: "me".into(),
+        ssh_port: 22,
+        ssh_fp: "SHA256:XmA4TG6/WNqReEVbojfXfv3nyHYvdvEr6WbFjs7VdLM".into(),
     })
     .unwrap();
     let resp_line = seal_response_with_nonce(&keys.k_resp, &nonce_resp, &resp_plaintext);
@@ -182,7 +185,7 @@ fn vectors_decrypt_from_the_other_side() {
     // Pair: the host opens the request line; the phone opens the response.
     let p = build_pair();
     let host = X25519PairCrypto::new(b64u_decode_array::<32>(&p.host_priv).unwrap());
-    let token = b64u_decode_array::<32>(&p.token).unwrap();
+    let token = b64u_decode_array::<16>(&p.token).unwrap();
     let (req, k_resp) = host.open_request(&p.req_line, &token).unwrap();
     assert_eq!(serde_json::to_string(&req).unwrap(), p.req_plaintext);
     assert_eq!(b64u_encode(&*k_resp), p.k_resp);

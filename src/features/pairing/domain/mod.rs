@@ -8,6 +8,11 @@ pub use rules::{
 };
 pub use wire::{PairOffer, PairRequestPlain, PairResponsePlain};
 
+/// One-time pairing token length: 128 bits keeps the QR small and is far
+/// beyond guessing within one 5-minute, 5-failure session.
+pub const PAIR_TOKEN_LEN: usize = 16;
+pub type PairToken = [u8; PAIR_TOKEN_LEN];
+
 use serde::{Deserialize, Serialize};
 use std::net::{IpAddr, Ipv4Addr};
 use thiserror::Error;
@@ -107,7 +112,7 @@ pub trait PairCrypto {
     fn open_request(
         &self,
         line: &str,
-        token: &[u8; 32],
+        token: &PairToken,
     ) -> Option<(PairRequestPlain, Self::Session)>;
     fn seal_response(&self, session: &Self::Session, response: &PairResponsePlain) -> String;
 }

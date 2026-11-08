@@ -721,11 +721,10 @@ fn qr_pairing_end_to_end_over_tailnet() {
         .query_pairs()
         .into_owned()
         .collect();
-    assert_eq!(offer["v"], "2");
+    assert_eq!(offer["v"], "3");
     assert_eq!(offer["i"], ip.as_str());
     assert_eq!(offer["p"], port.to_string());
-    assert_eq!(offer["n"], "e2e");
-    assert_eq!(offer["f"], "XmA4TG6_WNqReEVbojfXfv3nyHYvdvEr6WbFjs7VdLM");
+    assert_eq!(offer.len(), 5, "{uri}");
     let hpk: [u8; 32] = phone::decode(&offer["k"]).try_into().unwrap();
     let tok = phone::decode(&offer["t"]);
     let eph = [9u8; 32];
@@ -744,7 +743,7 @@ fn qr_pairing_end_to_end_over_tailnet() {
     };
 
     // Wrong token: keys derived from another salt, AEAD fails, generic reply.
-    let (bad_req, _) = phone::keys(&eph, &hpk, &[0u8; 32]);
+    let (bad_req, _) = phone::keys(&eph, &hpk, &[0u8; 16]);
     assert_eq!(
         exchange(&phone::request_line(&eph, &bad_req, &plaintext)),
         "{\"v\":1,\"err\":\"pair_rejected\"}\n"
@@ -754,6 +753,12 @@ fn qr_pairing_end_to_end_over_tailnet() {
     let reply = exchange(&phone::request_line(&eph, &k_req, &plaintext));
     let resp: Value = serde_json::from_str(&phone::open_response(&k_resp, reply.trim())).unwrap();
     assert_eq!(resp["alias"], "e2e");
+    assert_eq!(
+        resp["ssh_fp"],
+        "SHA256:XmA4TG6/WNqReEVbojfXfv3nyHYvdvEr6WbFjs7VdLM"
+    );
+    assert!(resp["ssh_user"].as_str().is_some_and(|u| !u.is_empty()));
+    assert!(resp["ssh_port"].as_u64().is_some());
     let device_id = resp["device_id"].as_str().unwrap().to_string();
 
     let status = child.wait().unwrap();

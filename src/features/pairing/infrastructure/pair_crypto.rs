@@ -6,12 +6,14 @@
 //! line   = {"v":1,"e":b64u(eph pub),"n":b64u(nonce),"c":b64u(AEAD(k_req, n, plaintext, aad))}
 //! resp   = {"v":1,"n":b64u(nonce),"c":b64u(AEAD(k_resp, n, {"device_id","alias"}, aad))}
 //! ```
-//! The HKDF salt is the raw 32 token bytes (the QR carries them b64u-encoded).
+//! The HKDF salt is the raw 16 token bytes (the QR carries them b64u-encoded).
 
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroizing;
 
-use crate::features::pairing::domain::{PairCrypto, PairRequestPlain, PairResponsePlain};
+use crate::features::pairing::domain::{
+    PairCrypto, PairRequestPlain, PairResponsePlain, PairToken,
+};
 use crate::shared::domain::encoding::{b64u_decode, b64u_decode_array, b64u_encode};
 use crate::shared::infrastructure::crypto::{
     diffie_hellman, hkdf32, open, random_bytes, seal, Key32,
@@ -47,7 +49,7 @@ pub struct PairKeys {
     pub k_resp: Key32,
 }
 
-pub fn derive_pair_keys(shared: &[u8; 32], token: &[u8; 32]) -> PairKeys {
+pub fn derive_pair_keys(shared: &[u8; 32], token: &PairToken) -> PairKeys {
     PairKeys {
         k_req: hkdf32(shared, token, INFO_REQ),
         k_resp: hkdf32(shared, token, INFO_RESP),
@@ -60,7 +62,7 @@ pub fn derive_pair_keys(shared: &[u8; 32], token: &[u8; 32]) -> PairKeys {
 pub fn seal_request(
     eph_secret: &[u8; 32],
     hpk: &[u8; 32],
-    token: &[u8; 32],
+    token: &PairToken,
     nonce: &[u8; 24],
     plaintext: &str,
 ) -> Option<String> {
@@ -116,7 +118,7 @@ impl X25519PairCrypto {
 impl PairCrypto for X25519PairCrypto {
     type Session = Key32;
 
-    fn open_request(&self, line: &str, token: &[u8; 32]) -> Option<(PairRequestPlain, Key32)> {
+    fn open_request(&self, line: &str, token: &PairToken) -> Option<(PairRequestPlain, Key32)> {
         if line.len() > MAX_LINE_BYTES {
             return None;
         }
@@ -145,7 +147,7 @@ mod tests {
     use super::*;
     use crate::shared::infrastructure::crypto::public_key;
 
-    fn plain(tok: &[u8; 32]) -> String {
+    fn plain(tok: &PairToken) -> String {
         format!(
             r#"{{"tok":"{}","name":"P","ssh_pub":"k","ppk":"p","endpoint":"https://e"}}"#,
             b64u_encode(tok)
@@ -155,7 +157,7 @@ mod tests {
     #[test]
     fn host_opens_what_phone_seals_and_phone_opens_reply() {
         let host = [5u8; 32];
-        let tok = [6u8; 32];
+        let tok = [6u8; 16];
         let line = seal_request(
             &[7u8; 32],
             &public_key(&host),
@@ -172,18 +174,21 @@ mod tests {
             &PairResponsePlain {
                 device_id: "d".into(),
                 alias: "a".into(),
+                ssh_user: "u".into(),
+                ssh_port: 22,
+                ssh_fp: "SHA256:f".into(),
             },
         );
         assert_eq!(
             open_response(&k_resp, &reply).unwrap(),
-            r#"{"device_id":"d","alias":"a"}"#
+            r#"{"device_id":"d","alias":"a","ssh_user":"u","ssh_port":22,"ssh_fp":"SHA256:f"}"#
         );
     }
 
     #[test]
     fn wrong_token_or_tampering_fails() {
         let host = [5u8; 32];
-        let tok = [6u8; 32];
+        let tok = [6u8; 16];
         let line = seal_request(
             &[7u8; 32],
             &public_key(&host),
@@ -193,7 +198,7 @@ mod tests {
         )
         .unwrap();
         let crypto = X25519PairCrypto::new(Zeroizing::new(host));
-        assert!(crypto.open_request(&line, &[0u8; 32]).is_none());
+        assert!(crypto.open_request(&line, &[0u8; 16]).is_none());
         assert!(crypto
             .open_request(&line.replace("\"v\":1", "\"v\":2"), &tok)
             .is_none());

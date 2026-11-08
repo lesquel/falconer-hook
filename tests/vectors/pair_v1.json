@@ -3,13 +3,13 @@
   "host_pub": "B6N8vBQgk8i3VdwbEOhstCY3StFqqFPtC9_AsrhtHHw",
   "eph_priv": "QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVpbXF1eX2A",
   "eph_pub": "ZLEBsdC-WocEvQePmJUAH8A-jp-VIvGI3RKNmEbUhGY",
-  "token": "gIGCg4SFhoeIiYqLjI2Oj5CRkpOUlZaXmJmam5ydnp8",
-  "k_req": "rQ7vhmGxyChmqcV3CrdZlynXcqUmkWjPA1FsQiMXwXU",
-  "k_resp": "lJtQLq_HTPRZ10sc2c3Hy7Z5Il7jPBPLvkpicBBSox8",
+  "token": "gIGCg4SFhoeIiYqLjI2Ojw",
+  "k_req": "y_N-WcvC1ys9bFyW2csz_z320IxF6DJzV-Xa0ZPkQno",
+  "k_resp": "hy1kR80ZgFt6RAwdJ7CWzzPve1usRWgltShI9spxMJg",
   "nonce_req": "MDEyMzQ1Njc4OTo7PD0-P0BBQkNERUZH",
-  "req_plaintext": "{\"tok\":\"gIGCg4SFhoeIiYqLjI2Oj5CRkpOUlZaXmJmam5ydnp8\",\"name\":\"Pixel 8\",\"ssh_pub\":\"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJYwG729z8R85TUE6pHTEWVG3RxgVSZik0RW18NtXepH phone\",\"ppk\":\"WGmv9FBUlzLLqu1eXfmzCm2jHLDldCutWtShp2jxpns\",\"endpoint\":\"https://ntfy.sh/upTestTopic123?up=1\"}",
-  "req_line": "{\"v\":1,\"e\":\"ZLEBsdC-WocEvQePmJUAH8A-jp-VIvGI3RKNmEbUhGY\",\"n\":\"MDEyMzQ1Njc4OTo7PD0-P0BBQkNERUZH\",\"c\":\"H2UwWDKGHThgjs4vl8j8q6_gj03XcFrayuVtjmOi_NHtNvSKxPKm0ZrgwxlDHK4DprAFRN887G4_ihgY3HRehBg_R82aTle-1U3tMckiPVRac8HWONBPSRxvmpNJM10n363_n43e8ndF0iaDQZXBgMRs2UBMZLK34ZOTfjHBwyP1FWwQbuzIQ6dj5qE4eXVjkb_OouZONxWqQ6skheGW469fph_OElDjKqEZfqcg5Vogft4fBxvZAyVWfpa96SYIg9nHxT82sGsxGdKeZQrv7Rb5JkOLNttn66s_fsrH54W9yJ5o6wEuwqvqHsPwDSQz-Ucj0SneTCVSabMuLLaE74xB7pPm22Rnu5_zZ1NBXmwANOchY_DRXiFfSlANXw\"}",
+  "req_plaintext": "{\"tok\":\"gIGCg4SFhoeIiYqLjI2Ojw\",\"name\":\"Pixel 8\",\"ssh_pub\":\"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJYwG729z8R85TUE6pHTEWVG3RxgVSZik0RW18NtXepH phone\",\"ppk\":\"WGmv9FBUlzLLqu1eXfmzCm2jHLDldCutWtShp2jxpns\",\"endpoint\":\"https://ntfy.sh/upTestTopic123?up=1\"}",
+  "req_line": "{\"v\":1,\"e\":\"ZLEBsdC-WocEvQePmJUAH8A-jp-VIvGI3RKNmEbUhGY\",\"n\":\"MDEyMzQ1Njc4OTo7PD0-P0BBQkNERUZH\",\"c\":\"ElSp7aU_Ksximd3Wucqr77NypC-vweryoNEo_pKCAbF56sK09F_bEKAzIbnyTiCmu34grP_DRrP3vfM0qayBfssAoZq8VJ5ahwBLt7t6IcGWdEpxf3v0M3VXEhIwk2u5eGibJtiRF0E58eGp50UtPCtW-ntIBOuIyoIf2kf9BwIfh6yxRDhrDiYMoNC8Adqi9x1XTVyKhkVUHzOEMUtWyk4TUokvq3RFPdqZMdmfs3Nc14scLdvEVEFXnMSQkW_lxeEm2Ls7R8HRz8Hjaa8T0oFRqLeYpe_URnDYxf-qQlO8IbCH9y6HSrfk1M8H0kCzQlr5woMpL8VHLcwxkRN0luM_ucAO8NyckA\"}",
   "nonce_resp": "UFFSU1RVVldYWVpbXF1eX2BhYmNkZWZn",
-  "resp_plaintext": "{\"device_id\":\"oKGio6SlpqeoqaqrrK2urw\",\"alias\":\"devbox\"}",
-  "resp_line": "{\"v\":1,\"n\":\"UFFSU1RVVldYWVpbXF1eX2BhYmNkZWZn\",\"c\":\"1q4HOvDtL27-ZUybtf5Y9FgKHxlZqtzfTvmGjNeyB8CGRS_CQKTMYlkNWSVTiB85Sj8Gs41i6i8QqAPMl3VwYGQnXqOS2Es\"}"
+  "resp_plaintext": "{\"device_id\":\"oKGio6SlpqeoqaqrrK2urw\",\"alias\":\"devbox\",\"ssh_user\":\"me\",\"ssh_port\":22,\"ssh_fp\":\"SHA256:XmA4TG6/WNqReEVbojfXfv3nyHYvdvEr6WbFjs7VdLM\"}",
+  "resp_line": "{\"v\":1,\"n\":\"UFFSU1RVVldYWVpbXF1eX2BhYmNkZWZn\",\"c\":\"9AZljIwQGtPCk3spJfXTKHDKzA5XjreNmcXwR8KR_zMNMzAHm9wJ6Vp60YuRFduQMFfXkGoXKsdfJoWdNztQVr7nmHR4d5JAzT9OLC_EAG6wOhUZmlJexcCD-CNA90rfAzGV_JjOtnBaU6WKTVuO0IAaUMx-1rICt0XUK6ca7IRSRBPPNFhaVoFcGzp-t6rB47pIBhsvlmMOLWogReY4XrraVQ\"}"
 }

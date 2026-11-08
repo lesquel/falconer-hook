@@ -21,7 +21,8 @@ use zeroize::Zeroizing;
 
 use crate::features::pairing::domain::{
     authorized_keys_line, normalize_ssh_ed25519, sanitize_name, valid_ppk, AuthorizedKeys, Device,
-    DeviceRegistry, PairCrypto, PairOffer, PairResponsePlain, Tailnet, TailnetError,
+    DeviceRegistry, PairCrypto, PairOffer, PairResponsePlain, PairToken, Tailnet, TailnetError,
+    PAIR_TOKEN_LEN,
 };
 use crate::features::push::domain::validate_endpoint;
 use crate::shared::domain::clock::Clock;
@@ -103,7 +104,7 @@ impl Preflight {
     }
 }
 
-/// Host values placed in the QR.
+/// Host values: `hpk` goes in the QR, the rest in the encrypted response.
 #[derive(Debug, Clone)]
 pub struct HostFacts {
     pub alias: String,
@@ -131,7 +132,7 @@ pub struct QrPairing<'a, T, C: PairCrypto, R, A, K, I> {
     pub ids: &'a I,
     preflight: Preflight,
     facts: HostFacts,
-    token: Zeroizing<[u8; 32]>,
+    token: Zeroizing<PairToken>,
     expires_at: u64,
     used: bool,
     failures: u32,
@@ -156,7 +157,7 @@ where
         ids: &'a I,
         preflight: Preflight,
         facts: HostFacts,
-        token: Zeroizing<[u8; 32]>,
+        token: Zeroizing<PairToken>,
         ttl_secs: u64,
     ) -> Self {
         let expires_at = clock.now() + ttl_secs.min(TOKEN_TTL_SECS);
@@ -179,16 +180,11 @@ where
     /// QR content for a listener bound on `port`.
     pub fn offer(&self, port: u16) -> PairOffer {
         PairOffer {
-            v: 2,
-            alias: self.facts.alias.clone(),
+            v: 3,
             ip: self.preflight.ipv4.to_string(),
-            ssh_port: self.facts.ssh_port,
-            ssh_user: self.facts.ssh_user.clone(),
-            ssh_fp: self.facts.ssh_fp.clone(),
             hpk: b64u_encode(&self.facts.hpk),
             port,
             tok: b64u_encode(self.token.as_slice()),
-            exp: self.expires_at,
         }
     }
 
@@ -205,7 +201,7 @@ where
     /// Burns the token (timeout, Ctrl+C or success).
     pub fn burn(&mut self) {
         self.used = true;
-        *self.token = [0u8; 32];
+        *self.token = [0u8; PAIR_TOKEN_LEN];
     }
 
     fn reject(&mut self, reason: &'static str) -> Attempt {
@@ -298,6 +294,9 @@ where
             &PairResponsePlain {
                 device_id: device.id.clone(),
                 alias: self.facts.alias.clone(),
+                ssh_user: self.facts.ssh_user.clone(),
+                ssh_port: self.facts.ssh_port,
+                ssh_fp: self.facts.ssh_fp.clone(),
             },
         );
         // Single use: any later attempt fails the `already_used` check.

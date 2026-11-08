@@ -6,14 +6,14 @@ use crate::shared::domain::ids::fakes::SeqIds;
 
 const KEY: &str =
     "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJYwG729z8R85TUE6pHTEWVG3RxgVSZik0RW18NtXepH";
-const TOKEN: [u8; 32] = [42u8; 32];
+const TOKEN: [u8; 16] = [42u8; 16];
 const PHONE: &str = "100.101.1.2";
 
 /// Fake crypto: a request line is `<b64u(token)>.<plaintext json>`.
 struct FakeCrypto;
 impl PairCrypto for FakeCrypto {
     type Session = ();
-    fn open_request(&self, line: &str, token: &[u8; 32]) -> Option<(PairRequestPlain, ())> {
+    fn open_request(&self, line: &str, token: &PairToken) -> Option<(PairRequestPlain, ())> {
         let (tok, json) = line.split_once('.')?;
         (tok == b64u_encode(token)).then_some(())?;
         Some((serde_json::from_str(json).ok()?, ()))
@@ -23,7 +23,7 @@ impl PairCrypto for FakeCrypto {
     }
 }
 
-fn request(tok: &[u8; 32], f: impl FnOnce(&mut PairRequestPlain)) -> String {
+fn request(tok: &PairToken, f: impl FnOnce(&mut PairRequestPlain)) -> String {
     let mut r = PairRequestPlain {
         tok: b64u_encode(tok),
         name: "Pixel 8".into(),
@@ -124,17 +124,13 @@ fn preflight_refuses_a_tagged_host() {
 }
 
 #[test]
-fn offer_has_wire_fields() {
+fn offer_carries_only_reach_and_auth_fields() {
     let w = World::new();
     let p = w.pairing();
-    let o = p.offer(41234);
-    assert_eq!(o.ip, "100.88.77.66");
-    assert_eq!(o.exp, 1_300);
-    assert_eq!(o.tok, b64u_encode(&TOKEN));
     assert_eq!(
-        o.uri(),
+        p.offer(41234).uri(),
         format!(
-            "openmosh://pair?v=2&n=devbox&i=100.88.77.66&s=22&u=me&f=abc&k={}&p=41234&t={}&e=1300",
+            "openmosh://pair?v=3&i=100.88.77.66&k={}&p=41234&t={}",
             b64u_encode(&[1u8; 32]),
             b64u_encode(&TOKEN)
         )
@@ -142,27 +138,16 @@ fn offer_has_wire_fields() {
 }
 
 #[test]
-fn offer_uri_is_compact_and_query_safe() {
+fn offer_uri_fits_a_version_6_qr() {
     let o = PairOffer {
-        v: 2,
-        alias: "my box/ñ&x".into(),
-        ip: "100.64.0.1".into(),
-        ssh_port: 2222,
-        ssh_user: "me".into(),
-        ssh_fp: "SHA256:XmA4TG6/WNqReEVbojfXfv3nyHYvdvEr6WbFjs7VdLM".into(),
-        hpk: "h".repeat(43),
-        port: 1,
-        tok: "t".repeat(43),
-        exp: 9,
+        v: 3,
+        ip: "100.100.100.100".into(),
+        hpk: b64u_encode(&[0xffu8; 32]),
+        port: 65535,
+        tok: b64u_encode(&[0xffu8; PAIR_TOKEN_LEN]),
     };
-    let uri = o.uri();
-    assert!(uri.contains("&n=my+box%2F%C3%B1%26x&"), "{uri}");
-    assert!(
-        uri.contains("&f=XmA4TG6_WNqReEVbojfXfv3nyHYvdvEr6WbFjs7VdLM&"),
-        "{uri}"
-    );
-    assert!(!uri.contains("SHA256"));
-    assert!(uri.len() < 230, "{} chars", uri.len());
+    // Version 6 at error correction L holds 134 bytes.
+    assert!(o.uri().len() <= 134, "{} chars", o.uri().len());
 }
 
 #[test]
@@ -177,7 +162,10 @@ fn successful_pairing_authorizes_key_stores_device_and_burns_token() {
     assert_eq!(device.ssh_key.as_deref(), Some(KEY));
     assert_eq!(
         reply,
-        format!(r#"{{"device_id":"{}","alias":"devbox"}}"#, device.id)
+        format!(
+            r#"{{"device_id":"{}","alias":"devbox","ssh_user":"me","ssh_port":22,"ssh_fp":"SHA256:abc"}}"#,
+            device.id
+        )
     );
     assert_eq!(
         w.keys.lines.borrow().as_slice(),
@@ -215,7 +203,7 @@ fn every_rejection_path_in_order() {
         "whois_mismatch"
     );
     assert_eq!(
-        reason(p.handle(ip(PHONE), || Some(request(&[0u8; 32], |_| {})))),
+        reason(p.handle(ip(PHONE), || Some(request(&[0u8; 16], |_| {})))),
         "decrypt_failed"
     );
     assert_eq!(reason(p.handle(ip(PHONE), || None)), "read_failed");

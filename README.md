@@ -70,8 +70,10 @@ Exit code is `0` on success and `1` on error. Messages never contain secrets. Er
 
 **QR (primary).** `openmosh-hook pair` refuses to run unless Tailscale is up and this host is a
 node owned by your user (a tagged node is refused with `tailscale_tagged`). It binds a listener
-to the host's Tailscale IPv4 on an ephemeral port and shows a QR with the host's address, SSH
-host key fingerprint, X25519 public key and a one-time token valid for 5 minutes. For every
+to the host's Tailscale IPv4 on an ephemeral port and shows a small QR (`openmosh://pair?v=3&i=…&k=…&p=…&t=…`)
+with the host's Tailscale IPv4, the listener port, its X25519 public key and a 16-byte one-time
+token valid for 5 minutes. The alias, SSH user, SSH port and SSH host key fingerprint go back to
+the phone inside the encrypted reply. For every
 connection it checks, in order: the peer is in `100.64.0.0/10`, `tailscale whois` reports the same
 login as this host and the peer is not a tagged node, the request decrypts, the token matches, it
 has not expired or been used, the SSH key is a valid `ssh-ed25519` key and the push endpoint is
@@ -129,7 +131,7 @@ b64url without padding; string fields are the exact UTF-8 sent on the wire.
 
 - `push_v1`: `host_priv, host_pub, device_priv, device_pub, device_id, nonce, key, plaintext, body`.
 - `pair_v1`: `host_priv, host_pub, eph_priv, eph_pub, token, k_req, k_resp, nonce_req, req_plaintext, req_line, nonce_resp, resp_plaintext, resp_line`.
-- The pairing HKDF salt is the **raw 32 token bytes** (the QR carries them b64url-encoded).
+- The pairing HKDF salt is the **raw 16 token bytes** (the QR carries them b64url-encoded).
 - `req_line` and `resp_line` are shown without their trailing `\n`; on the wire each line ends with one.
 
 Regenerate (only when the wire format version changes):
