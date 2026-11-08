@@ -1,5 +1,5 @@
-//! Wire encodings. `base64` is a pure, I/O-free crate and is the one documented
-//! exception to the "std + serde + thiserror" rule for `domain` modules.
+//! Wire encodings and constant-time comparison. `base64` and `subtle` are
+//! pure, I/O-free crates allowed in `domain` (see ARCHITECTURE.md).
 
 use base64::engine::general_purpose::{STANDARD_NO_PAD, URL_SAFE_NO_PAD};
 use base64::Engine;
@@ -34,14 +34,8 @@ pub fn b64_std_decode(s: &str) -> Option<Vec<u8>> {
 
 /// Constant-time byte comparison for tokens and MACs.
 pub fn ct_eq(a: &[u8], b: &[u8]) -> bool {
-    if a.len() != b.len() {
-        return false;
-    }
-    let mut diff = 0u8;
-    for (x, y) in a.iter().zip(b.iter()) {
-        diff |= x ^ y;
-    }
-    std::hint::black_box(diff) == 0
+    use subtle::ConstantTimeEq;
+    a.len() == b.len() && bool::from(a.ct_eq(b))
 }
 
 #[cfg(test)]
