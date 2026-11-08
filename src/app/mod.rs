@@ -8,6 +8,7 @@ mod integrations;
 mod lifecycle;
 mod pair;
 mod serve;
+pub mod tui;
 
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
@@ -177,6 +178,7 @@ impl<'a> Runtimes<'a> {
 }
 
 pub use attach::attach_herdr;
+pub use tui::run_tui;
 
 /// Dispatches one command.
 pub fn run(ctx: &Ctx, command: Command) -> Result<Reply, CliError> {
@@ -238,7 +240,9 @@ pub fn run(ctx: &Ctx, command: Command) -> Result<Reply, CliError> {
             ServiceCmd::Install { dry_run, .. } => commands::service(ctx, true, dry_run),
             ServiceCmd::Uninstall { dry_run, .. } => commands::service(ctx, false, dry_run),
         },
-        Command::Attach { .. } => Err(CliError::new("internal", "attach is dispatched by main")),
+        Command::Attach { .. } | Command::Tui => {
+            Err(CliError::new("internal", "dispatched by main"))
+        }
         Command::Version { .. } => Ok(commands::version()),
     }
 }

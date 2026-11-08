@@ -13,8 +13,9 @@ use std::path::PathBuf;
     propagate_version = true
 )]
 pub struct Cli {
+    /// Without a command, opens the TUI on a terminal and prints this help otherwise.
     #[command(subcommand)]
-    pub command: Command,
+    pub command: Option<Command>,
 }
 
 #[derive(Debug, Clone, Copy, Args)]
@@ -139,6 +140,8 @@ pub enum Command {
         #[command(subcommand)]
         cmd: AttachCmd,
     },
+    /// Open the interactive terminal UI (also the default on a terminal).
+    Tui,
     /// Print the version and wire protocol versions.
     Version {
         #[command(flatten)]
@@ -178,7 +181,7 @@ pub enum InboxCmd {
     },
 }
 
-#[derive(Debug, Clone, Copy, ValueEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum ActionArg {
     Allow,
     Deny,
@@ -218,7 +221,7 @@ pub enum KindArg {
     Notification,
 }
 
-#[derive(Debug, Clone, Copy, ValueEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum AgentArg {
     /// Claude Code (~/.claude/settings.json)
     Claude,
@@ -285,7 +288,7 @@ impl Command {
     /// Whether errors must be printed as a JSON envelope.
     pub fn json(&self) -> bool {
         match self {
-            Command::Serve | Command::Pair { .. } | Command::Attach { .. } => false,
+            Command::Serve | Command::Pair { .. } | Command::Attach { .. } | Command::Tui => false,
             Command::Emit { out, .. }
             | Command::PairSsh { out }
             | Command::Respond { out, .. }

@@ -720,3 +720,27 @@ fn attach_herdr_without_a_socket_still_runs_herdr() {
     assert_eq!(bad.status.code(), Some(1));
     assert!(!env.calls().iter().any(|c| c.contains(&"../x".to_string())));
 }
+
+#[test]
+fn no_command_without_a_terminal_prints_help() {
+    let e = Env::new();
+    let out = e.run(&[], None, &[]);
+    assert_eq!(out.status.code(), Some(2));
+    let err = String::from_utf8(out.stderr).unwrap();
+    assert!(err.contains("Usage: openmosh-hook"), "{err}");
+    assert!(err.contains("tui"), "the TUI is listed: {err}");
+    assert!(out.stdout.is_empty());
+}
+
+#[test]
+fn tui_refuses_without_a_terminal() {
+    let e = Env::new();
+    let out = e.run(&["tui"], None, &[]);
+    assert_eq!(out.status.code(), Some(1));
+    let err = String::from_utf8(out.stderr).unwrap();
+    assert!(
+        err.contains("the TUI needs an interactive terminal"),
+        "{err}"
+    );
+    assert!(!e.state().exists(), "nothing was created");
+}

@@ -56,6 +56,25 @@ openmosh-hook created, and nothing else:
 Without `--yes` it prints the plan and asks on a terminal; without a terminal (or with `--json`)
 it refuses with `confirmation_required`. `--dry-run` prints the plan and changes nothing.
 
+## TUI
+
+`openmosh-hook` with no command on a terminal (or `openmosh-hook tui`) opens a terminal UI over
+the same commands as the CLI. Without a terminal, no command prints the help as before.
+
+| Screen | What it does |
+|---|---|
+| 1 Status | `doctor` (config, Tailscale, Herdr/tmux, permissions, sshd, devices, service) and the version; `r` refreshes |
+| 2 Agents & inbox | Agents with their state and the inbox, newest first; `a` allow, `d` deny, `t` reply with text to the selected pending event, each after a `y` confirmation |
+| 3 Devices | Paired devices, `(endpoint stale)` marks; `x` revokes after confirmation |
+| 4 Pair | `Enter` suspends the TUI and runs `openmosh-hook pair` in the terminal (`i` toggles `--invert`); Enter returns |
+| 5 Integrations | Every supported agent, detected or not, installed or not; `i` installs, `u` uninstalls after confirmation |
+| 6 Setup | `s` runs `setup`, `a` runs `setup --yes` (also installs every detected agent's integration), after confirmation |
+| 7 Uninstall | Shows the `uninstall --dry-run` plan; `a` toggles `--all`; `Enter` asks you to type `uninstall` before anything is removed |
+
+`Tab`/`Shift+Tab` or `1`-`7` switch screens, `j`/`k` or the arrows select, `q` or `Esc` quits.
+The terminal is restored on exit and on a panic. After a complete uninstall the TUI runs nothing
+else (it would recreate state); quit with `q`.
+
 ## Commands
 
 | Command | Purpose |
@@ -78,6 +97,7 @@ it refuses with `confirmation_required`. `--dry-run` prints the plan and changes
 | `openmosh-hook doctor [--json]` | Check Tailscale, Herdr/tmux, permissions, sshd host key, sshd password logins (`sshd -G`; warns when password or keyboard-interactive login is on), devices, keymaps, service |
 | `openmosh-hook service install\|uninstall [--dry-run] [--json]` | Register/remove the user service |
 | `openmosh-hook attach herdr [--session <name>]` | Run the Herdr client (`herdr` or `herdr session attach <name>`, from `[bins] herdr`) with [focus mirroring](#mirroring); exits with Herdr's status code |
+| `openmosh-hook tui` | The [terminal UI](#tui) (also `openmosh-hook` alone on a terminal) |
 | `openmosh-hook version [--json]` | Version and wire protocol versions |
 
 Ids are b64url and may start with `-`; positional id arguments accept that.

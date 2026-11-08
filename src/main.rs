@@ -9,7 +9,8 @@ mod shared;
 #[cfg(test)]
 mod test_vectors;
 
-use clap::Parser;
+use clap::{CommandFactory, Parser};
+use std::io::IsTerminal;
 use std::process::ExitCode;
 use std::sync::atomic::Ordering;
 
@@ -17,10 +18,30 @@ use cli::output::{err_envelope, ok_envelope};
 use cli::{AttachCmd, Cli, Command};
 
 fn main() -> ExitCode {
-    let cli = Cli::parse();
+    let command = match Cli::parse().command {
+        Some(c) => c,
+        None if std::io::stdin().is_terminal() && std::io::stdout().is_terminal() => Command::Tui,
+        None => {
+            // Not a terminal: the usual "missing command" help and exit code 2.
+            let _ = Cli::command()
+                .subcommand_required(true)
+                .arg_required_else_help(true)
+                .get_matches();
+            return ExitCode::from(2);
+        }
+    };
+    if let Command::Tui = command {
+        return match app::Ctx::from_env().and_then(|ctx| app::run_tui(&ctx)) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(e) => {
+                eprintln!("openmosh-hook: {}", e.message);
+                ExitCode::from(1)
+            }
+        };
+    }
     if let Command::Attach {
         cmd: AttachCmd::Herdr { session },
-    } = &cli.command
+    } = &command
     {
         // The child owns the terminal; exit with its status code.
         return match app::Ctx::from_env()
@@ -33,14 +54,14 @@ fn main() -> ExitCode {
             }
         };
     }
-    let json = cli.command.json();
+    let json = command.json();
     let result = app::Ctx::from_env().and_then(|ctx| {
-        if matches!(cli.command, Command::Serve | Command::Pair { .. }) {
+        if matches!(command, Command::Serve | Command::Pair { .. }) {
             let stop = ctx.stop.clone();
             // SIGINT/SIGTERM: stop the loop so the pairing token is burned.
             let _ = ctrlc::set_handler(move || stop.store(true, Ordering::SeqCst));
         }
-        app::run(&ctx, cli.command)
+        app::run(&ctx, command)
     });
     match result {
         Ok(reply) => {

@@ -14,7 +14,11 @@ src/
 │   ├── integrations.rs      #   integration install/uninstall/list over the agent catalog
 │   ├── lifecycle.rs         #   setup and uninstall
 │   ├── pair.rs              #   QR and SSH pairing
-│   └── attach.rs            #   `attach herdr`: Herdr client + focus mirror
+│   ├── attach.rs            #   `attach herdr`: Herdr client + focus mirror
+│   └── tui/                 #   terminal UI: presentation only, every action is a `cli::Command` run via `run`
+│       ├── state.rs         #     pure state machine (screens, selection, confirmations) over an `Exec` port
+│       ├── view.rs          #     ratatui rendering of the state
+│       └── mod.rs           #     terminal setup/restore (raw mode, alternate screen, panic hook), event loop
 ├── cli/                     # clap definitions and the JSON envelope; no adapters
 ├── shared/
 │   ├── domain/              # ids, clock, command-runner port, encodings, tailnet ranges, runtime kind
@@ -68,4 +72,7 @@ Cross-feature calls go through another feature's `domain` ports (for example `pu
 6. Errors: `thiserror` in domain/application with a stable `ErrorCode`; the CLI maps them to the envelope.
 7. External programs run through `CommandRunner` with argv only (no shell). The interactive
    Herdr client of `attach` is spawned by `TtyLauncher`, also argv only, with the inherited terminal.
-8. No `unsafe` (`#![forbid(unsafe_code)]`); secrets are held in `zeroize` buffers.
+8. The TUI never calls use cases or adapters directly: it builds the same `cli::Command` the
+   CLI parses and runs it through `app::run`, so both surfaces share one code path. Text from
+   commands is stripped of control characters before it is drawn.
+9. No `unsafe` (`#![forbid(unsafe_code)]`); secrets are held in `zeroize` buffers.
