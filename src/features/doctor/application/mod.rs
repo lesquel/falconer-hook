@@ -52,16 +52,25 @@ pub fn check_devices(registry: &impl DeviceRegistry) -> Check {
         }
         Ok(d) => {
             let stale = d.iter().filter(|x| x.endpoint_stale).count();
+            let silent = d.iter().filter(|x| x.endpoint.is_empty()).count();
+            let mut notes = Vec::new();
             if stale > 0 {
+                notes.push(format!(
+                    "{stale} with a stale push endpoint (open the app to refresh)"
+                ));
+            }
+            if silent > 0 {
+                notes.push(format!(
+                    "{silent} without notifications (Enable notifications on the host in the app)"
+                ));
+            }
+            if notes.is_empty() {
+                Check::ok("devices", format!("{} paired", d.len()))
+            } else {
                 Check::warn(
                     "devices",
-                    format!(
-                        "{} paired, {stale} with a stale push endpoint (open the app to refresh)",
-                        d.len()
-                    ),
+                    format!("{} paired, {}", d.len(), notes.join(", ")),
                 )
-            } else {
-                Check::ok("devices", format!("{} paired", d.len()))
             }
         }
     }
@@ -132,8 +141,16 @@ mod tests {
             ssh_key: None,
         };
         assert_eq!(
-            check_devices(&MemRegistry::with(vec![d])).status,
+            check_devices(&MemRegistry::with(vec![d.clone()])).status,
             Status::Warn
+        );
+        let quiet = Device {
+            endpoint_stale: false,
+            ..d
+        };
+        assert_eq!(
+            check_devices(&MemRegistry::with(vec![quiet])).detail,
+            "1 paired, 1 without notifications (Enable notifications on the host in the app)"
         );
         let k = Keymap {
             agent: "claude".into(),
