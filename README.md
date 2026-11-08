@@ -7,7 +7,14 @@ notifications through ntfy/UnifiedPush, and executes approvals sent from your ph
 It opens **no permanent network port**. The only listener is the one-shot pairing listener of
 `openmosh-hook pair`, bound to the Tailscale address for at most 5 minutes.
 
-> Status: v0.1. Linux and macOS.
+> Status: v0.2.0. Linux (x86_64, aarch64) and macOS (Intel, Apple Silicon).
+
+Supported agents: Claude Code, Codex CLI, Gemini CLI, Cursor, GitHub Copilot CLI, Kiro CLI,
+OpenCode and Aider through their own hooks ([Agents](#agents)); Amp through Herdr state polling
+only. Highlights of v0.2.0: the [TUI](#tui), a `y/N` confirmation on the host for every
+[pairing](#pairing), pairing without notifications, [`harden-ssh`](#commands), stale-approval
+checks in `respond`, revoke that ends the phone's live sessions, [`usage`](#usage),
+[mirroring](#mirroring) with `attach herdr`, and signed releases required by the installer.
 
 ## Install
 
@@ -35,7 +42,7 @@ also run `sh install.sh --from-source` or `--binary <path>`.
 | `--dry-run` | Print every step, change nothing |
 | `--from-source` | `cargo install --git https://github.com/lesquel/openmosh-hook --locked`, with `--tag <tag>` when `--version` is given (else the default branch); the repository is private for now, so this uses your git credentials |
 | `--binary <path>` | Install a binary you already built |
-| `--version <tag>` | Release to download (default: latest), with `gh` or curl/wget |
+| `--version <tag>` | Release to download, `vX.Y.Z` or a pre-release `vX.Y.Z-rc.N` (default: the latest stable release), with `gh` or curl/wget |
 | `--yes` | Accept the offers to install Herdr / Tailscale with their official installers |
 | `--no-service` | Skip `openmosh-hook service install` |
 | `--insecure-no-signature` | Skip the signature check (checksums only); prints a warning. Not recommended |
@@ -111,7 +118,7 @@ else (it would recreate state); quit with `q`.
 
 | Command | Purpose |
 |---|---|
-| `openmosh-hook serve` | Daemon (systemd user service / launchd agent): poll Herdr every second, record `blocked` → `approval_required` and `done` → `done`, publish encrypted pushes |
+| `openmosh-hook serve` | Daemon (systemd user service / launchd agent): poll Herdr every second while an agent works or waits (every 5 s when all are idle), record `blocked` → `approval_required` and `done` → `done`, publish encrypted pushes |
 | `openmosh-hook emit --source <name> [--kind <kind>] [--json]` | Record an event from an agent hook; the hook JSON comes on stdin. The pane is taken from `$HERDR_PANE_ID` (when `$HERDR_ENV=1`) or `$TMUX_PANE`. `--kind approval_required\|question\|done\|notification` fixes the kind for agents whose payload does not say it; the payload is then optional (only its message is kept, and a terminal on stdin is not read). `notification` becomes `approval_required` when the payload is about a permission, else `question` |
 | `openmosh-hook pair [--alias <name>] [--timeout <secs>] [--invert] [--uri] [--yes]` | QR pairing (see below). Asks `Pair "<name>" from <node> (<ip>)? [y/N]` before authorizing the phone; `--yes` skips that (required without a terminal). `--invert` renders dark-on-light; `--uri` also prints the pairing URI, which carries the one-time token |
 | `openmosh-hook pair-ssh --json` | Pairing over an existing SSH session; request `{"name","ppk","endpoint"}` on stdin, returns `{"device_id","alias","hpk"}` |
@@ -372,6 +379,8 @@ which downloads nothing but `SHA256SUMS`, runs no third-party action, installs `
 crate whose SHA-256 is pinned in the workflow (with its locked dependencies), writes the key to
 `$RUNNER_TEMP` with umask `077`, deletes it right after signing, and checks the signature
 against the committed [`minisign.pub`](./minisign.pub), so a mismatched secret fails the release.
+Tags with a `-` (`v0.2.0-rc.1`) are published as GitHub pre-releases and never marked "latest",
+so the installer's default skips them; see [`CONTRIBUTING.md`](./CONTRIBUTING.md#releases).
 Every action in every workflow is pinned to a full commit SHA (CI fails otherwise; Dependabot
 proposes updates), the release uses only `actions/*` actions plus `rustup` and `gh`, and it
 caches nothing.
