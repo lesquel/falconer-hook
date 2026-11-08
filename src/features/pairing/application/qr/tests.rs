@@ -85,7 +85,7 @@ impl World {
             &self.ids,
             pre,
             facts,
-            TOKEN,
+            Zeroizing::new(TOKEN),
             300,
         )
     }
@@ -112,6 +112,15 @@ fn preflight_refuses_when_tailscale_is_not_running() {
     assert_eq!(Preflight::check(&t), Err(PairError::TailscaleNotRunning));
     t.missing = true;
     assert_eq!(Preflight::check(&t), Err(PairError::TailscaleMissing));
+}
+
+#[test]
+fn preflight_refuses_a_tagged_host() {
+    let mut t = FakeTailnet::running("me@example.com", &[]);
+    t.status.tagged = true;
+    let err = Preflight::check(&t).unwrap_err();
+    assert_eq!(err, PairError::TaggedHost);
+    assert_eq!(err.code(), "tailscale_tagged");
 }
 
 #[test]
@@ -185,6 +194,12 @@ fn every_rejection_path_in_order() {
         reason(p.handle(ip(PHONE), || Some(request(&[0u8; 32], |_| {})))),
         "decrypt_failed"
     );
+    assert_eq!(reason(p.handle(ip(PHONE), || None)), "read_failed");
+    // Network-level rejections above did not count; two failures so far.
+    assert!(!p.is_closed());
+    let line = request(&TOKEN, |r| r.tok = b64u_encode(&[9u8; 32]));
+    assert_eq!(reason(p.handle(ip(PHONE), || Some(line))), "token_mismatch");
+    assert_eq!(reason(p.handle(ip(PHONE), || None)), "read_failed");
     assert_eq!(reason(p.handle(ip(PHONE), || None)), "read_failed");
     // Five failures: closed, even a perfect request is now refused.
     assert!(p.is_closed());
@@ -261,4 +276,58 @@ fn whois_error_is_a_rejection() {
         reason(p.handle(ip(PHONE), || Some(request(&TOKEN, |_| {})))),
         "whois_failed"
     );
+}
+
+#[test]
+fn network_rejections_do_not_spend_the_failure_budget() {
+    let w = World::new();
+    let mut p = w.pairing();
+    let never_read = || -> Option<String> { panic!("must not read from an unverified peer") };
+    for _ in 0..20 {
+        assert_eq!(reason(p.handle(ip("10.0.0.9"), never_read)), "not_tailnet");
+        assert_eq!(
+            reason(p.handle(ip("100.101.9.9"), never_read)),
+            "whois_mismatch"
+        );
+    }
+    assert!(!p.is_closed());
+    let Attempt::Paired { .. } = p.handle(ip(PHONE), || Some(request(&TOKEN, |_| {}))) else {
+        panic!("a legitimate phone must still pair")
+    };
+
+    let mut w = World::new();
+    w.tailnet.whois_fails = true;
+    let mut p = w.pairing();
+    for _ in 0..20 {
+        assert_eq!(reason(p.handle(ip(PHONE), never_read)), "whois_failed");
+    }
+    assert!(!p.is_closed());
+}
+
+#[test]
+fn failures_after_whois_spend_the_budget() {
+    let w = World::new();
+    let mut p = w.pairing();
+    for _ in 0..MAX_FAILURES {
+        assert!(!p.is_closed());
+        assert_eq!(reason(p.handle(ip(PHONE), || None)), "read_failed");
+    }
+    assert!(p.is_closed());
+}
+
+#[test]
+fn remaining_time_tracks_expiry() {
+    let w = World::new();
+    let p = w.pairing();
+    assert_eq!(
+        PairSession::remaining(&p),
+        std::time::Duration::from_secs(300)
+    );
+    w.clock.advance(299);
+    assert_eq!(
+        PairSession::remaining(&p),
+        std::time::Duration::from_secs(1)
+    );
+    w.clock.advance(5);
+    assert_eq!(PairSession::remaining(&p), std::time::Duration::ZERO);
 }

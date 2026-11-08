@@ -68,6 +68,16 @@ impl<S: EventStore, K: KeymapSource, C: Clock> RespondToEvent<'_, S, K, C> {
             .keymaps
             .keymap(&event.agent)
             .ok_or(ResponseError::NoKeymap)?;
+        // Claim first: an atomic `pending -> resolved` compare-and-set. Only
+        // the winner of concurrent responses sends anything.
+        let resolved = match self
+            .store
+            .resolve(event_id, action.as_str(), self.clock.now())
+        {
+            Ok(e) => e,
+            Err(StoreError::NotFound) => return Err(ResponseError::AlreadyResolved),
+            Err(e) => return Err(store_err(e)),
+        };
         let delivered = match action {
             Action::Allow => runtime.send_keys(&pane.pane, &keymap.allow),
             Action::Deny => runtime.send_keys(&pane.pane, &keymap.deny),
@@ -82,14 +92,14 @@ impl<S: EventStore, K: KeymapSource, C: Clock> RespondToEvent<'_, S, K, C> {
                 })
             }
         };
-        delivered.map_err(|e| match e {
-            AgentError::Unavailable(_) => ResponseError::RuntimeUnavailable,
-            _ => ResponseError::Delivery,
-        })?;
-        let resolved = self
-            .store
-            .resolve(event_id, action.as_str(), self.clock.now())
-            .map_err(store_err)?;
+        if let Err(e) = delivered {
+            // Nothing reached the agent: give the event back so it can be retried.
+            let _ = self.store.reopen(event_id);
+            return Err(match e {
+                AgentError::Unavailable(_) => ResponseError::RuntimeUnavailable,
+                _ => ResponseError::Delivery,
+            });
+        }
         let pushed = self.notifier.notify_resolved(&resolved);
         Ok(RespondOutcome {
             event_id: resolved.id,
@@ -106,7 +116,7 @@ mod tests {
     use crate::features::agents::domain::fakes::FakeRuntime;
     use crate::features::agents::domain::Runtime;
     use crate::features::events::domain::fakes::{MemStore, RecordingNotifier};
-    use crate::features::events::domain::{NewEvent, PaneRef};
+    use crate::features::events::domain::{Event, NewEvent, PaneRef};
     use crate::features::responses::domain::Keymap;
     use crate::shared::domain::clock::fakes::FixedClock;
     use crate::shared::domain::error::ErrorCode;
@@ -268,6 +278,72 @@ mod tests {
             "nothing is sent on rejection"
         );
         assert!(r.notifier.resolved.borrow().is_empty());
+    }
+
+    /// Simulates another `respond` resolving the event between our read and our claim.
+    struct RacyStore(MemStore);
+    impl EventStore for RacyStore {
+        fn insert(&self, id: &str, e: &NewEvent) -> Result<Event, StoreError> {
+            self.0.insert(id, e)
+        }
+        fn get(&self, id: &str) -> Result<Option<Event>, StoreError> {
+            let stale = self.0.get(id)?;
+            if stale
+                .as_ref()
+                .is_some_and(|e| e.status == EventStatus::Pending)
+            {
+                self.0.resolve(id, "deny", 1)?;
+            }
+            Ok(stale)
+        }
+        fn list_since(&self, s: u64, l: u32) -> Result<Vec<Event>, StoreError> {
+            self.0.list_since(s, l)
+        }
+        fn last_for(&self, p: &str, k: EventKind) -> Result<Option<Event>, StoreError> {
+            self.0.last_for(p, k)
+        }
+        fn pending_for_pane(&self, p: &str) -> Result<Vec<Event>, StoreError> {
+            self.0.pending_for_pane(p)
+        }
+        fn resolve(&self, id: &str, r: &str, at: u64) -> Result<Event, StoreError> {
+            self.0.resolve(id, r, at)
+        }
+        fn reopen(&self, id: &str) -> Result<(), StoreError> {
+            self.0.reopen(id)
+        }
+        fn purge_before(&self, ts: u64) -> Result<u64, StoreError> {
+            self.0.purge_before(ts)
+        }
+    }
+
+    #[test]
+    fn concurrent_loser_sends_nothing() {
+        let r = Rig::new();
+        let racy = RacyStore(MemStore::default());
+        seed(
+            &racy.0,
+            "a",
+            EventKind::ApprovalRequired,
+            "claude",
+            Some((Runtime::Herdr, "w1:p1")),
+        );
+        let rts: [&dyn AgentRuntime; 1] = [&r.herdr];
+        let uc = RespondToEvent {
+            store: &racy,
+            keymaps: &Maps,
+            clock: &r.clock,
+            runtimes: &rts,
+            notifier: &r.notifier,
+        };
+        let err = uc.respond("a", Action::Allow, None).unwrap_err();
+        assert_eq!(err, ResponseError::AlreadyResolved);
+        assert_eq!(err.code(), "already_resolved");
+        assert!(r.herdr.sent.borrow().is_empty(), "loser must not send keys");
+        assert!(r.notifier.resolved.borrow().is_empty());
+        assert_eq!(
+            racy.0.get("a").unwrap().unwrap().resolution.as_deref(),
+            Some("deny")
+        );
     }
 
     #[test]

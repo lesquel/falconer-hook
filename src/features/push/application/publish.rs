@@ -7,6 +7,7 @@ use crate::features::push::domain::{
     PostOutcome, PushPlaintext, PushPublisher, PushTarget, Sealer,
 };
 use crate::shared::domain::encoding::b64u_decode_array;
+use crate::shared::domain::error::ErrorCode;
 use crate::shared::infrastructure::log::{log, Field, Level};
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -39,13 +40,19 @@ impl<R: DeviceRegistry, S: Sealer, P: PushPublisher> PublishEvent<'_, R, S, P> {
             };
             let target = PushTarget {
                 device_id: device.id.clone(),
-                ppk,
+                ppk: *ppk,
                 endpoint: device.endpoint.clone(),
             };
             let body = match self.sealer.seal(&target, plaintext) {
                 Ok(b) => b,
-                Err(_) => {
+                Err(e) => {
                     report.failed += 1;
+                    // Code only (e.g. `push_too_large`); never the body or device.
+                    log(
+                        Level::Warn,
+                        "push sealing failed",
+                        &[("reason", Field::Code(e.code()))],
+                    );
                     continue;
                 }
             };

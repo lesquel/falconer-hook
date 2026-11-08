@@ -1,7 +1,9 @@
 //! `~/.ssh/authorized_keys` adapter. Changes are written atomically (temp
-//! file + rename) under an exclusive lock; a new file is created `0600` and
-//! a missing `~/.ssh` is created `0700`. Symlinks are followed so dotfile
-//! managers keep working.
+//! file + rename) under an exclusive lock. The file is always left `0600`
+//! and its directory `0700` (an existing looser mode is tightened, as
+//! sshd's StrictModes expects). A symlinked file is followed so dotfile
+//! managers keep working (the real target is rewritten and tightened); a
+//! dangling symlink is refused rather than replaced.
 
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
@@ -25,30 +27,51 @@ fn io(path: &Path, e: std::io::Error) -> RegistryError {
 }
 
 impl FileAuthorizedKeys {
-    /// Resolves the real file and returns its contents and mode.
+    /// Creates the directory `0700`, or tightens an existing one to `0700`.
+    fn private_dir(dir: &Path) -> Result<(), RegistryError> {
+        if !dir.exists() {
+            fs::DirBuilder::new()
+                .recursive(true)
+                .create(dir)
+                .map_err(|e| io(dir, e))?;
+        }
+        let mode = fs::metadata(dir)
+            .map_err(|e| io(dir, e))?
+            .permissions()
+            .mode()
+            & 0o777;
+        if mode != 0o700 {
+            fs::set_permissions(dir, fs::Permissions::from_mode(0o700)).map_err(|e| io(dir, e))?;
+        }
+        Ok(())
+    }
+
+    /// Resolves the real file and returns its contents and the mode to write (`0600`).
     fn load(&self) -> Result<(PathBuf, String, u32), RegistryError> {
+        if let Some(dir) = self.path.parent() {
+            Self::private_dir(dir)?;
+        }
+        let link = fs::symlink_metadata(&self.path)
+            .map(|m| m.file_type().is_symlink())
+            .unwrap_or(false);
         if !self.path.exists() {
-            if let Some(dir) = self.path.parent() {
-                if !dir.exists() {
-                    fs::DirBuilder::new()
-                        .recursive(true)
-                        .create(dir)
-                        .map_err(|e| io(dir, e))?;
-                    fs::set_permissions(dir, fs::Permissions::from_mode(0o700))
-                        .map_err(|e| io(dir, e))?;
-                }
+            if link {
+                return Err(RegistryError::Storage(
+                    format!("{} is a dangling symlink", self.path.display()),
+                    "io_error",
+                ));
             }
             return Ok((self.path.clone(), String::new(), 0o600));
         }
         let real = fs::canonicalize(&self.path).map_err(|e| io(&self.path, e))?;
+        if !fs::metadata(&real).map_err(|e| io(&real, e))?.is_file() {
+            return Err(RegistryError::Storage(
+                format!("{} is not a regular file", real.display()),
+                "io_error",
+            ));
+        }
         let text = fs::read_to_string(&real).map_err(|e| io(&real, e))?;
-        let mode = fs::metadata(&real)
-            .map_err(|e| io(&real, e))?
-            .permissions()
-            .mode()
-            & 0o777;
-        // Never widen; tighten anything group/other-writable.
-        Ok((real, text, mode & !0o022))
+        Ok((real, text, 0o600))
     }
 }
 
@@ -121,9 +144,10 @@ mod tests {
     }
 
     #[test]
-    fn preserves_existing_lines_and_mode() {
+    fn preserves_existing_lines_and_tightens_modes() {
         let t = tempfile::tempdir().unwrap();
         fs::create_dir(t.path().join(".ssh")).unwrap();
+        fs::set_permissions(t.path().join(".ssh"), fs::Permissions::from_mode(0o755)).unwrap();
         let p = t.path().join(".ssh/authorized_keys");
         fs::write(&p, "ssh-ed25519 AAAAuser laptop").unwrap();
         fs::set_permissions(&p, fs::Permissions::from_mode(0o644)).unwrap();
@@ -140,8 +164,58 @@ mod tests {
         );
         assert_eq!(
             fs::metadata(&p).unwrap().permissions().mode() & 0o777,
-            0o644
+            0o600
+        );
+        assert_eq!(
+            fs::metadata(t.path().join(".ssh"))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o700
         );
         assert!(ak.append("a\nb").is_err());
+    }
+
+    #[test]
+    fn symlinked_file_is_followed_and_its_target_tightened() {
+        let t = tempfile::tempdir().unwrap();
+        fs::create_dir(t.path().join(".ssh")).unwrap();
+        let real = t.path().join("dotfiles_keys");
+        fs::write(&real, "ssh-ed25519 AAAAuser laptop\n").unwrap();
+        fs::set_permissions(&real, fs::Permissions::from_mode(0o640)).unwrap();
+        let p = t.path().join(".ssh/authorized_keys");
+        std::os::unix::fs::symlink(&real, &p).unwrap();
+        let ak = FileAuthorizedKeys {
+            path: p.clone(),
+            lock_path: t.path().join(".lock"),
+        };
+        ak.append(&authorized_keys_line(KEY, "AAAAAAAAAAAAAAAAAAAA01"))
+            .unwrap();
+        assert!(fs::symlink_metadata(&p).unwrap().file_type().is_symlink());
+        assert!(fs::read_to_string(&real)
+            .unwrap()
+            .contains("openmosh:AAAAAAAAAAAAAAAAAAAA01"));
+        assert_eq!(
+            fs::metadata(&real).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+    }
+
+    #[test]
+    fn refuses_a_dangling_symlink() {
+        let t = tempfile::tempdir().unwrap();
+        fs::create_dir(t.path().join(".ssh")).unwrap();
+        let p = t.path().join(".ssh/authorized_keys");
+        std::os::unix::fs::symlink(t.path().join("nowhere/keys"), &p).unwrap();
+        let ak = FileAuthorizedKeys {
+            path: p.clone(),
+            lock_path: t.path().join(".lock"),
+        };
+        assert!(ak
+            .append(&authorized_keys_line(KEY, "AAAAAAAAAAAAAAAAAAAA01"))
+            .is_err());
+        assert!(fs::symlink_metadata(&p).unwrap().file_type().is_symlink());
+        assert!(!t.path().join("nowhere").exists());
     }
 }

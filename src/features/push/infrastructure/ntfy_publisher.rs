@@ -1,5 +1,6 @@
 //! UnifiedPush / ntfy publisher: one HTTPS POST of the encrypted body.
-//! No redirects are followed, 10 s timeout; `404`/`410` mean the endpoint is stale.
+//! No redirects are followed, environment proxies are ignored, 10 s timeout,
+//! generic `User-Agent: openmosh` (no version); `404`/`410` mean the endpoint is stale.
 
 use std::time::Duration;
 
@@ -15,7 +16,8 @@ impl HttpPublisher {
             .redirect(reqwest::redirect::Policy::none())
             .timeout(Duration::from_secs(10))
             .connect_timeout(Duration::from_secs(10))
-            .user_agent(concat!("openmosh-hook/", env!("CARGO_PKG_VERSION")))
+            .no_proxy()
+            .user_agent("openmosh")
             .build()?;
         Ok(Self { client })
     }
@@ -109,6 +111,36 @@ mod tests {
         assert_eq!(p.send(&url, "{}"), PostOutcome::Stale);
         let (url, _rx) = serve_once("500 Internal Server Error", "");
         assert_eq!(p.send(&url, "{}"), PostOutcome::Failed("http_status"));
+    }
+
+    #[test]
+    fn user_agent_is_generic() {
+        let p = HttpPublisher::new().unwrap();
+        let (url, rx) = serve_once("200 OK", "");
+        assert_eq!(p.send(&url, "{}"), PostOutcome::Delivered);
+        let req = rx.recv().unwrap().to_ascii_lowercase();
+        assert!(req.contains("\r\nuser-agent: openmosh\r\n"), "{req}");
+    }
+
+    #[test]
+    fn environment_proxies_are_ignored() {
+        // A dead proxy: if it were used, delivery would fail.
+        for k in ["NO_PROXY", "no_proxy"] {
+            std::env::remove_var(k);
+        }
+        for k in [
+            "HTTP_PROXY",
+            "http_proxy",
+            "HTTPS_PROXY",
+            "https_proxy",
+            "ALL_PROXY",
+            "all_proxy",
+        ] {
+            std::env::set_var(k, "http://127.0.0.1:9");
+        }
+        let p = HttpPublisher::new().unwrap();
+        let (url, _rx) = serve_once("200 OK", "");
+        assert_eq!(p.send(&url, "{}"), PostOutcome::Delivered);
     }
 
     #[test]

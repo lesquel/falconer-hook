@@ -79,16 +79,25 @@ pub fn open(
         .map_err(|_| CryptoError::Open)
 }
 
-/// `N` bytes from the operating system CSPRNG.
-pub fn random_bytes<const N: usize>() -> [u8; N] {
-    let mut b = [0u8; N];
-    OsRng.fill_bytes(&mut b);
+/// `N` bytes from the operating system CSPRNG, wiped from memory on drop
+/// (used for tokens and keys as well as nonces).
+pub fn random_bytes<const N: usize>() -> Zeroizing<[u8; N]> {
+    let mut b = Zeroizing::new([0u8; N]);
+    OsRng.fill_bytes(b.as_mut());
     b
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn random_secrets_are_zeroizing() {
+        let a: Zeroizing<[u8; 32]> = random_bytes::<32>();
+        let b = random_bytes::<32>();
+        assert_ne!(*a, *b);
+        assert_ne!(*a, [0u8; 32]);
+    }
 
     #[test]
     fn dh_is_symmetric() {

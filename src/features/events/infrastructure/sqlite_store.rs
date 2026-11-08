@@ -189,12 +189,31 @@ impl EventStore for SqliteEventStore {
                     params![id, seq, at as i64, resolution],
                 )
                 .map_err(db_err)?;
-            if n == 0 {
+            if n != 1 {
                 return Err(StoreError::NotFound);
             }
             tx.commit().map_err(db_err)?;
         }
         self.get(id)?.ok_or(StoreError::NotFound)
+    }
+
+    fn reopen(&self, id: &str) -> Result<(), StoreError> {
+        let mut conn = self.conn.borrow_mut();
+        let tx = conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(db_err)?;
+        let seq = next_seq(&tx).map_err(db_err)?;
+        let n = tx
+            .execute(
+                "UPDATE events SET status = 'pending', seq = ?2, resolved_at = NULL, resolution = NULL
+                 WHERE id = ?1 AND status = 'resolved'",
+                params![id, seq],
+            )
+            .map_err(db_err)?;
+        if n != 1 {
+            return Err(StoreError::NotFound);
+        }
+        tx.commit().map_err(db_err)
     }
 
     fn purge_before(&self, ts: u64) -> Result<u64, StoreError> {
@@ -224,6 +243,30 @@ mod tests {
             }),
             created_at: at,
         }
+    }
+
+    #[test]
+    fn resolve_is_compare_and_set_across_connections() {
+        let t = tempfile::tempdir().unwrap();
+        let p = t.path().join("events.db");
+        let a = SqliteEventStore::open(&p).unwrap();
+        let b = SqliteEventStore::open(&p).unwrap();
+        a.insert("e", &new(EventKind::ApprovalRequired, "w1:p1", 10))
+            .unwrap();
+        let won = a.resolve("e", "allow", 20).unwrap();
+        assert!(matches!(
+            b.resolve("e", "deny", 21),
+            Err(StoreError::NotFound)
+        ));
+        let e = b.get("e").unwrap().unwrap();
+        assert_eq!(e.resolution.as_deref(), Some("allow"));
+
+        b.reopen("e").unwrap();
+        let e = a.get("e").unwrap().unwrap();
+        assert_eq!(e.status, EventStatus::Pending);
+        assert_eq!((e.resolution, e.resolved_at), (None, None));
+        assert!(e.seq > won.seq, "reopen gets a new seq");
+        assert!(matches!(a.reopen("e"), Err(StoreError::NotFound)));
     }
 
     #[test]

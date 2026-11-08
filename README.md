@@ -63,20 +63,25 @@ Exit code is `0` on success and `1` on error. Messages never contain secrets. Er
 `invalid_input`, `not_found`, `already_resolved`, `text_too_long`, `no_pane`, `no_keymap`,
 `runtime_unavailable`, `runtime_error`, `invalid_endpoint`, `permissions_too_open`,
 `config_error`, `io_error`, `store_error`, `registry_corrupt`, `storage_error`,
-`tailscale_missing`, `tailscale_not_running`, `tailscale_error`, `ssh_host_key_missing`,
+`tailscale_missing`, `tailscale_not_running`, `tailscale_tagged`, `tailscale_error`, `ssh_host_key_missing`,
 `listen_failed`, `pair_closed`, `pair_cancelled`, `settings_invalid`, `service_error`, `internal`.
 
 ## Pairing
 
-**QR (primary).** `openmosh-hook pair` refuses to run unless Tailscale is up. It binds a listener
+**QR (primary).** `openmosh-hook pair` refuses to run unless Tailscale is up and this host is a
+node owned by your user (a tagged node is refused with `tailscale_tagged`). It binds a listener
 to the host's Tailscale IPv4 on an ephemeral port and shows a QR with the host's address, SSH
 host key fingerprint, X25519 public key and a one-time token valid for 5 minutes. For every
 connection it checks, in order: the peer is in `100.64.0.0/10`, `tailscale whois` reports the same
-login as this host, the request decrypts, the token matches, it has not expired or been used, the
-SSH key is a valid `ssh-ed25519` key and the push endpoint is acceptable. Every failure gets the
-same `pair_rejected` answer; after 5 failures, on timeout or on Ctrl+C the token is burned and the
-command exits 1. On success the phone's key is appended to `~/.ssh/authorized_keys` restricted to
-the tailnet:
+login as this host and the peer is not a tagged node, the request decrypts, the token matches, it
+has not expired or been used, the SSH key is a valid `ssh-ed25519` key and the push endpoint is
+acceptable. The whole request must arrive within 10 s (or the time left before expiry, if less).
+Device names lose control, invisible formatting (bidi, zero-width) and line-separator characters
+and are capped at 64 characters. Every failure gets the same `pair_rejected` answer; after 5
+failures from a peer that passed the network checks (other addresses and other users' nodes do
+not count), on timeout or on Ctrl+C the token is burned and the command exits 1. On success the phone's key is appended to `~/.ssh/authorized_keys` restricted to
+the tailnet (the file is left `0600` and `~/.ssh` `0700`; a symlinked file is followed, a dangling
+symlink is refused):
 
 ```text
 from="100.64.0.0/10,fd7a:115c:a1e0::/48",no-agent-forwarding,no-X11-forwarding ssh-ed25519 AAAA… openmosh:<device_id>
@@ -86,7 +91,14 @@ from="100.64.0.0/10,fd7a:115c:a1e0::/48",no-agent-forwarding,no-X11-forwarding s
 host over SSH with its own key; no key is added.
 
 Push endpoints must be `https://`; `http://` is accepted only for a `100.64.0.0/10` address or a
-`*.ts.net` name. Redirects are never followed; `404`/`410` mark the device `endpoint_stale`.
+`*.ts.net` name. URLs with credentials, and loopback (`127.0.0.0/8`, `::1`, `localhost`),
+link-local, unspecified, multicast or broadcast hosts are refused. Pushes ignore proxy environment
+variables, send `User-Agent: openmosh`, never follow redirects, and `404`/`410` mark the device
+`endpoint_stale`.
+
+`respond` claims the event atomically before sending anything, so of two concurrent answers only
+one reaches the agent; the other gets `already_resolved`. `integration install` run from a new
+executable path repoints the existing hooks at it.
 
 ## Files
 

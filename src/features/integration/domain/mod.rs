@@ -2,7 +2,8 @@
 //!
 //! Adds one `{"type":"command","command":"<exe> emit --source claude"}` hook
 //! under `hooks.Notification` and `hooks.Stop`. Unrelated keys and hooks are
-//! preserved; both operations are idempotent.
+//! preserved; both operations are idempotent. Installing again from a
+//! different executable path repoints our hook commands at it.
 
 use serde_json::{json, Map, Value};
 use thiserror::Error;
@@ -56,7 +57,9 @@ fn hooks_obj(settings: &mut Value) -> Result<&mut Map<String, Value>, Integratio
         .ok_or(IntegrationError::BadHooks)
 }
 
-/// Adds the hooks. Returns whether `settings` changed.
+/// Adds the hooks, or repoints ours at `command` when they name another
+/// executable path (e.g. after the binary moved). Returns whether
+/// `settings` changed.
 pub fn install(settings: &mut Value, command: &str) -> Result<bool, IntegrationError> {
     let hooks = hooks_obj(settings)?;
     let mut changed = false;
@@ -66,11 +69,19 @@ pub fn install(settings: &mut Value, command: &str) -> Result<bool, IntegrationE
             .or_insert_with(|| json!([]))
             .as_array_mut()
             .ok_or(IntegrationError::BadHooks)?;
-        let present = groups.iter().any(|g| {
-            g.get("hooks")
-                .and_then(Value::as_array)
-                .is_some_and(|hs| hs.iter().any(is_ours))
-        });
+        let mut present = false;
+        for g in groups.iter_mut() {
+            let Some(hs) = g.get_mut("hooks").and_then(Value::as_array_mut) else {
+                continue;
+            };
+            for h in hs.iter_mut().filter(|h| is_ours(h)) {
+                present = true;
+                if h.get("command").and_then(Value::as_str) != Some(command) {
+                    h["command"] = Value::String(command.to_string());
+                    changed = true;
+                }
+            }
+        }
         if !present {
             groups.push(json!({"hooks": [{"type": "command", "command": command}]}));
             changed = true;
@@ -142,6 +153,24 @@ mod tests {
             s["hooks"]["Notification"][0]["hooks"][0],
             json!({"type": "command", "command": CMD})
         );
+    }
+
+    #[test]
+    fn install_repoints_a_stale_executable_path() {
+        let old = "'/old/place/openmosh-hook' emit --source claude";
+        let mut s = json!({"hooks": {
+            "Stop": [{"hooks": [{"type": "command", "command": "notify-send done"}, {"type": "command", "command": old}]}],
+            "Notification": [{"hooks": [{"type": "command", "command": CMD}]}]
+        }});
+        assert!(install(&mut s, CMD).unwrap());
+        assert_eq!(
+            s["hooks"]["Stop"][0]["hooks"][0]["command"],
+            "notify-send done"
+        );
+        assert_eq!(s["hooks"]["Stop"][0]["hooks"][1]["command"], CMD);
+        assert_eq!(s["hooks"]["Stop"].as_array().unwrap().len(), 1);
+        assert_eq!(s["hooks"]["Notification"][0]["hooks"][0]["command"], CMD);
+        assert!(!install(&mut s, CMD).unwrap(), "idempotent once repointed");
     }
 
     #[test]

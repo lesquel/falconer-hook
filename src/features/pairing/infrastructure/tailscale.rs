@@ -29,6 +29,8 @@ struct SelfNode {
     user_id: u64,
     #[serde(rename = "DNSName", default)]
     dns_name: String,
+    #[serde(default)]
+    tags: Option<Vec<String>>,
 }
 #[derive(Deserialize)]
 #[serde(rename_all = "PascalCase")]
@@ -38,7 +40,21 @@ struct UserProfile {
 #[derive(Deserialize)]
 #[serde(rename_all = "PascalCase")]
 struct Whois {
+    node: Option<WhoisNode>,
     user_profile: Option<UserProfile>,
+}
+#[derive(Deserialize)]
+#[serde(rename_all = "PascalCase")]
+struct WhoisNode {
+    #[serde(default)]
+    tags: Option<Vec<String>>,
+}
+
+/// `LoginName` Tailscale reports for nodes owned by tags instead of a user.
+pub const TAGGED_LOGIN: &str = "tagged-devices";
+
+fn has_tags(tags: &Option<Vec<String>>) -> bool {
+    tags.as_ref().is_some_and(|t| !t.is_empty())
 }
 
 pub fn parse_status(stdout: &str) -> Result<TailnetStatus, TailnetError> {
@@ -53,18 +69,26 @@ pub fn parse_status(stdout: &str) -> Result<TailnetStatus, TailnetError> {
         .as_ref()
         .map(|n| n.dns_name.trim_end_matches('.').to_string())
         .filter(|d| !d.is_empty());
+    let tagged = s.self_node.as_ref().is_some_and(|n| has_tags(&n.tags))
+        || login_name.as_deref() == Some(TAGGED_LOGIN);
     Ok(TailnetStatus {
         running: s.backend_state == "Running",
         login_name,
         dns_name,
+        tagged,
     })
 }
 
+/// Owner login of a whois result. Tagged nodes and results without a
+/// `Node` or `UserProfile` have none, so they can never match the host.
 pub fn parse_whois(stdout: &str) -> Option<String> {
     let w: Whois = serde_json::from_str(stdout).ok()?;
+    if has_tags(&w.node?.tags) {
+        return None;
+    }
     w.user_profile
         .map(|u| u.login_name)
-        .filter(|l| !l.is_empty())
+        .filter(|l| !l.is_empty() && l != TAGGED_LOGIN)
 }
 
 impl TailscaleCli<'_> {
@@ -130,6 +154,34 @@ mod tests {
         assert_eq!(s.dns_name.as_deref(), Some("box.tailnet-example.ts.net"));
         let stopped = parse_status(r#"{"BackendState":"Stopped","Self":null,"User":null}"#);
         assert!(stopped.is_err() || !stopped.unwrap().running);
+    }
+
+    #[test]
+    fn tagged_host_is_flagged() {
+        let tagged = r#"{"BackendState":"Running","Self":{"UserID":1,"DNSName":"box.ts.net.","Tags":["tag:server"]},"User":{"1":{"LoginName":"tagged-devices"}}}"#;
+        assert!(parse_status(tagged).unwrap().tagged);
+        let by_login = r#"{"BackendState":"Running","Self":{"UserID":1},"User":{"1":{"LoginName":"tagged-devices"}}}"#;
+        assert!(parse_status(by_login).unwrap().tagged);
+        assert!(!parse_status(STATUS).unwrap().tagged);
+    }
+
+    #[test]
+    fn tagged_or_incomplete_peers_have_no_login() {
+        for bad in [
+            r#"{"Node":{"Tags":["tag:phone"]},"UserProfile":{"LoginName":"me@example.com"}}"#,
+            r#"{"Node":{},"UserProfile":{"LoginName":"tagged-devices"}}"#,
+            r#"{"UserProfile":{"LoginName":"me@example.com"}}"#,
+            r#"{"Node":{}}"#,
+            r#"{"Node":{},"UserProfile":{"LoginName":""}}"#,
+            "not json",
+        ] {
+            assert_eq!(parse_whois(bad), None, "{bad}");
+        }
+        assert_eq!(
+            parse_whois(r#"{"Node":{"Tags":[]},"UserProfile":{"LoginName":"me@example.com"}}"#)
+                .as_deref(),
+            Some("me@example.com")
+        );
     }
 
     #[test]

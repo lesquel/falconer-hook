@@ -910,6 +910,7 @@ dependencies = [
  "tempfile",
  "thiserror",
  "toml",
+ "url",
  "x25519-dalek",
  "zeroize",
 ]

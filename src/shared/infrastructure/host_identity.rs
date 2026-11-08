@@ -14,12 +14,9 @@ pub struct HostIdentity {
 }
 
 impl HostIdentity {
-    pub fn from_secret(secret: [u8; 32]) -> Self {
+    pub fn from_secret(secret: Zeroizing<[u8; 32]>) -> Self {
         let public = public_key(&secret);
-        Self {
-            secret: Zeroizing::new(secret),
-            public,
-        }
+        Self { secret, public }
     }
 
     pub fn public(&self) -> [u8; 32] {
@@ -47,7 +44,7 @@ impl HostIdentity {
             return Ok(Self::from_secret(secret));
         }
         let secret = random_bytes::<32>();
-        let text = Zeroizing::new(format!("{}\n", b64u_encode(&secret)));
+        let text = Zeroizing::new(format!("{}\n", b64u_encode(secret.as_slice())));
         write_atomic(path, text.as_bytes(), 0o600)?;
         Ok(Self::from_secret(secret))
     }

@@ -50,8 +50,8 @@ Cross-feature calls go through another feature's `domain` ports (for example `pu
 
 ## Rules
 
-1. `domain/` depends on `std`, `serde` and `thiserror`, plus the pure crates `base64`, `serde_json` and
-   `subtle` (no I/O). Crypto, SQLite, HTTP, TOML and processes live in `infrastructure/`.
+1. `domain/` depends on `std`, `serde` and `thiserror`, plus the pure crates `base64`, `serde_json`,
+   `subtle`, `url` and `zeroize` (no I/O). Crypto, SQLite, HTTP, TOML and processes live in `infrastructure/`.
 2. `application/` is generic over port traits and fully unit-testable with fakes.
 3. Only `main.rs` and `app/` know concrete adapter types.
 4. Every subcommand used by the app prints the JSON envelope with `--json`.

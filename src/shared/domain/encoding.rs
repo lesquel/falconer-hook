@@ -1,8 +1,9 @@
-//! Wire encodings and constant-time comparison. `base64` and `subtle` are
-//! pure, I/O-free crates allowed in `domain` (see ARCHITECTURE.md).
+//! Wire encodings and constant-time comparison. `base64`, `subtle` and
+//! `zeroize` are pure, I/O-free crates allowed in `domain` (see ARCHITECTURE.md).
 
 use base64::engine::general_purpose::{STANDARD_NO_PAD, URL_SAFE_NO_PAD};
 use base64::Engine;
+use zeroize::Zeroizing;
 
 /// base64url without padding (`b64u` in the wire contract).
 pub fn b64u_encode(bytes: &[u8]) -> String {
@@ -14,10 +15,16 @@ pub fn b64u_decode(s: &str) -> Option<Vec<u8>> {
     URL_SAFE_NO_PAD.decode(s.as_bytes()).ok()
 }
 
-/// Decodes a b64u string that must be exactly `N` bytes long.
-pub fn b64u_decode_array<const N: usize>(s: &str) -> Option<[u8; N]> {
-    let v = b64u_decode(s)?;
-    v.try_into().ok()
+/// Decodes a b64u string that must be exactly `N` bytes long. The result
+/// and the intermediate buffer are wiped on drop (keys pass through here).
+pub fn b64u_decode_array<const N: usize>(s: &str) -> Option<Zeroizing<[u8; N]>> {
+    let v = Zeroizing::new(b64u_decode(s)?);
+    let mut out = Zeroizing::new([0u8; N]);
+    if v.len() != N {
+        return None;
+    }
+    out.copy_from_slice(&v);
+    Some(out)
 }
 
 /// Standard base64 without padding, as printed by `ssh-keygen -lf`.
@@ -57,10 +64,8 @@ mod tests {
     #[test]
     fn decode_array_checks_length() {
         assert!(b64u_decode_array::<2>(&b64u_encode(&[1, 2, 3])).is_none());
-        assert_eq!(
-            b64u_decode_array::<3>(&b64u_encode(&[1, 2, 3])),
-            Some([1, 2, 3])
-        );
+        let decoded: Zeroizing<[u8; 3]> = b64u_decode_array::<3>(&b64u_encode(&[1, 2, 3])).unwrap();
+        assert_eq!(*decoded, [1, 2, 3]);
     }
 
     #[test]

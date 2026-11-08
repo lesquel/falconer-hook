@@ -169,22 +169,20 @@ fn vectors_decrypt_from_the_other_side() {
 
     // Push: the device derives the key from its private key and the host public key.
     let v = build_push();
-    let device: [u8; 32] = b64u_decode_array(&v.device_priv).unwrap();
-    let hpk: [u8; 32] = b64u_decode_array(&v.host_pub).unwrap();
+    let device = b64u_decode_array::<32>(&v.device_priv).unwrap();
+    let hpk = b64u_decode_array::<32>(&v.host_pub).unwrap();
     let k = push_key(&device, &hpk, &v.device_id).unwrap();
     assert_eq!(b64u_encode(&*k), v.key);
     let body: serde_json::Value = serde_json::from_str(&v.body).unwrap();
-    let n: [u8; 24] = b64u_decode_array(body["n"].as_str().unwrap()).unwrap();
+    let n = b64u_decode_array::<24>(body["n"].as_str().unwrap()).unwrap();
     let c = b64u_decode(body["c"].as_str().unwrap()).unwrap();
     let pt = open(&k, &n, &c, b"openmosh/push/v1").unwrap();
     assert_eq!(pt.as_slice(), v.plaintext.as_bytes());
 
     // Pair: the host opens the request line; the phone opens the response.
     let p = build_pair();
-    let host = X25519PairCrypto::new(zeroize::Zeroizing::new(
-        b64u_decode_array(&p.host_priv).unwrap(),
-    ));
-    let token: [u8; 32] = b64u_decode_array(&p.token).unwrap();
+    let host = X25519PairCrypto::new(b64u_decode_array::<32>(&p.host_priv).unwrap());
+    let token = b64u_decode_array::<32>(&p.token).unwrap();
     let (req, k_resp) = host.open_request(&p.req_line, &token).unwrap();
     assert_eq!(serde_json::to_string(&req).unwrap(), p.req_plaintext);
     assert_eq!(b64u_encode(&*k_resp), p.k_resp);

@@ -11,9 +11,11 @@
 //! 7. `ssh_pub` is a valid `ssh-ed25519` key
 //! 8. `endpoint` passes push endpoint validation
 //!
-//! After 5 failed attempts the session closes.
+//! After 5 failed attempts from a verified peer (checks 3 onwards) the
+//! session closes; refusals at checks 1-2 do not count.
 
 use std::net::{IpAddr, Ipv4Addr};
+use std::time::Duration;
 use thiserror::Error;
 use zeroize::Zeroizing;
 
@@ -39,6 +41,8 @@ pub enum PairError {
     TailscaleNotRunning,
     #[error("could not determine this host's Tailscale identity")]
     NoTailnetIdentity,
+    #[error("this host is a tagged Tailscale node; pairing needs a node owned by your user")]
+    TaggedHost,
     #[error("SSH host key not readable; is sshd installed?")]
     NoSshHostKey,
     #[error("invalid pairing request")]
@@ -53,6 +57,7 @@ impl ErrorCode for PairError {
             PairError::TailscaleMissing => "tailscale_missing",
             PairError::TailscaleNotRunning => "tailscale_not_running",
             PairError::NoTailnetIdentity => "tailscale_error",
+            PairError::TaggedHost => "tailscale_tagged",
             PairError::NoSshHostKey => "ssh_host_key_missing",
             PairError::InvalidInput => "invalid_input",
             PairError::Storage => "storage_error",
@@ -78,11 +83,15 @@ pub struct Preflight {
 }
 
 impl Preflight {
-    /// Refuses unless `BackendState == "Running"` and the node has an identity.
+    /// Refuses unless `BackendState == "Running"`, the node is not tagged and
+    /// it has a user identity.
     pub fn check(tailnet: &impl Tailnet) -> Result<Self, PairError> {
         let status = tailnet.status()?;
         if !status.running {
             return Err(PairError::TailscaleNotRunning);
+        }
+        if status.tagged {
+            return Err(PairError::TaggedHost);
         }
         let login_name = status.login_name.ok_or(PairError::NoTailnetIdentity)?;
         let ipv4 = tailnet.ipv4()?;
@@ -147,7 +156,7 @@ where
         ids: &'a I,
         preflight: Preflight,
         facts: HostFacts,
-        token: [u8; 32],
+        token: Zeroizing<[u8; 32]>,
         ttl_secs: u64,
     ) -> Self {
         let expires_at = clock.now() + ttl_secs.min(TOKEN_TTL_SECS);
@@ -160,7 +169,7 @@ where
             ids,
             preflight,
             facts,
-            token: Zeroizing::new(token),
+            token,
             expires_at,
             used: false,
             failures: 0,
@@ -194,6 +203,11 @@ where
         self.used || self.failures >= MAX_FAILURES || self.clock.now() > self.expires_at
     }
 
+    /// Time left before the token expires.
+    pub fn remaining(&self) -> Duration {
+        Duration::from_secs(self.expires_at.saturating_sub(self.clock.now()))
+    }
+
     /// Burns the token (timeout, Ctrl+C or success).
     pub fn burn(&mut self) {
         self.used = true;
@@ -213,13 +227,26 @@ where
                 reason: "too_many_failures",
             };
         }
+        // Network-level refusals do not spend the failure budget, so other
+        // nodes cannot lock the owner's phone out; they never get to send a
+        // byte that is read, and the session still ends at expiry.
         if !is_tailnet_ip(peer) {
-            return self.reject("not_tailnet");
+            return Attempt::Rejected {
+                reason: "not_tailnet",
+            };
         }
         match self.tailnet.whois_login(peer) {
             Ok(Some(login)) if login == self.preflight.login_name => {}
-            Ok(_) => return self.reject("whois_mismatch"),
-            Err(_) => return self.reject("whois_failed"),
+            Ok(_) => {
+                return Attempt::Rejected {
+                    reason: "whois_mismatch",
+                }
+            }
+            Err(_) => {
+                return Attempt::Rejected {
+                    reason: "whois_failed",
+                }
+            }
         }
         let Some(line) = read_line() else {
             return self.reject("read_failed");
@@ -293,6 +320,8 @@ pub trait PairSession {
         read_line: &mut dyn FnMut() -> Option<String>,
     ) -> Attempt;
     fn is_closed(&self) -> bool;
+    /// Time left before the session expires; bounds each connection.
+    fn remaining(&self) -> Duration;
     fn burn(&mut self);
 }
 
@@ -314,6 +343,9 @@ where
     }
     fn is_closed(&self) -> bool {
         QrPairing::is_closed(self)
+    }
+    fn remaining(&self) -> Duration {
+        QrPairing::remaining(self)
     }
     fn burn(&mut self) {
         QrPairing::burn(self)

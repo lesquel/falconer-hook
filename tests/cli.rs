@@ -24,7 +24,7 @@ case "$name $1 $2" in
   "tmux list-sessions"*) printf 'main\t1\n' ;;
   "tailscale status --json") cat "$FAKE_DIR/ts_status.json" ;;
   "tailscale ip -4") cat "$FAKE_DIR/ts_ip" ;;
-  "tailscale whois --json") echo '{"UserProfile":{"LoginName":"me@example.com"}}' ;;
+  "tailscale whois --json") echo '{"Node":{},"UserProfile":{"LoginName":"me@example.com"}}' ;;
   "systemctl --user is-active") echo inactive; exit 3 ;;
 esac
 exit 0
@@ -549,6 +549,57 @@ fn pair_refuses_without_tailscale_running() {
     let out = e.run(&["pair", "--timeout", "10"], None, &[]);
     assert_eq!(out.status.code(), Some(1));
     assert!(String::from_utf8_lossy(&out.stderr).contains("tailscale is not running"));
+}
+
+#[test]
+fn pair_refuses_on_a_tagged_host() {
+    let e = Env::new();
+    fs::write(
+        e.root.join("fake/ts_status.json"),
+        r#"{"BackendState":"Running","Self":{"UserID":1,"DNSName":"box.tail.ts.net.","Tags":["tag:server"]},"User":{"1":{"LoginName":"tagged-devices"}}}"#,
+    )
+    .unwrap();
+    let out = e.run(&["pair", "--timeout", "10"], None, &[]);
+    assert_eq!(out.status.code(), Some(1));
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("tagged Tailscale node"), "{err}");
+    assert!(
+        !e.calls()
+            .iter()
+            .any(|c| c.get(1).map(String::as_str) == Some("ip")),
+        "no listener is prepared"
+    );
+}
+
+#[test]
+fn integration_install_repoints_a_stale_hook_path() {
+    let e = Env::new();
+    let settings = e.root.join("settings.json");
+    fs::write(
+        &settings,
+        r#"{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"'/old/openmosh-hook' emit --source claude"}]}]}}"#,
+    )
+    .unwrap();
+    let s = settings.to_str().unwrap();
+    let args = [
+        "integration",
+        "install",
+        "claude",
+        "--settings",
+        s,
+        "--json",
+    ];
+    let (code, v) = e.json(&args, None, &[]);
+    assert_eq!(ok_data(code, &v)["changed"], true);
+    let installed: Value = serde_json::from_str(&fs::read_to_string(&settings).unwrap()).unwrap();
+    for ev in ["Notification", "Stop"] {
+        let hooks = installed["hooks"][ev].as_array().unwrap();
+        assert_eq!(hooks.len(), 1, "{ev}");
+        let cmd = hooks[0]["hooks"][0]["command"].as_str().unwrap();
+        assert_eq!(cmd, format!("'{BIN}' emit --source claude"));
+    }
+    let (code, v) = e.json(&args, None, &[]);
+    assert_eq!(ok_data(code, &v)["changed"], false);
 }
 
 /// Phone side of the QR pairing wire contract, written independently of the

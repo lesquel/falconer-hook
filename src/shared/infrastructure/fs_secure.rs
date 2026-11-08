@@ -95,7 +95,7 @@ pub fn write_atomic(path: &Path, contents: &[u8], mode: u32) -> Result<(), FsErr
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| "file".into());
     let suffix = crate::shared::domain::encoding::b64u_encode(
-        &crate::shared::infrastructure::crypto::random_bytes::<6>(),
+        crate::shared::infrastructure::crypto::random_bytes::<6>().as_slice(),
     );
     let tmp: PathBuf = dir.join(format!(".{name}.{suffix}.tmp"));
     let result = (|| {

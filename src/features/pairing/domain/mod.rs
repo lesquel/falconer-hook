@@ -80,6 +80,8 @@ pub struct TailnetStatus {
     pub login_name: Option<String>,
     /// MagicDNS name without the trailing dot.
     pub dns_name: Option<String>,
+    /// The node is owned by ACL tags rather than a user.
+    pub tagged: bool,
 }
 
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -199,6 +201,7 @@ pub mod tailnet_fakes {
                     running: true,
                     login_name: Some(login.into()),
                     dns_name: Some("host.tail.ts.net".into()),
+                    tagged: false,
                 },
                 peers: peers
                     .iter()

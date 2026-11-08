@@ -23,7 +23,7 @@ pub struct OsIds;
 
 impl IdGenerator for OsIds {
     fn new_id(&self) -> String {
-        b64u_encode(&random_bytes::<16>())
+        b64u_encode(random_bytes::<16>().as_slice())
     }
 }
 

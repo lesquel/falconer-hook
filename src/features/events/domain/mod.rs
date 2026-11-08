@@ -147,8 +147,12 @@ pub trait EventStore {
     fn last_for(&self, pane: &str, kind: EventKind) -> Result<Option<Event>, StoreError>;
     /// Pending events on `pane`.
     fn pending_for_pane(&self, pane: &str) -> Result<Vec<Event>, StoreError>;
-    /// Marks the event resolved and assigns it a new `seq`.
+    /// Atomically marks a *pending* event resolved and assigns it a new `seq`
+    /// (compare-and-set). `NotFound` when it is missing or no longer pending.
     fn resolve(&self, id: &str, resolution: &str, at: u64) -> Result<Event, StoreError>;
+    /// Returns a resolved event to pending with a new `seq` (undo of a claim
+    /// whose delivery failed).
+    fn reopen(&self, id: &str) -> Result<(), StoreError>;
     /// Deletes events created before `ts`. Returns how many were removed.
     fn purge_before(&self, ts: u64) -> Result<u64, StoreError>;
 }
@@ -365,6 +369,19 @@ pub mod fakes {
             e.resolved_at = Some(at);
             e.resolution = Some(resolution.into());
             Ok(e.clone())
+        }
+        fn reopen(&self, id: &str) -> Result<(), StoreError> {
+            let seq = self.bump();
+            let mut v = self.events.borrow_mut();
+            let e = v
+                .iter_mut()
+                .find(|e| e.id == id && e.status == EventStatus::Resolved)
+                .ok_or(StoreError::NotFound)?;
+            e.status = EventStatus::Pending;
+            e.seq = seq;
+            e.resolved_at = None;
+            e.resolution = None;
+            Ok(())
         }
         fn purge_before(&self, ts: u64) -> Result<u64, StoreError> {
             let mut v = self.events.borrow_mut();

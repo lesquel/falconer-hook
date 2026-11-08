@@ -41,14 +41,49 @@ pub fn authorized_keys_line(normalized_key: &str, device_id: &str) -> String {
     )
 }
 
-/// Device display name: control characters removed, trimmed, ≤ 64 chars.
+/// Maximum device name length, in characters.
+pub const MAX_NAME_CHARS: usize = 64;
+
+/// Unicode format characters (general category `Cf`): bidi controls,
+/// zero-width characters, BOM, soft hyphen, invisible operators and tags.
+fn is_format(c: char) -> bool {
+    matches!(c,
+        '\u{00AD}'
+        | '\u{0600}'..='\u{0605}'
+        | '\u{061C}'
+        | '\u{06DD}'
+        | '\u{070F}'
+        | '\u{0890}'..='\u{0891}'
+        | '\u{08E2}'
+        | '\u{180E}'
+        | '\u{200B}'..='\u{200F}'
+        | '\u{202A}'..='\u{202E}'
+        | '\u{2060}'..='\u{2064}'
+        | '\u{2066}'..='\u{206F}'
+        | '\u{FEFF}'
+        | '\u{FFF9}'..='\u{FFFB}'
+        | '\u{110BD}'
+        | '\u{110CD}'
+        | '\u{13430}'..='\u{1343F}'
+        | '\u{1BCA0}'..='\u{1BCA3}'
+        | '\u{1D173}'..='\u{1D17A}'
+        | '\u{E0001}'
+        | '\u{E0020}'..='\u{E007F}')
+}
+
+/// Device display name: control (`Cc`), format (`Cf`) and line/paragraph
+/// separator (`Zl`, `Zp`) characters removed, trimmed, ≤ 64 characters.
 pub fn sanitize_name(name: &str) -> Option<String> {
-    let clean: String = name.chars().filter(|c| !c.is_control()).collect();
+    let clean: String = name
+        .chars()
+        .filter(|&c| !(c.is_control() || is_format(c) || c == '\u{2028}' || c == '\u{2029}'))
+        .collect();
     let clean = clean.trim();
     if clean.is_empty() {
         return None;
     }
-    Some(clean.chars().take(64).collect())
+    let capped: String = clean.chars().take(MAX_NAME_CHARS).collect();
+    Some(capped.trim_end().to_string())
 }
 
 /// A push public key is a b64u 32-byte X25519 key.
@@ -108,6 +143,20 @@ mod tests {
         );
         assert!(sanitize_name("\n\t ").is_none());
         assert_eq!(sanitize_name(&"x".repeat(100)).unwrap().len(), 64);
+    }
+
+    #[test]
+    fn names_lose_format_and_separator_characters() {
+        // Bidi overrides/isolates, zero-width, BOM, soft hyphen, line/paragraph separators.
+        let tricky = "\u{202E}Pix\u{202A}el\u{2066}\u{2069}\u{200B}\u{200D}\u{200F} \u{FEFF}8\u{00AD}\u{2028}\u{2029}\u{2060}\u{E0041}";
+        assert_eq!(sanitize_name(tricky).as_deref(), Some("Pixel 8"));
+        assert!(sanitize_name("\u{202E}\u{200B}\u{2028}").is_none());
+        // Ordinary non-ASCII text is kept; the cap counts characters, not bytes.
+        assert_eq!(
+            sanitize_name("Teléfono ñ 日本").as_deref(),
+            Some("Teléfono ñ 日本")
+        );
+        assert_eq!(sanitize_name(&"é".repeat(100)).unwrap().chars().count(), 64);
     }
 
     #[test]
