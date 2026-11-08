@@ -191,6 +191,21 @@ fn talks_to_a_fake_herdr_socket() {
 }
 
 #[test]
+fn a_socket_of_another_user_is_not_used() {
+    use std::os::unix::fs::MetadataExt;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("herdr.sock");
+    let _l = std::os::unix::net::UnixListener::bind(&path).unwrap();
+    let me = std::fs::metadata(&path).unwrap().uid();
+    let mut other = HerdrSocket::new(path.clone()).owned_by(me.wrapping_add(1));
+    assert_eq!(other.connect(), Err(MirrorError::Unavailable));
+    let plain = dir.path().join("not-a-socket");
+    std::fs::write(&plain, b"").unwrap();
+    let mut file = HerdrSocket::new(plain).owned_by(me);
+    assert_eq!(file.connect(), Err(MirrorError::Unavailable));
+}
+
+#[test]
 fn missing_socket_is_unavailable() {
     let dir = tempfile::tempdir().unwrap();
     let mut s = HerdrSocket::new(dir.path().join("absent.sock"));

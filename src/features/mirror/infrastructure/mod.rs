@@ -100,6 +100,7 @@ pub struct HerdrSocket {
     sub: Option<UnixStream>,
     buf: Vec<u8>,
     next_id: u64,
+    owner: Option<u32>,
 }
 
 impl HerdrSocket {
@@ -109,10 +110,25 @@ impl HerdrSocket {
             sub: None,
             buf: Vec::new(),
             next_id: 0,
+            owner: None,
         }
     }
 
+    /// Only talks to a socket owned by `uid` (another user's socket on a
+    /// shared path could feed fake focus events or receive ours).
+    pub fn owned_by(mut self, uid: u32) -> Self {
+        self.owner = Some(uid);
+        self
+    }
+
     fn open(&self) -> Result<UnixStream, MirrorError> {
+        use std::os::unix::fs::{FileTypeExt, MetadataExt};
+        if let Some(uid) = self.owner {
+            let m = std::fs::metadata(&self.path).map_err(|_| MirrorError::Unavailable)?;
+            if m.uid() != uid || !m.file_type().is_socket() {
+                return Err(MirrorError::Unavailable);
+            }
+        }
         let s = UnixStream::connect(&self.path).map_err(|_| MirrorError::Unavailable)?;
         s.set_write_timeout(Some(REQUEST_TIMEOUT))
             .map_err(|_| MirrorError::Unavailable)?;

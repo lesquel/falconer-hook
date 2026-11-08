@@ -1,6 +1,6 @@
 //! Filesystem and service checks.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::features::doctor::domain::Check;
 use crate::shared::domain::command::CommandRunner;
@@ -54,19 +54,124 @@ pub fn check_ssh(host_key_pub: &Path) -> Check {
 
 /// Read-only: `sshd -G` effective settings. Password or keyboard-interactive
 /// logins bypass every key restriction OpenMosh adds, so they are a warning.
-pub fn check_sshd_auth(runner: &dyn CommandRunner, sshd: &str) -> Check {
-    match sshd_password_logins(runner, sshd) {
-        Some(effective) => sshd_auth_check(&effective),
+pub fn check_sshd_auth(effective: Option<&str>) -> Check {
+    match effective {
+        Some(effective) => sshd_auth_check(effective),
         None => Check::ok("sshd auth", "not checked (`sshd -G` unavailable)"),
     }
 }
 
+/// The files sshd reads keys from (`authorizedkeysfile` in `sshd -G`), with
+/// `%h`, `%u` and `%%` expanded and relative paths taken from the home.
+/// `None` when a token cannot be expanded here.
+pub fn authorized_keys_files(effective: &str, home: &Path, user: &str) -> Option<Vec<PathBuf>> {
+    let line = effective.lines().find(|l| {
+        l.split_whitespace()
+            .next()
+            .is_some_and(|k| k.eq_ignore_ascii_case("authorizedkeysfile"))
+    })?;
+    let mut out = Vec::new();
+    for tok in line.split_whitespace().skip(1) {
+        if tok.eq_ignore_ascii_case("none") {
+            continue;
+        }
+        let mut p = String::new();
+        let mut chars = tok.chars();
+        while let Some(c) = chars.next() {
+            if c != '%' {
+                p.push(c);
+                continue;
+            }
+            match chars.next()? {
+                '%' => p.push('%'),
+                'h' => p.push_str(&home.to_string_lossy()),
+                'u' => p.push_str(user),
+                _ => return None,
+            }
+        }
+        let path = PathBuf::from(&p);
+        out.push(if path.is_absolute() {
+            path
+        } else {
+            home.join(path)
+        });
+    }
+    Some(out)
+}
+
+/// Read-only: sshd reads the file OpenMosh writes, and no unexpected key was
+/// added after the first phone was paired (keys without an `openmosh:` tag
+/// below the first tagged line).
+pub fn check_authorized_keys(
+    effective: Option<&str>,
+    home: &Path,
+    user: &str,
+    keys: Option<&str>,
+) -> Check {
+    use crate::features::pairing::domain::is_tagged_line;
+    let ours = home.join(".ssh/authorized_keys");
+    if let Some(files) = effective.and_then(|e| authorized_keys_files(e, home, user)) {
+        if !files.contains(&ours) {
+            let list: Vec<String> = files.iter().map(|f| f.display().to_string()).collect();
+            return Check::warn(
+                "authorized keys",
+                format!(
+                    "sshd reads {} but OpenMosh writes {}: paired phones cannot log in",
+                    if list.is_empty() {
+                        "no key file".to_string()
+                    } else {
+                        list.join(" ")
+                    },
+                    ours.display()
+                ),
+            );
+        }
+    }
+    let text = keys.unwrap_or_default();
+    let lines: Vec<&str> = text
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty() && !l.starts_with('#'))
+        .collect();
+    let phones = lines.iter().filter(|l| is_tagged_line(l)).count();
+    let later = lines
+        .iter()
+        .skip_while(|l| !is_tagged_line(l))
+        .filter(|l| !is_tagged_line(l))
+        .count();
+    if later > 0 {
+        return Check::warn(
+            "authorized keys",
+            format!(
+                "{later} key line(s) without an openmosh tag were added after the first phone \
+                 was paired; check that you added them ({})",
+                ours.display()
+            ),
+        );
+    }
+    Check::ok(
+        "authorized keys",
+        format!("{phones} phone key(s) in {}", ours.display()),
+    )
+}
+
 /// `sshd -G` output, or None when it cannot run (sshd outside a non-root
-/// PATH, as on Debian, or an OpenSSH without `-G`).
-pub fn sshd_password_logins(runner: &dyn CommandRunner, sshd: &str) -> Option<String> {
+/// PATH, as on Debian, or an OpenSSH without `-G`). With a user, `-C
+/// user=<u>,host=localhost,addr=127.0.0.1` makes sshd apply its `Match`
+/// blocks for that user, so a `Match` that turns passwords back on is seen.
+pub fn sshd_password_logins(
+    runner: &dyn CommandRunner,
+    sshd: &str,
+    user: Option<&str>,
+) -> Option<String> {
+    let mut args = vec!["-G".to_string()];
+    if let Some(u) = user {
+        args.push("-C".into());
+        args.push(format!("user={u},host=localhost,addr=127.0.0.1"));
+    }
     [sshd, "/usr/sbin/sshd"].iter().find_map(|bin| {
         runner
-            .run(bin, &["-G".to_string()])
+            .run(bin, &args)
             .ok()
             .filter(|o| o.success())
             .map(|o| o.stdout)
@@ -183,6 +288,67 @@ mod tests {
                 "is-active",
                 "openmosh-hook.service"
             ]]
+        );
+    }
+
+    #[test]
+    fn sshd_key_files_must_include_ours() {
+        use crate::features::doctor::domain::Status;
+        let home = Path::new("/home/me");
+        assert_eq!(
+            super::authorized_keys_files(
+                "port 22\nauthorizedkeysfile .ssh/authorized_keys /etc/keys/%u %h/k%%\n",
+                home,
+                "me"
+            )
+            .unwrap(),
+            vec![
+                PathBuf::from("/home/me/.ssh/authorized_keys"),
+                PathBuf::from("/etc/keys/me"),
+                PathBuf::from("/home/me/k%"),
+            ]
+        );
+        assert_eq!(
+            super::authorized_keys_files("authorizedkeysfile %U", home, "me"),
+            None
+        );
+        let elsewhere = super::check_authorized_keys(
+            Some("authorizedkeysfile /etc/ssh/keys/%u\n"),
+            home,
+            "me",
+            None,
+        );
+        assert_eq!(elsewhere.status, Status::Warn);
+        assert!(
+            elsewhere.detail.contains("cannot log in"),
+            "{}",
+            elsewhere.detail
+        );
+        let fine = super::check_authorized_keys(
+            Some("authorizedkeysfile .ssh/authorized_keys .ssh/authorized_keys2\n"),
+            home,
+            "me",
+            Some("ssh-ed25519 AAAA laptop\nrestrict ssh-ed25519 BBBB openmosh:AAAAAAAAAAAAAAAAAAAA01\n"),
+        );
+        assert_eq!(fine.status, Status::Ok, "{}", fine.detail);
+        assert!(fine.detail.starts_with("1 phone key(s)"));
+    }
+
+    #[test]
+    fn keys_added_after_the_first_pairing_are_flagged() {
+        use crate::features::doctor::domain::Status;
+        let c = super::check_authorized_keys(
+            None,
+            Path::new("/home/me"),
+            "me",
+            Some("ssh-ed25519 AAAA laptop\nrestrict ssh-ed25519 BBBB openmosh:AAAAAAAAAAAAAAAAAAAA01\n# note\nssh-ed25519 CCCC who\n"),
+        );
+        assert_eq!(c.status, Status::Warn);
+        assert!(
+            c.detail
+                .starts_with("1 key line(s) without an openmosh tag"),
+            "{}",
+            c.detail
         );
     }
 

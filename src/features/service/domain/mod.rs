@@ -54,6 +54,17 @@ fn safe_path(p: &Path) -> Result<&str, ServiceError> {
 }
 
 /// systemd user unit running `<exe> serve`.
+///
+/// Sandboxing uses only what an unprivileged user manager can always apply
+/// (seccomp and `no_new_privs`): system calls limited to `@system-service`,
+/// sockets to `AF_UNIX` (Herdr's socket, the resolver) and `AF_INET`/`AF_INET6`
+/// (pushes), no namespaces, realtime or SUID. Mount sandboxing
+/// (`ProtectSystem=strict`, `ReadWritePaths=`, `PrivateTmp=`) is left out on
+/// purpose: in a user service it needs unprivileged user namespaces, and where
+/// those are off or blocked (e.g. AppArmor on Ubuntu 24.04) the service would
+/// not start at all; `serve` also runs the Herdr CLI, whose own state lives
+/// outside the OpenMosh directories. (`PrivateTmp=` alone would not affect
+/// tmux, which `serve` never calls: tmux answers go through `respond`.)
 pub fn systemd_unit(exe: &Path) -> Result<String, ServiceError> {
     // `%` is a systemd specifier prefix and must be doubled.
     let exe = safe_path(exe)?.replace('%', "%%");
@@ -71,6 +82,12 @@ UMask=0077\n\
 NoNewPrivileges=yes\n\
 LockPersonality=yes\n\
 RestrictSUIDSGID=yes\n\
+RestrictRealtime=yes\n\
+RestrictNamespaces=yes\n\
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6\n\
+SystemCallArchitectures=native\n\
+SystemCallFilter=@system-service\n\
+SystemCallErrorNumber=EPERM\n\
 \n\
 [Install]\n\
 WantedBy=default.target\n"
@@ -176,6 +193,16 @@ mod tests {
         assert!(u.contains("UMask=0077\n"));
         assert!(u.contains("NoNewPrivileges=yes\n"));
         assert!(u.contains("WantedBy=default.target\n"));
+        for line in [
+            "RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6\n",
+            "SystemCallFilter=@system-service\n",
+            "SystemCallArchitectures=native\n",
+            "RestrictNamespaces=yes\n",
+        ] {
+            assert!(u.contains(line), "{line}");
+        }
+        // Mount sandboxing would stop the service where user namespaces are off.
+        assert!(!u.contains("ProtectSystem") && !u.contains("PrivateTmp"));
         assert!(systemd_unit(Path::new("/a/100%/x"))
             .unwrap()
             .contains("/a/100%%/x"));

@@ -13,7 +13,8 @@ use crate::features::doctor::application::{
 };
 use crate::features::doctor::domain::{Check, DoctorReport, Status};
 use crate::features::doctor::infrastructure::{
-    check_launchd_service, check_permissions, check_ssh, check_sshd_auth, check_systemd_service,
+    check_authorized_keys, check_launchd_service, check_permissions, check_ssh, check_sshd_auth,
+    check_systemd_service, sshd_password_logins,
 };
 use crate::features::events::application::{IngestEvent, IngestOutcome, ListInbox};
 use crate::features::events::domain::{parse_hook_payload, parse_with_kind, EmitKind, EventKind};
@@ -295,7 +296,16 @@ pub fn doctor(ctx: &Ctx) -> Result<Reply, CliError> {
         &files.iter().map(|f| f.as_path()).collect::<Vec<_>>(),
     ));
     checks.push(check_ssh(&cfg.ssh_host_key_pub));
-    checks.push(check_sshd_auth(&ctx.runner, "sshd"));
+    let effective = sshd_password_logins(&ctx.runner, "sshd", ctx.user.as_deref());
+    checks.push(check_sshd_auth(effective.as_deref()));
+    checks.push(check_authorized_keys(
+        effective.as_deref(),
+        &ctx.paths.home,
+        ctx.user.as_deref().unwrap_or_default(),
+        std::fs::read_to_string(ctx.paths.authorized_keys())
+            .ok()
+            .as_deref(),
+    ));
     checks.push(check_devices(&ctx.registry()));
     checks.push(check_keymaps(EmbeddedKeymaps::load().all()));
     checks.push(if cfg!(target_os = "macos") {

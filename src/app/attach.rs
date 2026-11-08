@@ -27,8 +27,17 @@ pub fn attach_herdr(ctx: &Ctx, session: Option<&str>) -> Result<u8, CliError> {
         |k| std::env::var(k).ok(),
         &ctx.paths.xdg_config_home,
     );
+    // The socket must belong to the user who owns this HOME.
+    let owner = {
+        use std::os::unix::fs::MetadataExt;
+        std::fs::metadata(&ctx.paths.home).map_or(u32::MAX, |m| m.uid())
+    };
     let (code, report) = attach(&TtyLauncher, &cfg.bins.herdr, &args, move |stop| {
-        MirrorLoop::new(HerdrSocket::new(path), SystemMonoClock::default()).run(stop)
+        MirrorLoop::new(
+            HerdrSocket::new(path).owned_by(owner),
+            SystemMonoClock::default(),
+        )
+        .run(stop)
     })?;
     if !report.connected {
         log(

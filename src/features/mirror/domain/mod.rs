@@ -55,6 +55,7 @@ pub fn valid_target_id(id: &str) -> bool {
 /// Herdr session names map to a directory, so keep them to a safe charset.
 pub fn valid_session_name(name: &str) -> bool {
     !name.is_empty()
+        && !name.starts_with('-')
         && name.len() <= 64
         && name != "."
         && name != ".."
@@ -160,7 +161,7 @@ mod tests {
     fn session_names_cannot_escape_the_sessions_dir() {
         assert!(valid_session_name("work"));
         assert!(valid_session_name("side-project.2"));
-        for bad in ["", ".", "..", "a/b", "../x", "a b"] {
+        for bad in ["", ".", "..", "a/b", "../x", "a b", "-x", "--help"] {
             assert!(!valid_session_name(bad), "{bad:?}");
         }
     }

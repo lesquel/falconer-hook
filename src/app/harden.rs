@@ -1,8 +1,11 @@
 //! `harden-ssh`: make sshd accept public keys only, through a drop-in file.
 //!
-//! Every privileged step goes through `sudo`, so the user sees the password
-//! prompt and nothing is changed without it. The drop-in is validated with
-//! `sshd -t` before sshd reloads, and removed again when validation fails.
+//! Every privileged step goes through `sudo` by absolute path (a `sudo` earlier
+//! in `$PATH` could capture the password), so the user sees the password
+//! prompt and nothing is changed without it. The drop-in content is a
+//! constant piped into `sudo tee` (no staged file a local process could swap).
+//! It is validated with `sshd -t` before sshd reloads, and removed again when
+//! validation fails.
 
 use std::io::{IsTerminal, Write};
 use std::path::Path;
@@ -37,11 +40,37 @@ fn argv(parts: &[&str]) -> Vec<String> {
     parts.iter().map(|s| s.to_string()).collect()
 }
 
+/// The first of `candidates` that exists, else the first one (so the error
+/// names the expected path).
+fn first_existing(candidates: &[&'static str]) -> &'static str {
+    candidates
+        .iter()
+        .copied()
+        .find(|p| Path::new(p).exists())
+        .unwrap_or(candidates[0])
+}
+
+/// Absolute paths of the programs run as root.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RootTools {
+    pub sudo: &'static str,
+    pub tee: &'static str,
+}
+
+impl RootTools {
+    pub fn find() -> Self {
+        Self {
+            sudo: first_existing(&["/usr/bin/sudo", "/run/wrappers/bin/sudo", "/bin/sudo"]),
+            tee: first_existing(&["/usr/bin/tee", "/bin/tee"]),
+        }
+    }
+}
+
 /// The reload commands to try in order; the first that succeeds wins.
-pub fn reload_commands(macos: bool) -> Vec<Vec<String>> {
+pub fn reload_commands(sudo: &str, macos: bool) -> Vec<Vec<String>> {
     if macos {
         vec![argv(&[
-            "sudo",
+            sudo,
             "launchctl",
             "kickstart",
             "-k",
@@ -49,55 +78,70 @@ pub fn reload_commands(macos: bool) -> Vec<Vec<String>> {
         ])]
     } else {
         vec![
-            argv(&["sudo", "systemctl", "reload", "sshd"]),
-            argv(&["sudo", "systemctl", "reload", "ssh"]),
+            argv(&[sudo, "systemctl", "reload", "sshd"]),
+            argv(&[sudo, "systemctl", "reload", "ssh"]),
         ]
     }
 }
 
 /// Human description of the plan, for the confirmation and `--dry-run`.
-pub fn describe(macos: bool) -> String {
-    let reload = reload_commands(macos)
+pub fn describe(tools: RootTools, macos: bool) -> String {
+    let reload = reload_commands(tools.sudo, macos)
         .iter()
         .map(|c| c.join(" "))
         .collect::<Vec<_>>()
         .join("` or `");
+    let sudo = tools.sudo;
     format!(
-        "- write {DROP_IN} (sudo):\n{}\
-         - check the configuration: `sudo sshd -t` (the file is removed again if it fails)\n\
+        "- write {DROP_IN} (`{sudo} {tee} {DROP_IN}`, mode 0644):\n{}\
+         - check the configuration: `{sudo} sshd -t` (the file is removed again if it fails)\n\
          - reload sshd: `{reload}`\n\
          Password logins over SSH stop working. Logins with an SSH key, and the\n\
          computer's own keyboard and screen, are not affected.",
         DROP_IN_CONTENT
             .lines()
             .map(|l| format!("    {l}\n"))
-            .collect::<String>()
+            .collect::<String>(),
+        tee = tools.tee,
     )
 }
 
-/// Runs the privileged steps. `staged` is a 0600 file holding
-/// [`DROP_IN_CONTENT`].
-pub fn apply(runner: &dyn CommandRunner, staged: &Path, macos: bool) -> Result<(), CliError> {
+/// Runs `argv` with `input` on its stdin; true when it exits 0.
+pub type PipeRunner<'a> = &'a dyn Fn(&[String], &[u8]) -> bool;
+
+/// Runs the privileged steps: [`DROP_IN_CONTENT`] is piped into
+/// `sudo tee <drop-in>` (stdout discarded), then the mode is fixed to 0644.
+pub fn apply(
+    runner: &dyn CommandRunner,
+    pipe: PipeRunner<'_>,
+    tools: RootTools,
+    macos: bool,
+) -> Result<(), CliError> {
     let ok = |c: &[String]| {
         runner
             .run(&c[0], &c[1..])
             .is_ok_and(|o: CommandOutput| o.success())
     };
-    let staged = staged.to_string_lossy().to_string();
-    if !ok(&argv(&["sudo", "install", "-m", "0644", &staged, DROP_IN])) {
+    let sudo = tools.sudo;
+    let written = pipe(
+        &argv(&[sudo, tools.tee, DROP_IN]),
+        DROP_IN_CONTENT.as_bytes(),
+    ) && ok(&argv(&[sudo, "chmod", "0644", DROP_IN]));
+    if !written {
+        let _ = ok(&argv(&[sudo, "rm", "-f", DROP_IN]));
         return Err(CliError::new(
             "harden_failed",
             format!("could not write {DROP_IN}; nothing changed"),
         ));
     }
-    if !ok(&argv(&["sudo", "sshd", "-t"])) {
-        let _ = ok(&argv(&["sudo", "rm", "-f", DROP_IN]));
+    if !ok(&argv(&[sudo, "sshd", "-t"])) {
+        let _ = ok(&argv(&[sudo, "rm", "-f", DROP_IN]));
         return Err(CliError::new(
             "harden_failed",
             "`sshd -t` rejected the configuration; the file was removed and sshd was not reloaded",
         ));
     }
-    if !reload_commands(macos).iter().any(|c| ok(c)) {
+    if !reload_commands(sudo, macos).iter().any(|c| ok(c)) {
         return Err(CliError::new(
             "harden_failed",
             format!("{DROP_IN} is in place but sshd could not be reloaded; reload it or reboot"),
@@ -127,6 +171,25 @@ impl CommandRunner for InteractiveRunner {
     }
 }
 
+/// Pipes `input` into `argv`, with the terminal attached for sudo's prompt
+/// (stdout is discarded so `tee` does not echo the file).
+fn pipe_interactive(argv: &[String], input: &[u8]) -> bool {
+    let Ok(mut child) = Command::new(&argv[0])
+        .args(&argv[1..])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::inherit())
+        .spawn()
+    else {
+        return false;
+    };
+    let wrote = child
+        .stdin
+        .take()
+        .is_some_and(|mut s| s.write_all(input).is_ok());
+    child.wait().is_ok_and(|s| s.success()) && wrote
+}
+
 fn ask(question: &str) -> bool {
     eprint!("{question} [y/N] ");
     let _ = std::io::stderr().flush();
@@ -137,7 +200,9 @@ fn ask(question: &str) -> bool {
 pub fn harden_ssh(ctx: &Ctx, dry_run: bool, yes: bool, json: bool) -> Result<Reply, CliError> {
     let macos = cfg!(target_os = "macos");
     // Unknown (sshd -G unavailable) is not "hardened": go on and let sshd -t judge.
-    let before = sshd_password_logins(&ctx.runner, "sshd").map(|g| sshd_auth_check(&g));
+    let user = ctx.user.as_deref();
+    let tools = RootTools::find();
+    let before = sshd_password_logins(&ctx.runner, "sshd", user).map(|g| sshd_auth_check(&g));
     if let Some(check) = before.filter(|c| c.status == Status::Ok) {
         if !dry_run {
             return Ok(Reply::new(
@@ -165,7 +230,7 @@ pub fn harden_ssh(ctx: &Ctx, dry_run: bool, yes: bool, json: bool) -> Result<Rep
             ),
         ));
     }
-    let plan = describe(macos);
+    let plan = describe(tools, macos);
     if dry_run {
         return Ok(Reply::new(
             &json!({"dry_run": true, "file": DROP_IN, "content": DROP_IN_CONTENT}),
@@ -187,12 +252,8 @@ pub fn harden_ssh(ctx: &Ctx, dry_run: bool, yes: bool, json: bool) -> Result<Rep
             ));
         }
     }
-    let staged = ctx.paths.state_dir.join("sshd-drop-in.conf");
-    stage(&staged).map_err(|_| CliError::new("io", "could not stage the sshd drop-in"))?;
-    let result = apply(&InteractiveRunner, &staged, macos);
-    let _ = std::fs::remove_file(&staged);
-    result?;
-    let detail = match sshd_password_logins(&ctx.runner, "sshd") {
+    apply(&InteractiveRunner, &pipe_interactive, tools, macos)?;
+    let detail = match sshd_password_logins(&ctx.runner, "sshd", user) {
         Some(g) => sshd_auth_check(&g).detail,
         None => "drop-in installed and sshd reloaded".to_string(),
     };
@@ -208,21 +269,6 @@ pub fn has_key(authorized_keys: &str) -> bool {
         .lines()
         .map(str::trim)
         .any(|l| !l.is_empty() && !l.starts_with('#'))
-}
-
-/// Writes the drop-in content to a fresh 0600 file (never through a link).
-fn stage(path: &Path) -> std::io::Result<()> {
-    use std::os::unix::fs::OpenOptionsExt;
-    if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir)?;
-    }
-    let _ = std::fs::remove_file(path);
-    let mut f = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .open(path)?;
-    f.write_all(DROP_IN_CONTENT.as_bytes())
 }
 
 #[cfg(test)]
@@ -242,28 +288,59 @@ mod tests {
         r.calls.borrow().iter().map(|c| c.join(" ")).collect()
     }
 
+    const TOOLS: RootTools = RootTools {
+        sudo: "/usr/bin/sudo",
+        tee: "/usr/bin/tee",
+    };
+
     #[test]
-    fn writes_checks_then_reloads() {
+    fn pipes_the_constant_through_absolute_sudo_tee_then_checks_and_reloads() {
         let r = RecordingRunner::default();
-        r.reply_ok("").reply_ok("").reply_ok("");
-        apply(&r, Path::new("/s/x.conf"), false).unwrap();
+        let log: std::cell::RefCell<Vec<(String, Vec<u8>)>> = Default::default();
+        let pipe = |a: &[String], i: &[u8]| {
+            log.borrow_mut().push((a.join(" "), i.to_vec()));
+            true
+        };
+        apply(&r, &pipe, TOOLS, false).unwrap();
+        assert_eq!(
+            log.borrow().as_slice(),
+            [(
+                format!("/usr/bin/sudo /usr/bin/tee {DROP_IN}"),
+                DROP_IN_CONTENT.as_bytes().to_vec()
+            )]
+        );
         assert_eq!(
             calls(&r),
             [
-                format!("sudo install -m 0644 /s/x.conf {DROP_IN}"),
-                "sudo sshd -t".to_string(),
-                "sudo systemctl reload sshd".to_string(),
+                format!("/usr/bin/sudo chmod 0644 {DROP_IN}"),
+                "/usr/bin/sudo sshd -t".to_string(),
+                "/usr/bin/sudo systemctl reload sshd".to_string(),
             ]
         );
+    }
+
+    #[test]
+    fn a_failed_write_changes_nothing_else() {
+        let r = RecordingRunner::default();
+        let pipe = |_: &[String], _: &[u8]| false;
+        let e = apply(&r, &pipe, TOOLS, false).unwrap_err();
+        assert_eq!(e.code, "harden_failed");
+        assert!(!calls(&r)
+            .iter()
+            .any(|c| c.contains("sshd -t") || c.contains("reload")));
     }
 
     #[test]
     fn a_rejected_config_is_removed_and_sshd_not_reloaded() {
         let r = RecordingRunner::default();
         status(r.reply_ok(""), 255).reply_ok("");
-        let e = apply(&r, Path::new("/s/x.conf"), false).unwrap_err();
+        let pipe = |_: &[String], _: &[u8]| true;
+        let e = apply(&r, &pipe, TOOLS, false).unwrap_err();
         assert_eq!(e.code, "harden_failed");
-        assert_eq!(calls(&r).last().unwrap(), &format!("sudo rm -f {DROP_IN}"));
+        assert_eq!(
+            calls(&r).last().unwrap(),
+            &format!("/usr/bin/sudo rm -f {DROP_IN}")
+        );
         assert!(!calls(&r).iter().any(|c| c.contains("reload")));
     }
 
@@ -271,8 +348,23 @@ mod tests {
     fn falls_back_to_the_debian_service_name() {
         let r = RecordingRunner::default();
         status(r.reply_ok("").reply_ok(""), 5).reply_ok("");
-        apply(&r, Path::new("/s/x.conf"), false).unwrap();
-        assert_eq!(calls(&r).last().unwrap(), "sudo systemctl reload ssh");
+        let pipe = |_: &[String], _: &[u8]| true;
+        apply(&r, &pipe, TOOLS, false).unwrap();
+        assert_eq!(
+            calls(&r).last().unwrap(),
+            "/usr/bin/sudo systemctl reload ssh"
+        );
+    }
+
+    #[test]
+    fn sshd_g_evaluates_match_blocks_for_the_user() {
+        let r = RecordingRunner::default();
+        r.reply_ok("passwordauthentication no\n");
+        assert!(sshd_password_logins(&r, "sshd", Some("me")).is_some());
+        assert_eq!(
+            calls(&r),
+            ["sshd -G -C user=me,host=localhost,addr=127.0.0.1"]
+        );
     }
 
     #[test]
@@ -287,7 +379,7 @@ mod tests {
         let r = RecordingRunner::default();
         r.reply(Err(CommandError::NotFound("sshd".into())))
             .reply(Err(CommandError::NotFound("/usr/sbin/sshd".into())));
-        assert_eq!(sshd_password_logins(&r, "sshd"), None);
+        assert_eq!(sshd_password_logins(&r, "sshd", None), None);
     }
 
     #[test]

@@ -81,6 +81,10 @@ openmosh-hook created, and nothing else:
 4. `$XDG_CONFIG_HOME/openmosh` and `$XDG_STATE_HOME/openmosh` (config, devices, events, host key),
 5. with `--all`, the `openmosh-hook` binary that is running.
 
+The sshd drop-in written by `harden-ssh` (`/etc/ssh/sshd_config.d/10-openmosh.conf`) needs root
+to remove and removing it turns password logins back on, so it is kept and listed in the plan
+(`kept` in `--json`) with the command to remove it yourself.
+
 Without `--yes` it prints the plan and asks on a terminal; without a terminal (or with `--json`)
 it refuses with `confirmation_required`. `--dry-run` prints the plan and changes nothing.
 
@@ -123,10 +127,10 @@ else (it would recreate state); quit with `q`.
 | `openmosh-hook setup [--yes] [--no-service] [--json]` | First-time [setup](#setup-and-uninstall) |
 | `openmosh-hook uninstall [--all] [--dry-run] [--yes] [--json]` | Remove everything openmosh-hook created ([details](#setup-and-uninstall)) |
 | `openmosh-hook usage [--days <n>] [--json]` | Token [usage](#usage) per agent, project and model over the last `n` calendar days (1-31, default 7), from the agents' own local logs |
-| `openmosh-hook doctor [--json]` | Check Tailscale, Herdr/tmux, permissions, sshd host key, sshd password logins (`sshd -G`; warns when password or keyboard-interactive login is on), devices, keymaps, service |
-| `openmosh-hook harden-ssh [--dry-run] [--yes] [--json]` | Make sshd accept SSH keys only: writes `/etc/ssh/sshd_config.d/10-openmosh.conf` with `sudo`, validates it with `sshd -t` (removed again on failure) and reloads sshd. Asks before changing anything; also `s` on the TUI Status screen |
-| `openmosh-hook service install\|uninstall [--dry-run] [--json]` | Register/remove the user service |
-| `openmosh-hook attach herdr [--session <name>]` | Run the Herdr client (`herdr` or `herdr session attach <name>`, from `[bins] herdr`) with [focus mirroring](#mirroring); exits with Herdr's status code |
+| `openmosh-hook doctor [--json]` | Check Tailscale, Herdr/tmux, permissions, sshd host key, sshd password logins (`sshd -G -C user=$USER,host=localhost,addr=127.0.0.1`, so `Match` blocks count; warns when password or keyboard-interactive login is on), that sshd's `AuthorizedKeysFile` includes `~/.ssh/authorized_keys`, that no untagged key was added below the first paired phone, devices, keymaps, service |
+| `openmosh-hook harden-ssh [--dry-run] [--yes] [--json]` | Make sshd accept SSH keys only: pipes a fixed drop-in into `/usr/bin/sudo /usr/bin/tee /etc/ssh/sshd_config.d/10-openmosh.conf` (absolute paths, no staged file), sets it `0644`, validates it with `sshd -t` (removed again on failure) and reloads sshd. Asks before changing anything; also `s` on the TUI Status screen |
+| `openmosh-hook service install\|uninstall [--dry-run] [--json]` | Register/remove the user service. The systemd unit runs with `UMask=0077`, `NoNewPrivileges`, `SystemCallFilter=@system-service`, `RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6`, `RestrictNamespaces`, `RestrictRealtime`, `RestrictSUIDSGID` and `LockPersonality`. Mount sandboxing (`ProtectSystem=`, `PrivateTmp=`) is not used: user services need unprivileged user namespaces for it and would not start where those are off |
+| `openmosh-hook attach herdr [--session <name>]` | Run the Herdr client (`herdr` or `herdr session attach <name>`, from `[bins] herdr`) with [focus mirroring](#mirroring); exits with Herdr's status code. Session names are `[A-Za-z0-9._-]`, not starting with `-`; the mirror only uses a Herdr socket owned by the owner of `$HOME` |
 | `openmosh-hook tui` | The [terminal UI](#tui) (also `openmosh-hook` alone on a terminal) |
 | `openmosh-hook version [--json]` | Version and wire protocol versions |
 
@@ -218,9 +222,16 @@ The endpoint is optional: a phone without a push distributor pairs with an empty
 notifications (`devices list` shows `(no notifications)`) and adds one later with
 `devices set-endpoint`. Push endpoints must be `https://`; `http://` is accepted only for a `100.64.0.0/10` address or a
 `*.ts.net` name. URLs with credentials, and loopback (`127.0.0.0/8`, `::1`, `localhost`),
-link-local, unspecified, multicast or broadcast hosts are refused. Pushes ignore proxy environment
-variables, send `User-Agent: openmosh`, never follow redirects, and `404`/`410` mark the device
-`endpoint_stale`.
+private (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, `fc00::/7`), link-local, unspecified
+(`0.0.0.0/8`, `::`), multicast or broadcast hosts are refused; Tailscale addresses
+(`100.64.0.0/10`, `fd7a:115c:a1e0::/48`) are allowed. Names are resolved by the push client
+itself and every forbidden address it returns is dropped, so a name cannot be re-pointed at the
+LAN or the host (DNS rebinding); a name with no allowed address is not contacted. Pushes ignore
+proxy environment variables, send `User-Agent: openmosh`, never follow redirects, and `404`/`410`
+mark the device `endpoint_stale` (only while its endpoint is still the one that failed: one set
+meanwhile with `devices set-endpoint` stays active). Push plaintexts are padded with spaces to
+512, 1024 or 2048 bytes before encryption, so the ciphertext size says little about the content
+(2048 is the largest bucket whose encrypted body still fits the 3 KiB limit).
 
 `respond` claims the event atomically before sending anything, so of two concurrent answers only
 one reaches the agent; the other gets `already_resolved`. Each event remembers where its pane

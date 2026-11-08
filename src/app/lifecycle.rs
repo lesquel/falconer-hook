@@ -248,6 +248,22 @@ impl UninstallPorts for Ports<'_> {
     }
 }
 
+/// What uninstall deliberately leaves, so the user can decide: the sshd
+/// drop-in from `harden-ssh` needs root to remove and turning it off would
+/// re-enable password logins, so it is listed, never removed.
+pub fn kept_notes(drop_in_exists: bool) -> Vec<String> {
+    let mut v = Vec::new();
+    if drop_in_exists {
+        v.push(format!(
+            "{} (from `harden-ssh`: sshd accepts SSH keys only). Kept on purpose; to allow \
+             password logins again: `sudo rm {}` and reload sshd",
+            super::harden::DROP_IN,
+            super::harden::DROP_IN
+        ));
+    }
+    v
+}
+
 pub fn uninstall(
     ctx: &Ctx,
     all: bool,
@@ -258,20 +274,28 @@ pub fn uninstall(
     // The service step needs the configured service manager binaries.
     let cfg = ctx.config().unwrap_or_default();
     let steps = plan_uninstall(facts(ctx)?, all);
+    let kept = kept_notes(std::path::Path::new(super::harden::DROP_IN).exists());
+    let mut kept_text = String::new();
+    for k in &kept {
+        let _ = write!(kept_text, "\n- keep {k}");
+    }
     let mut plan_text = String::new();
     for s in &steps {
         let _ = writeln!(plan_text, "- {}", s.describe());
     }
     if steps.is_empty() {
         return Ok(Reply::new(
-            &json!({"dry_run": dry_run, "steps": steps, "complete": true}),
-            "Nothing to remove: openmosh-hook left nothing on this machine.",
+            &json!({"dry_run": dry_run, "steps": steps, "complete": true, "kept": kept}),
+            format!("Nothing to remove: openmosh-hook left nothing on this machine.{kept_text}"),
         ));
     }
     if dry_run {
         return Ok(Reply::new(
-            &json!({"dry_run": true, "steps": steps}),
-            format!("openmosh-hook uninstall would:\n{}", plan_text.trim_end()),
+            &json!({"dry_run": true, "steps": steps, "kept": kept}),
+            format!(
+                "openmosh-hook uninstall would:\n{}{kept_text}",
+                plan_text.trim_end()
+            ),
         ));
     }
     if !yes {
@@ -281,7 +305,10 @@ pub fn uninstall(
                 "uninstall needs confirmation: pass --yes, or --dry-run to see the plan",
             ));
         }
-        eprintln!("openmosh-hook uninstall will:\n{}", plan_text.trim_end());
+        eprintln!(
+            "openmosh-hook uninstall will:\n{}{kept_text}",
+            plan_text.trim_end()
+        );
         if !ask("Proceed?") {
             return Err(CliError::new(
                 "cancelled",
@@ -309,8 +336,23 @@ pub fn uninstall(
     } else {
         "Some steps failed; fix them and run `openmosh-hook uninstall` again."
     });
+    human.push_str(&kept_text);
     Ok(Reply::new(
-        &json!({"dry_run": false, "outcomes": outcomes, "complete": complete}),
+        &json!({"dry_run": false, "outcomes": outcomes, "complete": complete, "kept": kept}),
         human,
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_sshd_drop_in_is_listed_as_kept() {
+        assert!(kept_notes(false).is_empty());
+        let k = kept_notes(true);
+        assert_eq!(k.len(), 1);
+        assert!(k[0].starts_with("/etc/ssh/sshd_config.d/10-openmosh.conf"));
+        assert!(k[0].contains("sudo rm /etc/ssh/sshd_config.d/10-openmosh.conf"));
+    }
 }

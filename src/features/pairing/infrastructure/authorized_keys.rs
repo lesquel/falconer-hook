@@ -1,9 +1,12 @@
 //! `~/.ssh/authorized_keys` adapter. Changes are written atomically (temp
 //! file + rename) under an exclusive lock. The file is always left `0600`
 //! and its directory `0700` (an existing looser mode is tightened, as
-//! sshd's StrictModes expects). A symlinked file is followed so dotfile
-//! managers keep working (the real target is rewritten and tightened); a
-//! dangling symlink is refused rather than replaced.
+//! sshd's StrictModes expects). A symlink is followed only when its target
+//! stays inside `~/.ssh` (the target is rewritten and tightened); a symlink
+//! pointing elsewhere, or dangling, is refused rather than followed or
+//! replaced. Other programs (`ssh-copy-id`, an editor) do not take our lock,
+//! so the file is read again right before it is replaced and the change is
+//! recomputed when it moved meanwhile.
 
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
@@ -66,6 +69,24 @@ impl FileAuthorizedKeys {
             return Ok((self.path.clone(), String::new(), 0o600));
         }
         let real = fs::canonicalize(&self.path).map_err(|e| io(&self.path, e))?;
+        if link {
+            let ssh_dir = self
+                .path
+                .parent()
+                .and_then(|d| fs::canonicalize(d).ok())
+                .unwrap_or_default();
+            if ssh_dir.as_os_str().is_empty() || !real.starts_with(&ssh_dir) {
+                return Err(RegistryError::Storage(
+                    format!(
+                        "{} is a symlink to {}, outside {}; refusing to rewrite it",
+                        self.path.display(),
+                        real.display(),
+                        ssh_dir.display()
+                    ),
+                    "io_error",
+                ));
+            }
+        }
         if !fs::metadata(&real).map_err(|e| io(&real, e))?.is_file() {
             return Err(RegistryError::Storage(
                 format!("{} is not a regular file", real.display()),
@@ -74,6 +95,36 @@ impl FileAuthorizedKeys {
         }
         let text = fs::read_to_string(&real).map_err(|e| io(&real, e))?;
         Ok((real, text, 0o600))
+    }
+}
+
+impl FileAuthorizedKeys {
+    /// Applies `change` to the current contents and writes the result (when
+    /// `change` returns one). The file is read again right before writing:
+    /// if someone else changed it meanwhile, the change is recomputed on the
+    /// new contents (a few times), so a concurrent append is not lost.
+    fn rewrite<T>(&self, change: impl Fn(&str) -> (Option<String>, T)) -> Result<T, RegistryError> {
+        let (real, mut text, mode) = self.load()?;
+        for _ in 0..5 {
+            let (out, result) = change(&text);
+            let Some(out) = out else {
+                return Ok(result);
+            };
+            let now = if real.exists() {
+                fs::read_to_string(&real).map_err(|e| io(&real, e))?
+            } else {
+                String::new()
+            };
+            if now == text {
+                write_atomic(&real, out.as_bytes(), mode).map_err(fs_err)?;
+                return Ok(result);
+            }
+            text = now;
+        }
+        Err(RegistryError::Storage(
+            format!("{} keeps changing; try again", real.display()),
+            "io_error",
+        ))
     }
 }
 
@@ -86,13 +137,15 @@ impl AuthorizedKeys for FileAuthorizedKeys {
             ));
         }
         let _g = lock_exclusive(&self.lock_path).map_err(fs_err)?;
-        let (real, mut text, mode) = self.load()?;
-        if !text.is_empty() && !text.ends_with('\n') {
+        self.rewrite(|text| {
+            let mut text = text.to_string();
+            if !text.is_empty() && !text.ends_with('\n') {
+                text.push('\n');
+            }
+            text.push_str(line);
             text.push('\n');
-        }
-        text.push_str(line);
-        text.push('\n');
-        write_atomic(&real, text.as_bytes(), mode).map_err(fs_err)
+            (Some(text), ())
+        })
     }
 
     fn remove_device(&self, device_id: &str) -> Result<bool, RegistryError> {
@@ -100,22 +153,20 @@ impl AuthorizedKeys for FileAuthorizedKeys {
         if !self.path.exists() {
             return Ok(false);
         }
-        let (real, text, mode) = self.load()?;
         let tag = format!(" {}", device_comment(device_id));
-        let mut removed = false;
-        let mut out = String::with_capacity(text.len());
-        for l in text.lines() {
-            if l.trim_end().ends_with(&tag) {
-                removed = true;
-            } else {
-                out.push_str(l);
-                out.push('\n');
+        self.rewrite(|text| {
+            let mut removed = false;
+            let mut out = String::with_capacity(text.len());
+            for l in text.lines() {
+                if l.trim_end().ends_with(&tag) {
+                    removed = true;
+                } else {
+                    out.push_str(l);
+                    out.push('\n');
+                }
             }
-        }
-        if removed {
-            write_atomic(&real, out.as_bytes(), mode).map_err(fs_err)?;
-        }
-        Ok(removed)
+            (removed.then_some(out), removed)
+        })
     }
 
     fn remove_tagged(&self, dry_run: bool) -> Result<usize, RegistryError> {
@@ -128,21 +179,19 @@ impl AuthorizedKeys for FileAuthorizedKeys {
             return Ok(text.lines().filter(|l| is_tagged_line(l)).count());
         }
         let _g = lock_exclusive(&self.lock_path).map_err(fs_err)?;
-        let (real, text, mode) = self.load()?;
-        let mut n = 0;
-        let mut out = String::with_capacity(text.len());
-        for l in text.lines() {
-            if is_tagged_line(l) {
-                n += 1;
-            } else {
-                out.push_str(l);
-                out.push('\n');
+        self.rewrite(|text| {
+            let mut n = 0;
+            let mut out = String::with_capacity(text.len());
+            for l in text.lines() {
+                if is_tagged_line(l) {
+                    n += 1;
+                } else {
+                    out.push_str(l);
+                    out.push('\n');
+                }
             }
-        }
-        if n > 0 {
-            write_atomic(&real, out.as_bytes(), mode).map_err(fs_err)?;
-        }
-        Ok(n)
+            ((n > 0).then_some(out), n)
+        })
     }
 }
 
@@ -207,10 +256,10 @@ mod tests {
     }
 
     #[test]
-    fn symlinked_file_is_followed_and_its_target_tightened() {
+    fn a_symlink_inside_ssh_is_followed_and_its_target_tightened() {
         let t = tempfile::tempdir().unwrap();
         fs::create_dir(t.path().join(".ssh")).unwrap();
-        let real = t.path().join("dotfiles_keys");
+        let real = t.path().join(".ssh/keys.d");
         fs::write(&real, "ssh-ed25519 AAAAuser laptop\n").unwrap();
         fs::set_permissions(&real, fs::Permissions::from_mode(0o640)).unwrap();
         let p = t.path().join(".ssh/authorized_keys");
@@ -228,6 +277,59 @@ mod tests {
         assert_eq!(
             fs::metadata(&real).unwrap().permissions().mode() & 0o777,
             0o600
+        );
+    }
+
+    #[test]
+    fn a_symlink_outside_ssh_is_refused_untouched() {
+        let t = tempfile::tempdir().unwrap();
+        fs::create_dir(t.path().join(".ssh")).unwrap();
+        let real = t.path().join("dotfiles_keys");
+        fs::write(&real, "ssh-ed25519 AAAAuser laptop\n").unwrap();
+        fs::set_permissions(&real, fs::Permissions::from_mode(0o640)).unwrap();
+        let p = t.path().join(".ssh/authorized_keys");
+        std::os::unix::fs::symlink(&real, &p).unwrap();
+        let ak = FileAuthorizedKeys {
+            path: p.clone(),
+            lock_path: t.path().join(".lock"),
+        };
+        let e = ak
+            .append(&authorized_keys_line(KEY, "AAAAAAAAAAAAAAAAAAAA01", &[]))
+            .unwrap_err();
+        assert!(e.to_string().contains("outside"), "{e}");
+        assert_eq!(
+            fs::read_to_string(&real).unwrap(),
+            "ssh-ed25519 AAAAuser laptop\n"
+        );
+        assert_eq!(
+            fs::metadata(&real).unwrap().permissions().mode() & 0o777,
+            0o640,
+            "the target's mode is not touched"
+        );
+    }
+
+    #[test]
+    fn a_concurrent_append_by_another_program_is_kept() {
+        let t = tempfile::tempdir().unwrap();
+        let ak = FileAuthorizedKeys {
+            path: t.path().join(".ssh/authorized_keys"),
+            lock_path: t.path().join(".lock"),
+        };
+        ak.append("ssh-ed25519 AAAAuser laptop").unwrap();
+        // Simulates ssh-copy-id appending between our read and our write.
+        let path = ak.path.clone();
+        let raced = std::cell::Cell::new(false);
+        let out = ak.rewrite(|text| {
+            if !raced.replace(true) {
+                let mut f = fs::OpenOptions::new().append(true).open(&path).unwrap();
+                std::io::Write::write_all(&mut f, b"ssh-ed25519 AAAAcopied desktop\n").unwrap();
+            }
+            (Some(format!("{text}x openmosh:new\n")), ())
+        });
+        out.unwrap();
+        assert_eq!(
+            fs::read_to_string(&ak.path).unwrap(),
+            "ssh-ed25519 AAAAuser laptop\nssh-ed25519 AAAAcopied desktop\nx openmosh:new\n"
         );
     }
 
