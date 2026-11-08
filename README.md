@@ -293,4 +293,5 @@ against the committed [`minisign.pub`](./minisign.pub), so a mismatched secret f
 
 ## License
 
-Proposed Apache-2.0 (pending confirmation).
+Copyright 2026 lesquel. Licensed under the [Apache License 2.0](./LICENSE). Redistributions
+must keep the [NOTICE](./NOTICE) file, which credits the author.
