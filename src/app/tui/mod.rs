@@ -108,6 +108,18 @@ pub fn run_tui(ctx: &Ctx) -> Result<(), CliError> {
                 enter().map_err(io_err)?;
                 app.after_pair(r);
             }
+            Effect::HardenSsh => {
+                leave();
+                let r = super::harden::harden_ssh(ctx, false, false, false);
+                if let Err(e) = &r {
+                    println!("openmosh-hook: {}", e.message);
+                }
+                print!("Press Enter to return to the TUI. ");
+                let _ = std::io::stdout().flush();
+                let _ = std::io::stdin().lock().read_line(&mut String::new());
+                enter().map_err(io_err)?;
+                app.after_suspended(r);
+            }
         }
     }
 }

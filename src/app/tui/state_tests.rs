@@ -303,3 +303,15 @@ fn tui_screens() {
     app.on_key(key(KeyCode::Enter), &mut ex);
     println!("{}", dump(&app));
 }
+
+#[test]
+fn status_offers_ssh_hardening_in_the_terminal() {
+    let (mut app, mut ex) = started();
+    app.on_key(ch('1'), &mut ex);
+    assert_eq!(app.on_key(ch('s'), &mut ex), Effect::HardenSsh);
+    app.after_suspended(Ok(Reply::new(&json!({}), "sshd now: public key only.")));
+    assert_eq!(
+        app.message.as_ref().unwrap().text,
+        "sshd now: public key only."
+    );
+}

@@ -4,6 +4,7 @@
 
 mod attach;
 mod commands;
+mod harden;
 mod integrations;
 mod lifecycle;
 mod pair;
@@ -236,6 +237,7 @@ pub fn run(ctx: &Ctx, command: Command) -> Result<Reply, CliError> {
             out,
         } => lifecycle::uninstall(ctx, all, dry_run, yes, out.json),
         Command::Doctor { .. } => commands::doctor(ctx),
+        Command::HardenSsh { dry_run, yes, out } => harden::harden_ssh(ctx, dry_run, yes, out.json),
         Command::Service { cmd } => match cmd {
             ServiceCmd::Install { dry_run, .. } => commands::service(ctx, true, dry_run),
             ServiceCmd::Uninstall { dry_run, .. } => commands::service(ctx, false, dry_run),

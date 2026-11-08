@@ -125,6 +125,17 @@ pub enum Command {
         #[command(flatten)]
         out: JsonFlag,
     },
+    /// Make sshd accept SSH keys only (no passwords), with sudo.
+    HardenSsh {
+        /// Print the plan without changing anything.
+        #[arg(long)]
+        dry_run: bool,
+        /// Do not ask for confirmation.
+        #[arg(long)]
+        yes: bool,
+        #[command(flatten)]
+        out: JsonFlag,
+    },
     /// Check Tailscale, Herdr/tmux, permissions, devices and the service.
     Doctor {
         #[command(flatten)]
@@ -293,6 +304,7 @@ impl Command {
             | Command::PairSsh { out }
             | Command::Respond { out, .. }
             | Command::Doctor { out }
+            | Command::HardenSsh { out, .. }
             | Command::Setup { out, .. }
             | Command::Uninstall { out, .. }
             | Command::Version { out } => out.json,

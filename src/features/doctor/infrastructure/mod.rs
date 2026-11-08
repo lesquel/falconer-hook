@@ -79,10 +79,8 @@ pub fn sshd_auth_check(effective: &str) -> Check {
         Check::warn(
             "sshd auth",
             format!(
-                "{} enabled: anyone who reaches port 22 can guess passwords. Add \
-                 /etc/ssh/sshd_config.d/10-openmosh.conf with `PasswordAuthentication no`, \
-                 `KbdInteractiveAuthentication no`, `AuthenticationMethods publickey`, \
-                 then reload sshd",
+                "{} enabled: anyone who reaches port 22 can guess passwords. Fix: \
+                 `openmosh-hook harden-ssh` (or `s` on the TUI Status screen)",
                 open.join(", ")
             ),
         )

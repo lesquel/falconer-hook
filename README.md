@@ -117,6 +117,7 @@ else (it would recreate state); quit with `q`.
 | `openmosh-hook setup [--yes] [--no-service] [--json]` | First-time [setup](#setup-and-uninstall) |
 | `openmosh-hook uninstall [--all] [--dry-run] [--yes] [--json]` | Remove everything openmosh-hook created ([details](#setup-and-uninstall)) |
 | `openmosh-hook doctor [--json]` | Check Tailscale, Herdr/tmux, permissions, sshd host key, sshd password logins (`sshd -G`; warns when password or keyboard-interactive login is on), devices, keymaps, service |
+| `openmosh-hook harden-ssh [--dry-run] [--yes] [--json]` | Make sshd accept SSH keys only: writes `/etc/ssh/sshd_config.d/10-openmosh.conf` with `sudo`, validates it with `sshd -t` (removed again on failure) and reloads sshd. Asks before changing anything; also `s` on the TUI Status screen |
 | `openmosh-hook service install\|uninstall [--dry-run] [--json]` | Register/remove the user service |
 | `openmosh-hook attach herdr [--session <name>]` | Run the Herdr client (`herdr` or `herdr session attach <name>`, from `[bins] herdr`) with [focus mirroring](#mirroring); exits with Herdr's status code |
 | `openmosh-hook tui` | The [terminal UI](#tui) (also `openmosh-hook` alone on a terminal) |

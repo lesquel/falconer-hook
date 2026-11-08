@@ -62,7 +62,7 @@ impl Screen {
     /// Key hints shown in the footer, besides the global ones.
     pub fn keys(self) -> &'static str {
         match self {
-            Screen::Status => "r refresh",
+            Screen::Status => "r refresh  s SSH: keys only (sudo)",
             Screen::Agents => "j/k select  a allow  d deny  t reply text  r refresh",
             Screen::Devices => "j/k select  x revoke  r refresh",
             Screen::Pair => "Enter pair  i invert QR colors",
@@ -155,6 +155,8 @@ pub enum Effect {
     Pair {
         invert: bool,
     },
+    /// Suspend the TUI and run `harden-ssh` (sudo prompts in the terminal).
+    HardenSsh,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -475,6 +477,7 @@ impl App {
                     None => self.error("No device selected."),
                 }
             }
+            (Screen::Status, KeyCode::Char('s')) => return Effect::HardenSsh,
             (Screen::Pair, KeyCode::Enter | KeyCode::Char('p')) => {
                 return Effect::Pair {
                     invert: self.invert,
@@ -732,6 +735,11 @@ impl App {
     }
 
     /// Records the outcome of the pairing flow run outside the TUI.
+    /// Result of a command run while the TUI was suspended.
+    pub fn after_suspended(&mut self, r: Result<Reply, CliError>) {
+        self.after_pair(r)
+    }
+
     pub fn after_pair(&mut self, r: Result<Reply, CliError>) {
         match r {
             Ok(reply) => self.info(reply.human),
