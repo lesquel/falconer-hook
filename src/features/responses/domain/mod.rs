@@ -3,7 +3,10 @@
 use serde::Serialize;
 use thiserror::Error;
 
+use crate::features::agents::domain::{AgentStatus, PaneProbe};
+use crate::features::events::domain::{Event, EventKind, Runtime, APPROVAL_TTL_SECS};
 use crate::shared::domain::error::ErrorCode;
+use crate::shared::domain::text::is_spoofing_char;
 
 /// Maximum `respond --text` length in bytes, after sanitization.
 pub const MAX_TEXT_BYTES: usize = 4096;
@@ -86,8 +89,12 @@ pub enum ResponseError {
     EmptyText,
     #[error("text exceeds 4096 bytes")]
     TextTooLong,
-    #[error("event has no pane to answer")]
+    #[error("event has no pane to answer, or the pane is gone")]
     NoPane,
+    #[error("the pane no longer shows this prompt (another process or a newer prompt is there)")]
+    Stale,
+    #[error("the approval is older than 15 minutes and can no longer be answered")]
+    Expired,
     #[error("no keymap for this agent")]
     NoKeymap,
     #[error("the agent runtime is not available")]
@@ -107,6 +114,8 @@ impl ErrorCode for ResponseError {
             ResponseError::EmptyText => "invalid_input",
             ResponseError::TextTooLong => "text_too_long",
             ResponseError::NoPane => "no_pane",
+            ResponseError::Stale => "stale",
+            ResponseError::Expired => "expired",
             ResponseError::NoKeymap => "no_keymap",
             ResponseError::RuntimeUnavailable => "runtime_unavailable",
             ResponseError::Delivery => "runtime_error",
@@ -115,14 +124,70 @@ impl ErrorCode for ResponseError {
     }
 }
 
+/// An approval past its time to live cannot be answered.
+pub fn check_age(event: &Event, now: u64) -> Result<(), ResponseError> {
+    if event.kind == EventKind::ApprovalRequired
+        && now.saturating_sub(event.created_at) > APPROVAL_TTL_SECS
+    {
+        return Err(ResponseError::Expired);
+    }
+    Ok(())
+}
+
+/// Decides whether the pane, as probed right now, still shows the prompt the
+/// event was recorded for. Anything that cannot be verified is refused.
+///
+/// - tmux has no agent model: the pane must still run the process recorded
+///   with the event (`pane_pid`). Events without a recorded pid are refused.
+/// - Herdr: the pane must still run the same agent, be `blocked` for an
+///   approval (or waiting, not working, for a text answer), and still be in
+///   the recorded blocked state (`state_change_seq`) when one was recorded.
+pub fn check_target(event: &Event, probe: &PaneProbe) -> Result<(), ResponseError> {
+    let PaneProbe::Live(now) = probe else {
+        return Err(ResponseError::NoPane);
+    };
+    match event.runtime {
+        Some(Runtime::Tmux) => match (event.context.pane_pid, now.pane_pid) {
+            (Some(was), Some(is)) if was == is => Ok(()),
+            _ => Err(ResponseError::Stale),
+        },
+        Some(Runtime::Herdr) => {
+            if now.agent.as_deref() != Some(event.agent.as_str()) {
+                return Err(ResponseError::Stale);
+            }
+            let waiting = match event.kind {
+                EventKind::ApprovalRequired => now.status == Some(AgentStatus::Blocked),
+                EventKind::Question | EventKind::Done => matches!(
+                    now.status,
+                    Some(AgentStatus::Blocked | AgentStatus::Idle | AgentStatus::Done)
+                ),
+            };
+            if !waiting {
+                return Err(ResponseError::Stale);
+            }
+            match (event.context.agent_seq, now.state_change_seq) {
+                (Some(was), Some(is)) if was != is => Err(ResponseError::Stale),
+                _ => Ok(()),
+            }
+        }
+        None => Err(ResponseError::NoPane),
+    }
+}
+
 /// Makes the answer one line (a newline would act as Enter in the agent's
-/// prompt and submit early), removes other control characters and enforces
-/// the size limit (control T-9).
+/// prompt and submit early), removes other control, bidi, zero-width and
+/// format characters and enforces the size limit (control T-9).
 pub fn sanitize_text(text: &str) -> Result<String, ResponseError> {
     let clean: String = text
         .chars()
-        .map(|c| if c == '\n' { ' ' } else { c })
-        .filter(|c| !c.is_control())
+        .map(|c| {
+            if matches!(c, '\n' | '\u{2028}' | '\u{2029}') {
+                ' '
+            } else {
+                c
+            }
+        })
+        .filter(|c| !is_spoofing_char(*c))
         .collect();
     if clean.trim().is_empty() {
         return Err(ResponseError::EmptyText);
@@ -142,6 +207,110 @@ mod tests {
         assert_eq!(
             sanitize_text("ok\u{1b}[31m\r\nnext\u{7}\t\u{9b}x").unwrap(),
             "ok[31m nextx"
+        );
+    }
+
+    #[test]
+    fn strips_bidi_zero_width_and_format_chars() {
+        assert_eq!(
+            sanitize_text("rm\u{202E}txt.exe\u{200B}\u{2066}x\u{FEFF}\u{00AD}\u{2028}y").unwrap(),
+            "rmtxt.exex y"
+        );
+    }
+
+    fn event(runtime: Runtime, kind: EventKind) -> Event {
+        Event {
+            id: "e".into(),
+            seq: 1,
+            source: "herdr".into(),
+            agent: "claude".into(),
+            kind,
+            status: crate::features::events::domain::EventStatus::Pending,
+            title: String::new(),
+            summary: String::new(),
+            pane: Some("p".into()),
+            runtime: Some(runtime),
+            created_at: 1000,
+            resolved_at: None,
+            resolution: None,
+            context: Default::default(),
+        }
+    }
+
+    fn herdr(agent: &str, status: AgentStatus, seq: u64) -> PaneProbe {
+        PaneProbe::Live(crate::features::agents::domain::PaneState {
+            pane_pid: None,
+            agent: Some(agent.into()),
+            status: Some(status),
+            state_change_seq: Some(seq),
+        })
+    }
+
+    fn tmux(pid: u32) -> PaneProbe {
+        PaneProbe::Live(crate::features::agents::domain::PaneState {
+            pane_pid: Some(pid),
+            ..Default::default()
+        })
+    }
+
+    #[test]
+    fn approvals_expire_after_fifteen_minutes() {
+        let e = event(Runtime::Herdr, EventKind::ApprovalRequired);
+        assert_eq!(check_age(&e, 1000 + 900), Ok(()));
+        assert_eq!(check_age(&e, 1000 + 901), Err(ResponseError::Expired));
+        assert_eq!(ResponseError::Expired.code(), "expired");
+        let q = event(Runtime::Herdr, EventKind::Question);
+        assert_eq!(check_age(&q, 1000 + 5000), Ok(()));
+    }
+
+    #[test]
+    fn tmux_target_must_keep_its_pane_pid() {
+        let mut e = event(Runtime::Tmux, EventKind::ApprovalRequired);
+        assert_eq!(
+            check_target(&e, &tmux(7)),
+            Err(ResponseError::Stale),
+            "no pid recorded"
+        );
+        e.context.pane_pid = Some(7);
+        assert_eq!(check_target(&e, &tmux(7)), Ok(()));
+        assert_eq!(check_target(&e, &tmux(8)), Err(ResponseError::Stale));
+        assert_eq!(
+            check_target(&e, &PaneProbe::Gone),
+            Err(ResponseError::NoPane)
+        );
+        assert_eq!(ResponseError::Stale.code(), "stale");
+    }
+
+    #[test]
+    fn herdr_target_must_still_be_the_same_blocked_agent() {
+        use AgentStatus::*;
+        let mut e = event(Runtime::Herdr, EventKind::ApprovalRequired);
+        // Old rows without a seq are answered only while still blocked.
+        assert_eq!(check_target(&e, &herdr("claude", Blocked, 3)), Ok(()));
+        assert_eq!(
+            check_target(&e, &herdr("claude", Working, 3)),
+            Err(ResponseError::Stale)
+        );
+        assert_eq!(
+            check_target(&e, &herdr("codex", Blocked, 3)),
+            Err(ResponseError::Stale)
+        );
+        e.context.agent_seq = Some(3);
+        assert_eq!(check_target(&e, &herdr("claude", Blocked, 3)), Ok(()));
+        assert_eq!(
+            check_target(&e, &herdr("claude", Blocked, 5)),
+            Err(ResponseError::Stale),
+            "a newer prompt in the same pane"
+        );
+        let q = event(Runtime::Herdr, EventKind::Question);
+        assert_eq!(check_target(&q, &herdr("claude", Idle, 9)), Ok(()));
+        assert_eq!(
+            check_target(&q, &herdr("claude", Working, 9)),
+            Err(ResponseError::Stale)
+        );
+        assert_eq!(
+            check_target(&q, &PaneProbe::Gone),
+            Err(ResponseError::NoPane)
         );
     }
 

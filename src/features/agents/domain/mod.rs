@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use thiserror::Error;
 
 use crate::shared::domain::error::ErrorCode;
-pub use crate::shared::domain::runtime::Runtime;
+pub use crate::shared::domain::runtime::{PaneRef, Runtime};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -69,15 +69,35 @@ impl ErrorCode for AgentError {
     }
 }
 
+/// What a pane looks like right now, as far as the runtime can tell.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PaneProbe {
+    /// The pane no longer exists (or its server is gone).
+    Gone,
+    Live(PaneState),
+}
+
+/// Facts about a live pane. tmux knows only the pid; Herdr knows the agent.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PaneState {
+    pub pane_pid: Option<u32>,
+    pub agent: Option<String>,
+    pub status: Option<AgentStatus>,
+    pub state_change_seq: Option<u64>,
+}
+
 /// A terminal multiplexer that hosts agents. Every call runs via argv.
+/// Calls on a pane go to the server (tmux socket / Herdr session) in its context.
 pub trait AgentRuntime {
     fn runtime(&self) -> Runtime;
     fn list_agents(&self) -> Result<Vec<Agent>, AgentError>;
     fn list_sessions(&self) -> Result<Vec<Session>, AgentError>;
     /// Sends named keys (`enter`, `esc`, `1`, …) to a pane.
-    fn send_keys(&self, pane: &str, keys: &[String]) -> Result<(), AgentError>;
+    fn send_keys(&self, pane: &PaneRef, keys: &[String]) -> Result<(), AgentError>;
     /// Types literal text into a pane, passed as one argv entry.
-    fn send_text(&self, pane: &str, text: &str) -> Result<(), AgentError>;
+    fn send_text(&self, pane: &PaneRef, text: &str) -> Result<(), AgentError>;
+    /// Looks the pane up again, right before something is sent to it.
+    fn probe(&self, pane: &PaneRef) -> Result<PaneProbe, AgentError>;
 }
 
 /// What a state change means for the user.
@@ -217,6 +237,9 @@ pub mod fakes {
         pub available: bool,
         pub sent: RefCell<Vec<(String, Vec<String>)>>,
         pub typed: RefCell<Vec<(String, String)>>,
+        /// Scripted `probe` answers by pane id; missing panes are `Gone`.
+        pub probes: RefCell<HashMap<String, PaneState>>,
+        pub sessions_seen: RefCell<Vec<Option<String>>>,
     }
 
     impl FakeRuntime {
@@ -239,7 +262,19 @@ pub mod fakes {
                 available: true,
                 sent: RefCell::default(),
                 typed: RefCell::default(),
+                probes: RefCell::default(),
+                sessions_seen: RefCell::default(),
             }
+        }
+        pub fn tmux() -> Self {
+            Self {
+                kind: Runtime::Tmux,
+                ..Self::herdr_with_agents(0)
+            }
+        }
+        /// Makes `pane` live with the given state.
+        pub fn live(&self, pane: &str, state: PaneState) {
+            self.probes.borrow_mut().insert(pane.into(), state);
         }
         pub fn unavailable(kind: Runtime) -> Self {
             Self {
@@ -248,6 +283,8 @@ pub mod fakes {
                 available: false,
                 sent: RefCell::default(),
                 typed: RefCell::default(),
+                probes: RefCell::default(),
+                sessions_seen: RefCell::default(),
             }
         }
         pub fn set_status(&self, i: usize, s: AgentStatus, seq: u64) {
@@ -279,19 +316,35 @@ pub mod fakes {
                 attached: None,
             }])
         }
-        fn send_keys(&self, pane: &str, keys: &[String]) -> Result<(), AgentError> {
+        fn send_keys(&self, pane: &PaneRef, keys: &[String]) -> Result<(), AgentError> {
             if !self.available {
                 return Err(AgentError::Unavailable("fake"));
             }
-            self.sent.borrow_mut().push((pane.into(), keys.to_vec()));
+            self.sent
+                .borrow_mut()
+                .push((pane.pane.clone(), keys.to_vec()));
             Ok(())
         }
-        fn send_text(&self, pane: &str, text: &str) -> Result<(), AgentError> {
+        fn send_text(&self, pane: &PaneRef, text: &str) -> Result<(), AgentError> {
             if !self.available {
                 return Err(AgentError::Unavailable("fake"));
             }
-            self.typed.borrow_mut().push((pane.into(), text.into()));
+            self.typed
+                .borrow_mut()
+                .push((pane.pane.clone(), text.into()));
             Ok(())
+        }
+        fn probe(&self, pane: &PaneRef) -> Result<PaneProbe, AgentError> {
+            if !self.available {
+                return Err(AgentError::Unavailable("fake"));
+            }
+            self.sessions_seen
+                .borrow_mut()
+                .push(pane.context.session.clone());
+            Ok(match self.probes.borrow().get(&pane.pane) {
+                Some(s) => PaneProbe::Live(s.clone()),
+                None => PaneProbe::Gone,
+            })
         }
     }
 }

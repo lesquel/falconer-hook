@@ -136,7 +136,7 @@ With `--json` every command prints exactly one line:
 ```
 
 Exit code is `0` on success and `1` on error. Messages never contain secrets. Error codes:
-`invalid_input`, `not_found`, `already_resolved`, `text_too_long`, `no_pane`, `no_keymap`,
+`invalid_input`, `not_found`, `already_resolved`, `text_too_long`, `no_pane`, `stale`, `expired`, `no_keymap`,
 `runtime_unavailable`, `runtime_error`, `invalid_endpoint`, `permissions_too_open`,
 `config_error`, `io_error`, `store_error`, `registry_corrupt`, `storage_error`,
 `tailscale_missing`, `tailscale_not_running`, `tailscale_tagged`, `tailscale_error`, `ssh_host_key_missing`,
@@ -203,7 +203,23 @@ variables, send `User-Agent: openmosh`, never follow redirects, and `404`/`410` 
 `endpoint_stale`.
 
 `respond` claims the event atomically before sending anything, so of two concurrent answers only
-one reaches the agent; the other gets `already_resolved`. `integration install` run from a new
+one reaches the agent; the other gets `already_resolved`. Each event remembers where its pane
+lives: the tmux server socket (from `$TMUX`) and the pane's `#{pane_pid}` at emit time, or the
+Herdr session (`$HERDR_SESSION`, or the session in `$HERDR_SOCKET_PATH`) and, for events recorded
+by `serve`, the agent's `state_change_seq`. Every `respond` call goes to that socket/session
+(`tmux -S <socket>`, `herdr --session <name>`) and, right before sending, looks the pane up again:
+a pane that no longer exists gets `no_pane`; a tmux pane now run by another process, or a Herdr
+pane running another agent, not blocked any more (an approval) or working (a text answer), or in a
+newer blocked state, gets `stale`. tmux has no agent state, so a tmux approval is accepted only
+while the pane still runs the recorded process; events recorded before this check existed are
+answered only when that can still be verified (Herdr: still blocked; tmux: never). An approval
+older than 15 minutes gets `expired`. Refused events stay pending. Answer text loses control,
+bidi, zero-width and format characters.
+
+Approval summaries name what is being approved: the command or file path from the agent's tool
+input (Claude `PermissionRequest`, and the `tool_input`/`details`/`input` objects other agents
+send), as one line of at most 200 characters (`…` marks a cut) without control, bidi,
+zero-width or format characters. It travels only inside the encrypted push. `integration install` run from a new
 executable path repoints the existing hooks at it.
 
 ## Mirroring

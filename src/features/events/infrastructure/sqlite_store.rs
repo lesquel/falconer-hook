@@ -5,7 +5,7 @@ use std::cell::RefCell;
 use std::path::Path;
 
 use crate::features::events::domain::{
-    Event, EventKind, EventStatus, EventStore, NewEvent, Runtime, StoreError,
+    Event, EventKind, EventStatus, EventStore, NewEvent, PaneContext, Runtime, StoreError,
 };
 use crate::shared::infrastructure::fs_secure::{touch_private, FsError};
 
@@ -31,8 +31,30 @@ CREATE INDEX IF NOT EXISTS events_pane ON events (pane, kind, created_at);
 CREATE INDEX IF NOT EXISTS events_created ON events (created_at);
 ";
 
+/// Columns added after v0.2.0 (nullable, so old rows stay valid).
+const ADDED_COLUMNS: &[(&str, &str)] = &[
+    ("pane_session", "TEXT"),
+    ("pane_pid", "INTEGER"),
+    ("agent_seq", "INTEGER"),
+];
+
 const COLUMNS: &str =
-    "id, seq, source, agent, kind, status, title, summary, pane, runtime, created_at, resolved_at, resolution";
+    "id, seq, source, agent, kind, status, title, summary, pane, runtime, created_at, resolved_at, resolution, pane_session, pane_pid, agent_seq";
+
+/// Adds the columns an older database lacks. Idempotent.
+fn migrate(conn: &Connection) -> rusqlite::Result<()> {
+    let existing: Vec<String> = conn
+        .prepare("SELECT name FROM pragma_table_info('events')")?
+        .query_map([], |r| r.get(0))?
+        .collect::<Result<_, _>>()?;
+    for (name, ty) in ADDED_COLUMNS {
+        if !existing.iter().any(|c| c == name) {
+            // Names and types are constants, never input.
+            conn.execute_batch(&format!("ALTER TABLE events ADD COLUMN {name} {ty}"))?;
+        }
+    }
+    Ok(())
+}
 
 pub struct SqliteEventStore {
     conn: RefCell<Connection>,
@@ -64,6 +86,15 @@ fn row_to_event(r: &Row<'_>) -> rusqlite::Result<Event> {
         created_at: r.get::<_, i64>(10)? as u64,
         resolved_at: r.get::<_, Option<i64>>(11)?.map(|v| v as u64),
         resolution: r.get(12)?,
+        context: PaneContext {
+            session: r.get(13)?,
+            pane_pid: r
+                .get::<_, Option<i64>>(14)?
+                .and_then(|v| u32::try_from(v).ok()),
+            agent_seq: r
+                .get::<_, Option<i64>>(15)?
+                .and_then(|v| u64::try_from(v).ok()),
+        },
     })
 }
 
@@ -96,6 +127,7 @@ impl SqliteEventStore {
         conn.pragma_update(None, "secure_delete", "ON")
             .map_err(io)?;
         conn.execute_batch(SCHEMA).map_err(io)?;
+        migrate(&conn).map_err(io)?;
         Ok(Self {
             conn: RefCell::new(conn),
         })
@@ -118,8 +150,8 @@ impl EventStore for SqliteEventStore {
                 .map_err(db_err)?;
             let seq = next_seq(&tx).map_err(db_err)?;
             tx.execute(
-                "INSERT INTO events (id, seq, source, agent, kind, status, title, summary, pane, runtime, created_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, 'pending', ?6, ?7, ?8, ?9, ?10)",
+                "INSERT INTO events (id, seq, source, agent, kind, status, title, summary, pane, runtime, created_at, pane_session, pane_pid, agent_seq)
+                 VALUES (?1, ?2, ?3, ?4, ?5, 'pending', ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
                 params![
                     id,
                     seq,
@@ -130,7 +162,13 @@ impl EventStore for SqliteEventStore {
                     e.summary,
                     e.pane.as_ref().map(|p| p.pane.as_str()),
                     e.pane.as_ref().map(|p| p.runtime.as_str()),
-                    e.created_at as i64
+                    e.created_at as i64,
+                    e.pane.as_ref().and_then(|p| p.context.session.as_deref()),
+                    e.pane.as_ref().and_then(|p| p.context.pane_pid),
+                    e.pane
+                        .as_ref()
+                        .and_then(|p| p.context.agent_seq)
+                        .and_then(|v| i64::try_from(v).ok()),
                 ],
             )
             .map_err(db_err)?;
@@ -237,10 +275,7 @@ mod tests {
             kind,
             title: "t".into(),
             summary: "it's \"quoted\"; DROP TABLE events;--".into(),
-            pane: Some(PaneRef {
-                runtime: Runtime::Herdr,
-                pane: pane.into(),
-            }),
+            pane: Some(PaneRef::new(Runtime::Herdr, pane)),
             created_at: at,
         }
     }
@@ -333,6 +368,46 @@ mod tests {
         assert!(s.last_for("p", EventKind::Done).unwrap().is_none());
         assert_eq!(s.pending_for_pane("p").unwrap().len(), 2);
         assert!(s.get("zzz").unwrap().is_none());
+    }
+
+    #[test]
+    fn context_round_trips_and_old_databases_are_migrated() {
+        let t = tempfile::tempdir().unwrap();
+        let p = t.path().join("e.db");
+        {
+            // A v0.2.0 database: no context columns, one pending row.
+            touch_private(&p).unwrap();
+            let c = Connection::open(&p).unwrap();
+            c.execute_batch(SCHEMA).unwrap();
+            c.execute(
+                "INSERT INTO events (id, seq, source, agent, kind, status, title, summary, pane, runtime, created_at)
+                 VALUES ('old', 1, 'herdr', 'claude', 'approval_required', 'pending', 't', 's', 'w1:p1', 'herdr', 5)",
+                [],
+            )
+            .unwrap();
+            c.execute("UPDATE meta SET value = 2 WHERE key = 'next_seq'", [])
+                .unwrap();
+        }
+        let s = SqliteEventStore::open(&p).unwrap();
+        let old = s.get("old").unwrap().unwrap();
+        assert_eq!(old.context, PaneContext::default());
+        assert_eq!(old.pane_ref().unwrap().pane, "w1:p1");
+        let mut n = new(EventKind::ApprovalRequired, "%3", 10);
+        n.pane = Some(PaneRef {
+            runtime: Runtime::Tmux,
+            pane: "%3".into(),
+            context: PaneContext {
+                session: Some("/tmp/tmux-1000/default".into()),
+                pane_pid: Some(4242),
+                agent_seq: Some(21),
+            },
+        });
+        let e = s.insert("new", &n).unwrap();
+        assert_eq!(e.context.pane_pid, Some(4242));
+        assert_eq!(e.pane_ref().unwrap(), n.pane.unwrap());
+        // Reopening is idempotent.
+        drop(s);
+        assert!(SqliteEventStore::open(&p).is_ok());
     }
 
     #[test]

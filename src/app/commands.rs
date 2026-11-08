@@ -42,6 +42,22 @@ pub fn read_stdin(max: usize) -> Result<String, CliError> {
     String::from_utf8(buf).map_err(|_| CliError::new("invalid_input", "stdin is not UTF-8"))
 }
 
+/// The hook's pane, plus the tmux `pane_pid` it has now: `respond` later
+/// refuses to type into that pane unless the same process still owns it.
+/// Best effort: without tmux the pid stays unknown (and tmux answers are refused).
+fn pane_with_pid(ctx: &Ctx, cfg: &Config) -> Option<crate::features::events::domain::PaneRef> {
+    use crate::features::agents::domain::{AgentRuntime, PaneProbe};
+    use crate::features::events::domain::Runtime;
+    let mut pane = ctx.pane.clone()?;
+    if pane.runtime == Runtime::Tmux {
+        let rts = Runtimes::new(ctx, cfg);
+        if let Ok(PaneProbe::Live(s)) = rts.tmux.probe(&pane) {
+            pane.context.pane_pid = s.pane_pid;
+        }
+    }
+    Some(pane)
+}
+
 pub fn emit(ctx: &Ctx, source: &str, kind: Option<KindArg>) -> Result<Reply, CliError> {
     use std::io::IsTerminal;
     let cfg = ctx.config()?;
@@ -52,7 +68,7 @@ pub fn emit(ctx: &Ctx, source: &str, kind: Option<KindArg>) -> Result<Reply, Cli
     } else {
         read_stdin(1024 * 1024)?
     };
-    let (pane, now) = (ctx.pane.clone(), SystemClock.now());
+    let (pane, now) = (pane_with_pid(ctx, &cfg), SystemClock.now());
     let new = match kind {
         None => parse_hook_payload(source, &raw, pane, now)?,
         Some(k) => {

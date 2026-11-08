@@ -26,6 +26,10 @@ case "$name $1 $2" in
     exit 3 ;;
   "herdr session list") echo '{"sessions":[{"default":true,"name":"default","running":true}]}' ;;
   "tmux list-sessions"*) printf 'main\t1\n' ;;
+  "tmux display-message -p"|"tmux -S "*)
+    case "$*" in
+      *display-message*) [ -f "$FAKE_DIR/tmux_pid" ] || { echo "can't find pane" >&2; exit 1; }; cat "$FAKE_DIR/tmux_pid" ;;
+    esac ;;
   "tailscale status --json") cat "$FAKE_DIR/ts_status.json" ;;
   "tailscale ip -4") cat "$FAKE_DIR/ts_ip" ;;
   "tailscale whois --json") echo '{"Node":{},"UserProfile":{"LoginName":"me@example.com"}}' ;;
@@ -55,6 +59,7 @@ impl Env {
         let fake = root.join("fake");
         fs::create_dir_all(&fake).unwrap();
         fs::write(fake.join("agents.json"), AGENTS).unwrap();
+        fs::write(fake.join("tmux_pid"), "4242\n").unwrap();
         fs::write(
             fake.join("ts_status.json"),
             r#"{"BackendState":"Running","Self":{"UserID":1,"DNSName":"box.tail.ts.net."},"User":{"1":{"LoginName":"me@example.com"}}}"#,

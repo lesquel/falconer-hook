@@ -2,7 +2,7 @@
 
 mod hook_payload;
 
-pub use hook_payload::{parse_hook_payload, parse_with_kind, EmitKind};
+pub use hook_payload::{parse_hook_payload, parse_with_kind, EmitKind, MAX_SUMMARY, MAX_TITLE};
 
 use serde::Serialize;
 use thiserror::Error;
@@ -47,23 +47,11 @@ pub enum EventStatus {
 }
 
 /// Where the agent's pane lives, so a response can be delivered.
-pub use crate::shared::domain::runtime::Runtime;
+pub use crate::shared::domain::runtime::{valid_pane_id, PaneContext, PaneRef, Runtime};
 
-/// An agent pane reference (`w7:pA` for Herdr, `%3` for tmux).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct PaneRef {
-    pub runtime: Runtime,
-    pub pane: String,
-}
-
-/// Pane ids end up as argv entries; restrict them to a safe alphabet anyway.
-pub fn valid_pane_id(p: &str) -> bool {
-    !p.is_empty()
-        && p.len() <= 64
-        && !p.starts_with('-')
-        && p.bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b":%._-@$".contains(&b))
-}
+/// A pending approval older than this can no longer be answered: the prompt
+/// it showed has most likely changed.
+pub const APPROVAL_TTL_SECS: u64 = 15 * 60;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NewEvent {
@@ -93,6 +81,9 @@ pub struct Event {
     pub created_at: u64,
     pub resolved_at: Option<u64>,
     pub resolution: Option<String>,
+    /// Runtime context captured with the event (not part of the inbox output).
+    #[serde(skip)]
+    pub context: PaneContext,
 }
 
 impl Event {
@@ -100,6 +91,7 @@ impl Event {
         Some(PaneRef {
             runtime: self.runtime?,
             pane: self.pane.clone()?,
+            context: self.context.clone(),
         })
     }
 }
@@ -192,6 +184,7 @@ mod tests {
             created_at: at,
             resolved_at: None,
             resolution: None,
+            context: PaneContext::default(),
         }
     }
 
@@ -202,10 +195,7 @@ mod tests {
             kind,
             title: String::new(),
             summary: String::new(),
-            pane: pane.map(|p| PaneRef {
-                runtime: Runtime::Herdr,
-                pane: p.into(),
-            }),
+            pane: pane.map(|p| PaneRef::new(Runtime::Herdr, p)),
             created_at: at,
         }
     }
@@ -336,6 +326,11 @@ pub mod fakes {
                 created_at: e.created_at,
                 resolved_at: None,
                 resolution: None,
+                context: e
+                    .pane
+                    .as_ref()
+                    .map(|p| p.context.clone())
+                    .unwrap_or_default(),
             };
             self.events.borrow_mut().push(ev.clone());
             Ok(ev)

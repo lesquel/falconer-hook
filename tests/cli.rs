@@ -91,8 +91,18 @@ fn emit_records_from_tmux_and_respond_delivers_keys() {
         (d["event_id"].as_str(), d["action"].as_str()),
         (Some(id.as_str()), Some("allow"))
     );
-    let sent: Vec<_> = e.calls().into_iter().filter(|c| c[0] == "tmux").collect();
-    assert_eq!(sent, vec![vec!["tmux", "send-keys", "-t", "%5", "Enter"]]);
+    let tmux_calls: Vec<_> = e.calls().into_iter().filter(|c| c[0] == "tmux").collect();
+    let probe = vec!["tmux", "display-message", "-p", "-t", "%5", "#{pane_pid}"];
+    assert_eq!(
+        tmux_calls,
+        vec![
+            probe.clone(),
+            probe.clone(),
+            probe,
+            vec!["tmux", "send-keys", "-t", "%5", "Enter"]
+        ],
+        "pid recorded on emit, re-checked right before sending"
+    );
 
     let (code, v) = e.json(&["respond", &id, "--action", "allow", "--json"], None, &[]);
     assert_eq!(err_code(code, &v), "already_resolved");
@@ -100,6 +110,67 @@ fn emit_records_from_tmux_and_respond_delivers_keys() {
     let d = ok_data(code, &v);
     assert_eq!(d["events"][0]["status"], "resolved");
     assert_eq!(d["events"][0]["resolution"], "allow");
+}
+
+#[test]
+fn respond_refuses_a_tmux_pane_taken_over_by_another_process() {
+    let e = Env::new();
+    let tmux = [("TMUX", "/tmp/tmux-1000/work,1,0"), ("TMUX_PANE", "%5")];
+    let (code, v) = e.json(
+        &["emit", "--source", "claude", "--json"],
+        Some(NOTIFICATION),
+        &tmux,
+    );
+    let id = ok_data(code, &v)["event_id"].as_str().unwrap().to_string();
+    // The agent exited and a shell now owns the pane.
+    std::fs::write(e.root.join("fake/tmux_pid"), "999\n").unwrap();
+    let (code, v) = e.json(&["respond", &id, "--action", "allow", "--json"], None, &[]);
+    assert_eq!(err_code(code, &v), "stale");
+    std::fs::remove_file(e.root.join("fake/tmux_pid")).unwrap();
+    let (code, v) = e.json(&["respond", &id, "--action", "allow", "--json"], None, &[]);
+    assert_eq!(err_code(code, &v), "no_pane");
+    let calls = e.calls();
+    assert!(
+        calls
+            .iter()
+            .filter(|c| c[0] == "tmux")
+            .all(|c| c[1..3] == ["-S", "/tmp/tmux-1000/work"]),
+        "every call goes to the recorded socket: {calls:?}"
+    );
+    assert!(!calls.iter().any(|c| c.iter().any(|a| a == "send-keys")));
+    let (code, v) = e.json(&["inbox", "list", "--json"], None, &[]);
+    assert_eq!(ok_data(code, &v)["events"][0]["status"], "pending");
+}
+
+#[test]
+fn respond_refuses_a_herdr_pane_that_is_no_longer_blocked() {
+    let e = Env::new();
+    let herdr = [("HERDR_ENV", "1"), ("HERDR_PANE_ID", "w7:pA")];
+    let (code, v) = e.json(
+        &["emit", "--source", "claude", "--json"],
+        Some(NOTIFICATION),
+        &herdr,
+    );
+    let id = ok_data(code, &v)["event_id"].as_str().unwrap().to_string();
+    std::fs::write(
+        e.root.join("fake/agents.json"),
+        AGENTS.replace("\"blocked\"", "\"working\""),
+    )
+    .unwrap();
+    let (code, v) = e.json(&["respond", &id, "--action", "allow", "--json"], None, &[]);
+    assert_eq!(err_code(code, &v), "stale");
+    std::fs::write(e.root.join("fake/agents.json"), AGENTS).unwrap();
+    let (code, v) = e.json(&["respond", &id, "--action", "allow", "--json"], None, &[]);
+    ok_data(code, &v);
+    let sent: Vec<_> = e
+        .calls()
+        .into_iter()
+        .filter(|c| c[0] == "herdr" && c[1..] != ["agent", "list"])
+        .collect();
+    assert_eq!(
+        sent,
+        vec![vec!["herdr", "agent", "send-keys", "w7:pA", "enter"]]
+    );
 }
 
 #[test]
@@ -120,7 +191,11 @@ fn respond_text_from_herdr_pane_uses_one_argv_entry() {
         &[],
     );
     ok_data(code, &v);
-    let sent: Vec<_> = e.calls().into_iter().filter(|c| c[0] == "herdr").collect();
+    let sent: Vec<_> = e
+        .calls()
+        .into_iter()
+        .filter(|c| c[0] == "herdr" && c[1..] != ["agent", "list"])
+        .collect();
     assert_eq!(
         sent,
         vec![

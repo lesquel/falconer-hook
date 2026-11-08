@@ -6,7 +6,9 @@ use crate::features::agents::domain::{AgentError, AgentRuntime};
 use crate::features::events::domain::{
     EventKind, EventNotifier, EventStatus, EventStore, StoreError,
 };
-use crate::features::responses::domain::{sanitize_text, Action, KeymapSource, ResponseError};
+use crate::features::responses::domain::{
+    check_age, check_target, sanitize_text, Action, KeymapSource, ResponseError,
+};
 use crate::shared::domain::clock::Clock;
 
 #[derive(Debug, Serialize, PartialEq, Eq)]
@@ -58,6 +60,7 @@ impl<S: EventStore, K: KeymapSource, C: Clock> RespondToEvent<'_, S, K, C> {
         {
             return Err(ResponseError::InvalidAction);
         }
+        check_age(&event, self.clock.now())?;
         let pane = event.pane_ref().ok_or(ResponseError::NoPane)?;
         let runtime = self
             .runtimes
@@ -68,6 +71,13 @@ impl<S: EventStore, K: KeymapSource, C: Clock> RespondToEvent<'_, S, K, C> {
             .keymaps
             .keymap(&event.agent)
             .ok_or(ResponseError::NoKeymap)?;
+        // Re-check the pane right before anything is sent: it must still be
+        // the same pane, running the same agent, showing the same prompt.
+        let probe = runtime.probe(&pane).map_err(|e| match e {
+            AgentError::Unavailable(_) => ResponseError::RuntimeUnavailable,
+            _ => ResponseError::Delivery,
+        })?;
+        check_target(&event, &probe)?;
         // Claim first: an atomic `pending -> resolved` compare-and-set. Only
         // the winner of concurrent responses sends anything.
         let resolved = match self
@@ -79,15 +89,15 @@ impl<S: EventStore, K: KeymapSource, C: Clock> RespondToEvent<'_, S, K, C> {
             Err(e) => return Err(store_err(e)),
         };
         let delivered = match action {
-            Action::Allow => runtime.send_keys(&pane.pane, &keymap.allow),
-            Action::Deny => runtime.send_keys(&pane.pane, &keymap.deny),
+            Action::Allow => runtime.send_keys(&pane, &keymap.allow),
+            Action::Deny => runtime.send_keys(&pane, &keymap.deny),
             Action::Text => {
                 let t = text.as_deref().unwrap_or_default();
-                runtime.send_text(&pane.pane, t).and_then(|_| {
+                runtime.send_text(&pane, t).and_then(|_| {
                     if keymap.submit.is_empty() {
                         Ok(())
                     } else {
-                        runtime.send_keys(&pane.pane, &keymap.submit)
+                        runtime.send_keys(&pane, &keymap.submit)
                     }
                 })
             }
@@ -114,7 +124,7 @@ impl<S: EventStore, K: KeymapSource, C: Clock> RespondToEvent<'_, S, K, C> {
 mod tests {
     use super::*;
     use crate::features::agents::domain::fakes::FakeRuntime;
-    use crate::features::agents::domain::Runtime;
+    use crate::features::agents::domain::{AgentStatus, PaneState, Runtime};
     use crate::features::events::domain::fakes::{MemStore, RecordingNotifier};
     use crate::features::events::domain::{Event, NewEvent, PaneRef};
     use crate::features::responses::domain::Keymap;
@@ -148,10 +158,7 @@ mod tests {
             kind,
             title: "t".into(),
             summary: "s".into(),
-            pane: pane.map(|(runtime, p)| PaneRef {
-                runtime,
-                pane: p.into(),
-            }),
+            pane: pane.map(|(runtime, p)| PaneRef::new(runtime, p)),
             created_at: 1,
         };
         store.insert(id, &e).unwrap();
@@ -196,9 +203,13 @@ mod tests {
                 "claude",
                 Some((Runtime::Tmux, "%1")),
             );
+            let herdr = FakeRuntime::herdr_with_agents(0);
+            for p in ["w1:p1", "w1:p2", "w1:p3"] {
+                herdr.live(p, blocked("claude"));
+            }
             Self {
                 store,
-                herdr: FakeRuntime::herdr_with_agents(0),
+                herdr,
                 clock: FixedClock::at(50),
                 notifier: RecordingNotifier::default(),
             }
@@ -218,6 +229,15 @@ mod tests {
                 notifier: &self.notifier,
             };
             uc.respond(id, action, text)
+        }
+    }
+
+    fn blocked(agent: &str) -> PaneState {
+        PaneState {
+            pane_pid: None,
+            agent: Some(agent.into()),
+            status: Some(AgentStatus::Blocked),
+            state_change_seq: Some(1),
         }
     }
 
@@ -280,6 +300,90 @@ mod tests {
         assert!(r.notifier.resolved.borrow().is_empty());
     }
 
+    #[test]
+    fn stale_gone_and_expired_panes_are_refused_and_stay_pending() {
+        let r = Rig::new();
+        let code = |res: Result<RespondOutcome, ResponseError>| res.unwrap_err().code();
+        // The agent moved on (now working): stale.
+        r.herdr.live(
+            "w1:p1",
+            PaneState {
+                status: Some(AgentStatus::Working),
+                ..blocked("claude")
+            },
+        );
+        assert_eq!(code(r.run("a", Action::Allow, None)), "stale");
+        // Another agent took the pane over: stale.
+        r.herdr.live("w1:p1", blocked("codex"));
+        assert_eq!(code(r.run("a", Action::Allow, None)), "stale");
+        // The pane is gone: no_pane.
+        r.herdr.probes.borrow_mut().remove("w1:p1");
+        assert_eq!(code(r.run("a", Action::Allow, None)), "no_pane");
+        r.herdr.live("w1:p1", blocked("claude"));
+        // Fifteen minutes later the approval can no longer be answered.
+        r.clock.advance(15 * 60 + 1);
+        assert_eq!(code(r.run("a", Action::Allow, None)), "expired");
+        assert!(r.herdr.sent.borrow().is_empty());
+        assert_eq!(
+            r.store.get("a").unwrap().unwrap().status,
+            EventStatus::Pending
+        );
+    }
+
+    #[test]
+    fn tmux_answers_go_to_the_recorded_socket_and_need_the_same_pid() {
+        let store = MemStore::default();
+        let mut e = NewEvent {
+            source: "claude".into(),
+            agent: "claude".into(),
+            kind: EventKind::ApprovalRequired,
+            title: "t".into(),
+            summary: "s".into(),
+            pane: Some(PaneRef::new(Runtime::Tmux, "%4")),
+            created_at: 40,
+        };
+        if let Some(p) = e.pane.as_mut() {
+            p.context.session = Some("/tmp/tmux-1000/work".into());
+            p.context.pane_pid = Some(77);
+        }
+        store.insert("t", &e).unwrap();
+        let tmux = FakeRuntime::tmux();
+        let (clock, notifier) = (FixedClock::at(50), RecordingNotifier::default());
+        let rts: [&dyn AgentRuntime; 1] = [&tmux];
+        let uc = RespondToEvent {
+            store: &store,
+            keymaps: &Maps,
+            clock: &clock,
+            runtimes: &rts,
+            notifier: &notifier,
+        };
+        tmux.live(
+            "%4",
+            PaneState {
+                pane_pid: Some(78),
+                ..Default::default()
+            },
+        );
+        assert_eq!(
+            uc.respond("t", Action::Allow, None),
+            Err(ResponseError::Stale)
+        );
+        tmux.live(
+            "%4",
+            PaneState {
+                pane_pid: Some(77),
+                ..Default::default()
+            },
+        );
+        uc.respond("t", Action::Allow, None).unwrap();
+        assert_eq!(tmux.sent.borrow().as_slice(), [sent("%4", "enter")]);
+        assert!(tmux
+            .sessions_seen
+            .borrow()
+            .iter()
+            .all(|s| s.as_deref() == Some("/tmp/tmux-1000/work")));
+    }
+
     /// Simulates another `respond` resolving the event between our read and our claim.
     struct RacyStore(MemStore);
     impl EventStore for RacyStore {
@@ -319,6 +423,7 @@ mod tests {
     #[test]
     fn concurrent_loser_sends_nothing() {
         let r = Rig::new();
+        r.herdr.live("w1:p1", blocked("claude"));
         let racy = RacyStore(MemStore::default());
         seed(
             &racy.0,

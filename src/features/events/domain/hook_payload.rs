@@ -7,14 +7,70 @@
 //! - Any payload with a kind fixed by the caller (`emit --kind`), used by
 //!   agents whose hook payloads have no shared shape (see [`parse_with_kind`]).
 //!
-//! Only `message`/`title`/`summary` (or the agent's last-message field) are kept; transcript paths, session ids
-//! and tool inputs are ignored.
+//! Only `message`/`title`/`summary` (or the agent's last-message field) and,
+//! for approvals, a short summary of the tool input (the command or the file
+//! path, so the phone does not approve blind) are kept; transcript paths and
+//! session ids are ignored. Everything is one line, capped and stripped of
+//! control, bidi and zero-width characters.
 
 use serde_json::Value;
 use thiserror::Error;
 
 use super::{EventKind, NewEvent, PaneRef};
 use crate::shared::domain::error::ErrorCode;
+use crate::shared::domain::text::clip;
+
+/// Longest event title, in characters (`…` marks a cut).
+pub const MAX_TITLE: usize = 120;
+/// Longest event summary, in characters (`…` marks a cut).
+pub const MAX_SUMMARY: usize = 200;
+
+/// Objects that hold a tool's arguments, across agents: Claude/Copilot
+/// (`tool_input`), Gemini (`tool_input`/`details`), Cursor/OpenCode
+/// (`input`/`args`), camelCase variants.
+const TOOL_INPUT_FIELDS: &[&str] = &["tool_input", "toolInput", "input", "args", "details"];
+/// What to show from those arguments, in order of preference.
+const TOOL_DETAIL_FIELDS: &[&str] = &[
+    "command",
+    "cmd",
+    "file_path",
+    "filePath",
+    "notebook_path",
+    "path",
+    "url",
+    "pattern",
+];
+
+/// The command or file a tool call is about, as one capped line. A command
+/// given as an argv array (Codex) is joined with spaces.
+pub fn tool_detail(v: &Value) -> Option<String> {
+    let input = TOOL_INPUT_FIELDS
+        .iter()
+        .find_map(|k| v.get(*k).filter(|i| i.is_object()))
+        .or_else(|| v.get("command").map(|_| v))?;
+    TOOL_DETAIL_FIELDS.iter().find_map(|k| {
+        let d = match input.get(*k)? {
+            Value::String(s) => s.clone(),
+            Value::Array(a) => a
+                .iter()
+                .filter_map(Value::as_str)
+                .collect::<Vec<_>>()
+                .join(" "),
+            _ => return None,
+        };
+        let d = clip(&d, MAX_SUMMARY);
+        (!d.is_empty()).then_some(d)
+    })
+}
+
+/// `prefix: detail` when the tool input has something to show.
+fn with_detail(prefix: String, v: &Value) -> String {
+    match tool_detail(v) {
+        Some(d) if prefix.is_empty() => d,
+        Some(d) => format!("{prefix}: {d}"),
+        None => prefix,
+    }
+}
 
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum PayloadError {
@@ -75,10 +131,14 @@ pub fn parse_hook_payload(
         }
         Some("PermissionRequest") => {
             let tool = str_field(&v, "tool_name").unwrap_or("a tool");
+            let summary = match tool_detail(&v) {
+                Some(d) => format!("Allow {tool}: {d}"),
+                None => format!("Allow {tool}?"),
+            };
             (
                 EventKind::ApprovalRequired,
                 format!("{agent} needs approval"),
-                format!("Allow {tool}?"),
+                summary,
             )
         }
         Some("Stop") => (EventKind::Done, format!("{agent} finished"), String::new()),
@@ -157,6 +217,14 @@ pub fn parse_with_kind(
         .find_map(|k| str_field(&v, k).filter(|s| !s.trim().is_empty()))
         .unwrap_or_default()
         .to_string();
+    let summary = if kind == EventKind::ApprovalRequired {
+        match (summary.is_empty(), str_field(&v, "tool_name")) {
+            (true, Some(tool)) => with_detail(format!("Allow {tool}"), &v),
+            _ => with_detail(summary, &v),
+        }
+    } else {
+        summary
+    };
     let title = super::titled_with_project(title, str_field(&v, "cwd"));
     Ok(finish(source, kind, title, summary, pane, now))
 }
@@ -169,13 +237,12 @@ fn finish(
     pane: Option<PaneRef>,
     now: u64,
 ) -> NewEvent {
-    let clean = |s: String| s.chars().filter(|c| !c.is_control()).collect::<String>();
     NewEvent {
         source: source.to_string(),
         agent: source.to_string(),
         kind,
-        title: clean(title).chars().take(120).collect(),
-        summary: clean(summary).chars().take(200).collect(),
+        title: clip(&title, MAX_TITLE),
+        summary: clip(&summary, MAX_SUMMARY),
         pane,
         created_at: now,
     }
@@ -187,10 +254,7 @@ mod tests {
     use crate::features::events::domain::Runtime;
 
     fn pane() -> Option<PaneRef> {
-        Some(PaneRef {
-            runtime: Runtime::Tmux,
-            pane: "%3".into(),
-        })
+        Some(PaneRef::new(Runtime::Tmux, "%3"))
     }
 
     #[test]
@@ -243,7 +307,59 @@ mod tests {
         assert_eq!(d.title, "claude finished");
         let p = parse_hook_payload("claude", r#"{"hook_event_name":"PermissionRequest","tool_name":"Bash","tool_input":{"command":"rm -rf /"}}"#, None, 1).unwrap();
         assert_eq!(p.kind, EventKind::ApprovalRequired);
-        assert_eq!(p.summary, "Allow Bash?");
+        assert_eq!(p.summary, "Allow Bash: rm -rf /");
+        let p = parse_hook_payload(
+            "claude",
+            r#"{"hook_event_name":"PermissionRequest","tool_name":"Read"}"#,
+            None,
+            1,
+        )
+        .unwrap();
+        assert_eq!(p.summary, "Allow Read?");
+    }
+
+    #[test]
+    fn approval_summary_shows_the_tool_input_safely() {
+        let raw = serde_json::json!({
+            "hook_event_name": "PermissionRequest",
+            "tool_name": "Edit",
+            "tool_input": {"file_path": "/w/src/\u{202E}gpj.exe\u{200B}", "old_string": "secret"}
+        })
+        .to_string();
+        let e = parse_hook_payload("claude", &raw, None, 1).unwrap();
+        assert_eq!(e.summary, "Allow Edit: /w/src/gpj.exe");
+        let raw = serde_json::json!({
+            "hook_event_name": "PermissionRequest",
+            "tool_name": "Bash",
+            "tool_input": {"command": format!("echo {}\nrm -rf ~", "a".repeat(400))}
+        })
+        .to_string();
+        let e = parse_hook_payload("claude", &raw, None, 1).unwrap();
+        assert_eq!(e.summary.chars().count(), MAX_SUMMARY);
+        assert!(e.summary.starts_with("Allow Bash: echo aaa"));
+        assert!(e.summary.ends_with('…'), "a cut is marked");
+        assert!(!e.summary.contains('\n'));
+    }
+
+    #[test]
+    fn other_agents_approvals_include_the_tool_input() {
+        let gemini = r#"{"hook_event_name":"Notification","notification_type":"ToolPermission","message":"Run shell?","details":{"command":"git push --force"}}"#;
+        let e = parse_with_kind("gemini", EmitKind::Notification, gemini, None, 1).unwrap();
+        assert_eq!(e.summary, "Run shell?: git push --force");
+        let codex =
+            r#"{"tool_name":"shell","tool_input":{"command":["bash","-lc","make deploy"]}}"#;
+        let e = parse_with_kind(
+            "codex",
+            EmitKind::Fixed(EventKind::ApprovalRequired),
+            codex,
+            None,
+            1,
+        )
+        .unwrap();
+        assert_eq!(e.summary, "Allow shell: bash -lc make deploy");
+        // Done events never carry tool input.
+        let e = parse_with_kind("codex", EmitKind::Fixed(EventKind::Done), codex, None, 1).unwrap();
+        assert_eq!(e.summary, "");
     }
 
     #[test]

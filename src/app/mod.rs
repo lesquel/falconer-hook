@@ -26,6 +26,7 @@ use crate::features::events::infrastructure::sqlite_store::SqliteEventStore;
 use crate::features::pairing::infrastructure::authorized_keys::FileAuthorizedKeys;
 use crate::features::pairing::infrastructure::toml_registry::TomlDeviceRegistry;
 use crate::shared::config::{Config, Paths};
+use crate::shared::domain::runtime::valid_session;
 use crate::shared::infrastructure::fs_secure::{check_private_file_if_exists, ensure_private_dir};
 use crate::shared::infrastructure::host_identity::HostIdentity;
 use crate::shared::infrastructure::process::ProcessRunner;
@@ -48,24 +49,7 @@ impl Ctx {
     pub fn from_env() -> Result<Self, CliError> {
         let get = |k: &str| std::env::var(k).ok();
         let paths = Paths::from_env(get)?;
-        let pane = if get("HERDR_ENV").as_deref() == Some("1") {
-            get("HERDR_PANE_ID")
-                .filter(|p| valid_pane_id(p))
-                .map(|pane| PaneRef {
-                    runtime: Runtime::Herdr,
-                    pane,
-                })
-        } else {
-            None
-        }
-        .or_else(|| {
-            get("TMUX_PANE")
-                .filter(|p| valid_pane_id(p))
-                .map(|pane| PaneRef {
-                    runtime: Runtime::Tmux,
-                    pane,
-                })
-        });
+        let pane = pane_from_env(get);
         let exe = std::env::current_exe()
             .and_then(|p| p.canonicalize())
             .unwrap_or_else(|_| PathBuf::from("openmosh-hook"));
@@ -111,6 +95,35 @@ impl Ctx {
             lock_path: self.lock_path(),
         }
     }
+}
+
+/// The agent pane this process runs in, with the server it belongs to:
+/// `$HERDR_PANE_ID` (+ `$HERDR_SESSION`, or the session named by
+/// `$HERDR_SOCKET_PATH`), else `$TMUX_PANE` (+ the socket from `$TMUX`).
+pub fn pane_from_env(get: impl Fn(&str) -> Option<String>) -> Option<PaneRef> {
+    if get("HERDR_ENV").as_deref() == Some("1") {
+        if let Some(id) = get("HERDR_PANE_ID").filter(|p| valid_pane_id(p)) {
+            let mut p = PaneRef::new(Runtime::Herdr, id);
+            p.context.session = get("HERDR_SESSION")
+                .or_else(|| get("HERDR_SOCKET_PATH").and_then(|s| herdr_session_of(&s)))
+                .filter(|s| valid_session(Runtime::Herdr, s));
+            return Some(p);
+        }
+    }
+    let id = get("TMUX_PANE").filter(|p| valid_pane_id(p))?;
+    let mut p = PaneRef::new(Runtime::Tmux, id);
+    // `$TMUX` is `<socket>,<server pid>,<session index>`.
+    p.context.session = get("TMUX")
+        .and_then(|t| t.split(',').next().map(str::to_string))
+        .filter(|s| valid_session(Runtime::Tmux, s));
+    Some(p)
+}
+
+/// `…/herdr/sessions/<name>/herdr.sock` → `<name>`.
+fn herdr_session_of(socket: &str) -> Option<String> {
+    let mut parts = socket.rsplit('/');
+    let (file, name, dir) = (parts.next()?, parts.next()?, parts.next()?);
+    (file == "herdr.sock" && dir == "sessions").then(|| name.to_string())
 }
 
 /// Private state, opened only after permissions were enforced (control T-8).
@@ -275,4 +288,56 @@ pub fn with_notifier<T>(
         host_alias: ctx.host_alias(cfg),
     };
     f(&notifier)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn env<'a>(vars: &'a [(&'a str, &'a str)]) -> impl Fn(&str) -> Option<String> + 'a {
+        move |k| {
+            vars.iter()
+                .find(|(n, _)| *n == k)
+                .map(|(_, v)| v.to_string())
+        }
+    }
+
+    #[test]
+    fn pane_context_comes_from_the_environment() {
+        let p = pane_from_env(env(&[
+            ("TMUX", "/tmp/tmux-1000/work,4120,0"),
+            ("TMUX_PANE", "%7"),
+        ]))
+        .unwrap();
+        assert_eq!((p.runtime, p.pane.as_str()), (Runtime::Tmux, "%7"));
+        assert_eq!(p.context.session.as_deref(), Some("/tmp/tmux-1000/work"));
+        let p = pane_from_env(env(&[("TMUX", "relative,1,0"), ("TMUX_PANE", "%7")])).unwrap();
+        assert_eq!(p.context.session, None, "only absolute sockets");
+
+        let p = pane_from_env(env(&[
+            ("HERDR_ENV", "1"),
+            ("HERDR_PANE_ID", "w1:p2"),
+            ("HERDR_SESSION", "side"),
+        ]))
+        .unwrap();
+        assert_eq!(p.context.session.as_deref(), Some("side"));
+        let p = pane_from_env(env(&[
+            ("HERDR_ENV", "1"),
+            ("HERDR_PANE_ID", "w1:p2"),
+            (
+                "HERDR_SOCKET_PATH",
+                "/h/.config/herdr/sessions/work/herdr.sock",
+            ),
+        ]))
+        .unwrap();
+        assert_eq!(p.context.session.as_deref(), Some("work"));
+        let p = pane_from_env(env(&[
+            ("HERDR_ENV", "1"),
+            ("HERDR_PANE_ID", "w1:p2"),
+            ("HERDR_SESSION", "--bad"),
+        ]))
+        .unwrap();
+        assert_eq!(p.context.session, None);
+        assert!(pane_from_env(env(&[])).is_none());
+    }
 }

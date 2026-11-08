@@ -80,10 +80,7 @@ mod tests {
             kind,
             title: "t".into(),
             summary: "s".into(),
-            pane: pane.map(|p| PaneRef {
-                runtime: Runtime::Herdr,
-                pane: p.into(),
-            }),
+            pane: pane.map(|p| PaneRef::new(Runtime::Herdr, p)),
             created_at: at,
         }
     }

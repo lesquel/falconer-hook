@@ -79,6 +79,7 @@ mod tests {
             created_at: 1,
             resolved_at: Some(5),
             resolution: Some("allow".into()),
+            context: Default::default(),
         };
         let p = plaintext_for(&e, "box", true);
         assert_eq!(

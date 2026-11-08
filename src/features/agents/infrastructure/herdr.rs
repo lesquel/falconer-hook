@@ -4,15 +4,17 @@
 //! - `herdr session list --json` → `{"sessions":[{name, running, default}]}`
 //! - keys: `herdr agent send-keys <pane> <key>...`
 //! - text: `herdr pane send-text <pane> <text>` (one argv entry)
+//! - a pane recorded in a named session gets `herdr --session <name> …`
 
 use serde::Deserialize;
 
 use super::run;
 use crate::features::agents::domain::{
-    Agent, AgentError, AgentRuntime, AgentStatus, Runtime, Session,
+    Agent, AgentError, AgentRuntime, AgentStatus, PaneProbe, PaneRef, PaneState, Runtime, Session,
 };
 use crate::features::events::domain::valid_pane_id;
 use crate::shared::domain::command::CommandRunner;
+use crate::shared::domain::text::clip;
 
 pub struct HerdrRuntime<'a> {
     pub runner: &'a dyn CommandRunner,
@@ -65,11 +67,16 @@ pub fn parse_agents(stdout: &str) -> Result<Vec<Agent>, AgentError> {
         .filter(|a| valid_pane_id(&a.pane_id))
         .map(|a| Agent {
             pane_id: a.pane_id,
-            agent: a.agent.unwrap_or_else(|| "unknown".into()),
+            // Herdr text is shown on the phone: one clean line, capped.
+            agent: a
+                .agent
+                .map(|n| clip(&n, 32))
+                .filter(|n| !n.is_empty())
+                .unwrap_or_else(|| "unknown".into()),
             status: AgentStatus::parse(a.agent_status.as_deref().unwrap_or("unknown")),
             state_change_seq: a.state_change_seq,
             cwd: a.cwd.unwrap_or_default(),
-            title: a.terminal_title_stripped.unwrap_or_default(),
+            title: clip(&a.terminal_title_stripped.unwrap_or_default(), 200),
             workspace_id: a.workspace_id,
             runtime: Runtime::Herdr,
         })
@@ -99,6 +106,16 @@ impl HerdrRuntime<'_> {
         }
         Ok(out.stdout)
     }
+
+    /// Runs `args` against the pane's session (`--session <name>` first).
+    fn on(&self, pane: &PaneRef, args: &[&str]) -> Result<String, AgentError> {
+        let mut argv: Vec<&str> = Vec::with_capacity(args.len() + 2);
+        if let Some(s) = pane.session() {
+            argv.extend(["--session", s]);
+        }
+        argv.extend(args);
+        self.ok(&argv)
+    }
 }
 
 impl AgentRuntime for HerdrRuntime<'_> {
@@ -114,26 +131,46 @@ impl AgentRuntime for HerdrRuntime<'_> {
         parse_sessions(&self.ok(&["session", "list", "--json"])?)
     }
 
-    fn send_keys(&self, pane: &str, keys: &[String]) -> Result<(), AgentError> {
-        if !valid_pane_id(pane) || keys.is_empty() {
+    fn send_keys(&self, pane: &PaneRef, keys: &[String]) -> Result<(), AgentError> {
+        let id = pane.pane.as_str();
+        if !valid_pane_id(id) || keys.is_empty() {
             return Err(AgentError::Failed("herdr"));
         }
-        let mut args = vec!["agent", "send-keys", pane];
+        let mut args = vec!["agent", "send-keys", id];
         args.extend(keys.iter().map(String::as_str));
-        self.ok(&args).map(|_| ())
+        self.on(pane, &args).map(|_| ())
     }
 
-    fn send_text(&self, pane: &str, text: &str) -> Result<(), AgentError> {
-        if !valid_pane_id(pane) {
+    fn send_text(&self, pane: &PaneRef, text: &str) -> Result<(), AgentError> {
+        let id = pane.pane.as_str();
+        if !valid_pane_id(id) {
             return Err(AgentError::Failed("herdr"));
         }
         // `--` only when the text could be mistaken for an option.
         if text.starts_with('-') {
-            self.ok(&["pane", "send-text", "--", pane, text])
+            self.on(pane, &["pane", "send-text", "--", id, text])
                 .map(|_| ())
         } else {
-            self.ok(&["pane", "send-text", pane, text]).map(|_| ())
+            self.on(pane, &["pane", "send-text", id, text]).map(|_| ())
         }
+    }
+
+    fn probe(&self, pane: &PaneRef) -> Result<PaneProbe, AgentError> {
+        if !valid_pane_id(&pane.pane) {
+            return Ok(PaneProbe::Gone);
+        }
+        let agents = parse_agents(&self.on(pane, &["agent", "list"])?)?;
+        Ok(agents
+            .into_iter()
+            .find(|a| a.pane_id == pane.pane)
+            .map_or(PaneProbe::Gone, |a| {
+                PaneProbe::Live(PaneState {
+                    pane_pid: None,
+                    agent: Some(a.agent),
+                    status: Some(a.status),
+                    state_change_seq: Some(a.state_change_seq),
+                })
+            }))
     }
 }
 
@@ -178,13 +215,51 @@ mod tests {
         assert!(s[0].running && s[0].default);
     }
 
+    fn pane(id: &str) -> PaneRef {
+        PaneRef::new(Runtime::Herdr, id)
+    }
+
+    #[test]
+    fn probe_finds_the_pane_in_its_session() {
+        let r = RecordingRunner::default();
+        r.reply_ok(LIST);
+        r.reply_ok(LIST);
+        let mut p = pane("w7:pA");
+        p.context.session = Some("work".into());
+        let got = rt(&r).probe(&p).unwrap();
+        assert_eq!(
+            got,
+            PaneProbe::Live(PaneState {
+                pane_pid: None,
+                agent: Some("claude".into()),
+                status: Some(AgentStatus::Blocked),
+                state_change_seq: Some(21),
+            })
+        );
+        assert_eq!(rt(&r).probe(&pane("w7:pZ")).unwrap(), PaneProbe::Gone);
+        assert_eq!(
+            r.argv(),
+            vec![
+                vec!["herdr", "--session", "work", "agent", "list"],
+                vec!["herdr", "agent", "list"],
+            ]
+        );
+    }
+
     #[test]
     fn send_keys_and_text_argv() {
         let r = RecordingRunner::default();
         let h = rt(&r);
-        h.send_keys("w7:pA", &["enter".into()]).unwrap();
-        h.send_text("w7:pA", "use $(rm -rf ~); `x`\nok").unwrap();
-        h.send_text("w7:pA", "-rf please").unwrap();
+        h.send_keys(&pane("w7:pA"), &["enter".into()]).unwrap();
+        h.send_text(&pane("w7:pA"), "use $(rm -rf ~); `x`\nok")
+            .unwrap();
+        h.send_text(&pane("w7:pA"), "-rf please").unwrap();
+        let mut named = pane("w7:pA");
+        named.context.session = Some("side".into());
+        h.send_keys(&named, &["esc".into()]).unwrap();
+        // An invalid recorded session is never passed on.
+        named.context.session = Some("--evil".into());
+        h.send_keys(&named, &["esc".into()]).unwrap();
         assert_eq!(
             r.argv(),
             vec![
@@ -197,6 +272,16 @@ mod tests {
                     "use $(rm -rf ~); `x`\nok"
                 ],
                 vec!["herdr", "pane", "send-text", "--", "w7:pA", "-rf please"],
+                vec![
+                    "herdr",
+                    "--session",
+                    "side",
+                    "agent",
+                    "send-keys",
+                    "w7:pA",
+                    "esc"
+                ],
+                vec!["herdr", "agent", "send-keys", "w7:pA", "esc"],
             ]
         );
     }
@@ -215,7 +300,7 @@ mod tests {
         r.reply_ok("garbage");
         assert_eq!(rt(&r).list_agents(), Err(AgentError::Parse("herdr")));
         assert_eq!(
-            rt(&r).send_keys("-t", &["enter".into()]),
+            rt(&r).send_keys(&pane("-t"), &["enter".into()]),
             Err(AgentError::Failed("herdr"))
         );
     }
