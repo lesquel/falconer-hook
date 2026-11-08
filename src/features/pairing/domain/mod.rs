@@ -66,6 +66,10 @@ pub trait DeviceRegistry {
     /// Removes and returns the device.
     fn remove(&self, id: &str) -> Result<Device, RegistryError>;
     fn update(&self, device: Device) -> Result<(), RegistryError>;
+    /// Marks `id` stale only while its endpoint is still `endpoint`, in one
+    /// step: an endpoint rotated meanwhile (`devices set-endpoint`) is kept
+    /// and stays active. Returns whether the flag was set.
+    fn mark_stale(&self, id: &str, endpoint: &str) -> Result<bool, RegistryError>;
 
     fn get(&self, id: &str) -> Result<Device, RegistryError> {
         self.list()?
@@ -197,6 +201,16 @@ pub mod fakes {
                 .position(|d| d.id == id)
                 .ok_or(RegistryError::NotFound)?;
             Ok(v.remove(i))
+        }
+        fn mark_stale(&self, id: &str, endpoint: &str) -> Result<bool, RegistryError> {
+            let mut v = self.0.borrow_mut();
+            match v.iter_mut().find(|d| d.id == id && d.endpoint == endpoint) {
+                Some(d) => {
+                    d.endpoint_stale = true;
+                    Ok(true)
+                }
+                None => Ok(false),
+            }
         }
         fn update(&self, device: Device) -> Result<(), RegistryError> {
             let mut v = self.0.borrow_mut();

@@ -8,7 +8,7 @@
 use zeroize::Zeroizing;
 
 use crate::features::push::domain::{
-    PushBody, PushError, PushPlaintext, PushTarget, Sealer, MAX_BODY_BYTES,
+    pad_plaintext, PushBody, PushError, PushPlaintext, PushTarget, Sealer, MAX_BODY_BYTES,
 };
 use crate::shared::domain::encoding::b64u_encode;
 use crate::shared::infrastructure::crypto::{diffie_hellman, hkdf32, random_bytes, seal, Key32};
@@ -64,7 +64,9 @@ impl XChaChaSealer {
 
 impl Sealer for XChaChaSealer {
     fn seal(&self, target: &PushTarget, plaintext: &PushPlaintext) -> Result<String, PushError> {
-        let json = Zeroizing::new(serde_json::to_string(plaintext).expect("plaintext serializes"));
+        let json = Zeroizing::new(pad_plaintext(
+            &serde_json::to_string(plaintext).expect("plaintext serializes"),
+        ));
         seal_push_with_nonce(
             &self.host_secret,
             &target.device_id,
@@ -101,13 +103,52 @@ mod tests {
         let n = b64u_decode_array::<24>(v["n"].as_str().unwrap()).unwrap();
         let c = b64u_decode(v["c"].as_str().unwrap()).unwrap();
         let out = open(&k, &n, &c, PUSH_AAD).unwrap();
-        assert_eq!(
-            out.as_slice(),
-            serde_json::to_string(&pt).unwrap().as_bytes()
-        );
+        assert_eq!(out.len(), 512, "padded to the first bucket");
+        let parsed: serde_json::Value = serde_json::from_slice(&out).unwrap();
+        assert_eq!(parsed, serde_json::to_value(&pt).unwrap());
         // A different device id derives a different key.
         let k2 = push_key(&device, &public_key(&host), "dev2").unwrap();
         assert!(open(&k2, &n, &c, PUSH_AAD).is_err());
+    }
+
+    #[test]
+    fn bodies_come_in_a_few_fixed_sizes_and_the_largest_fits() {
+        let target = PushTarget {
+            device_id: "AAAAAAAAAAAAAAAAAAAA01".into(),
+            ppk: public_key(&[4u8; 32]),
+            endpoint: "https://e".into(),
+        };
+        let sealer = XChaChaSealer::new(Zeroizing::new([3u8; 32]));
+        let len = |summary: &str| {
+            let pt = PushPlaintext::new("e1", 1, "box", "claude", "done", "t", summary, "p", 5);
+            sealer.seal(&target, &pt).unwrap().len()
+        };
+        assert_eq!(len("short"), len("a somewhat longer summary than that"));
+        assert!(len(&"😀".repeat(150)) > len("short"));
+        // Worst case: every title/summary character is 4 bytes.
+        let pt = PushPlaintext::new(
+            &"i".repeat(22),
+            u64::MAX,
+            &"h".repeat(64),
+            &"a".repeat(32),
+            "approval_required",
+            &"😀".repeat(200),
+            &"😀".repeat(300),
+            &"p".repeat(64),
+            u64::MAX,
+        );
+        let body = sealer.seal(&target, &pt).unwrap();
+        assert!(body.len() <= MAX_BODY_BYTES, "{}", body.len());
+    }
+
+    #[test]
+    fn padding_reaches_the_next_bucket_only() {
+        use crate::features::push::domain::pad_plaintext;
+        assert_eq!(pad_plaintext("{}").len(), 512);
+        assert_eq!(pad_plaintext(&"x".repeat(512)).len(), 512);
+        assert_eq!(pad_plaintext(&"x".repeat(513)).len(), 1024);
+        assert_eq!(pad_plaintext(&"x".repeat(3000)).len(), 3000);
+        assert!(pad_plaintext("{\"a\":1}").starts_with("{\"a\":1}   "));
     }
 
     #[test]

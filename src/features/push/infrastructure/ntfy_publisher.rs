@@ -1,10 +1,45 @@
 //! UnifiedPush / ntfy publisher: one HTTPS POST of the encrypted body.
 //! No redirects are followed, environment proxies are ignored, 10 s timeout,
 //! generic `User-Agent: openmosh` (no version); `404`/`410` mean the endpoint is stale.
+//! Names are resolved by [`PublicResolver`], which drops every forbidden
+//! address, so the connection goes to an address that passed the endpoint
+//! rules (no DNS rebinding to the LAN or the host itself).
 
+use std::net::{SocketAddr, ToSocketAddrs};
+use std::sync::Arc;
 use std::time::Duration;
 
-use crate::features::push::domain::{validate_endpoint, PostOutcome, PushPublisher};
+use crate::features::push::domain::{forbidden_ip, validate_endpoint, PostOutcome, PushPublisher};
+
+/// The allowed addresses `host` resolves to; an error when there are none.
+pub fn resolve_allowed(host: &str) -> std::io::Result<Vec<SocketAddr>> {
+    let addrs: Vec<SocketAddr> = (host, 0)
+        .to_socket_addrs()?
+        .filter(|a| !forbidden_ip(a.ip().to_canonical()))
+        .collect();
+    if addrs.is_empty() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "push endpoint resolves only to forbidden addresses",
+        ));
+    }
+    Ok(addrs)
+}
+
+/// DNS resolver for the push client (see the module docs).
+pub struct PublicResolver;
+
+impl reqwest::dns::Resolve for PublicResolver {
+    fn resolve(&self, name: reqwest::dns::Name) -> reqwest::dns::Resolving {
+        let host = name.as_str().to_string();
+        Box::pin(async move {
+            // The blocking client has its own runtime thread; one lookup at a time.
+            let addrs = resolve_allowed(&host)
+                .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
+            Ok(Box::new(addrs.into_iter()) as reqwest::dns::Addrs)
+        })
+    }
+}
 
 pub struct HttpPublisher {
     client: reqwest::blocking::Client,
@@ -17,6 +52,7 @@ impl HttpPublisher {
             .timeout(Duration::from_secs(10))
             .connect_timeout(Duration::from_secs(10))
             .no_proxy()
+            .dns_resolver(Arc::new(PublicResolver))
             .user_agent("openmosh")
             .build()?;
         Ok(Self { client })
@@ -156,6 +192,20 @@ mod tests {
         let p = HttpPublisher::new().unwrap();
         let (url, _rx) = serve_once("302 Found", "Location: http://127.0.0.1:1/elsewhere\r\n");
         assert_eq!(p.send(&url, "{}"), PostOutcome::Failed("redirect_refused"));
+    }
+
+    #[test]
+    fn names_resolving_to_forbidden_addresses_are_never_contacted() {
+        assert!(resolve_allowed("localhost").is_err());
+        let p = HttpPublisher::new().unwrap();
+        let l = TcpListener::bind("127.0.0.1:0").unwrap();
+        l.set_nonblocking(true).unwrap();
+        let port = l.local_addr().unwrap().port();
+        assert_eq!(
+            p.send(&format!("http://localhost:{port}/up"), "{}"),
+            PostOutcome::Failed("network")
+        );
+        assert!(l.accept().is_err(), "no connection was made");
     }
 
     #[test]

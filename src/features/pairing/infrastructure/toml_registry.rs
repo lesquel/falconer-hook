@@ -77,6 +77,15 @@ impl DeviceRegistry for TomlDeviceRegistry {
         })
     }
 
+    fn mark_stale(&self, id: &str, endpoint: &str) -> Result<bool, RegistryError> {
+        self.modify(|v| {
+            Ok(v.iter_mut()
+                .find(|d| d.id == id && d.endpoint == endpoint)
+                .map(|d| d.endpoint_stale = true)
+                .is_some())
+        })
+    }
+
     fn update(&self, device: Device) -> Result<(), RegistryError> {
         self.modify(|v| {
             let slot = v

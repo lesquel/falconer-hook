@@ -1,16 +1,21 @@
 //! Push endpoint validation. The URL is parsed with a WHATWG URL parser
 //! (the same rules the HTTP client applies), then:
 //! - no userinfo, no port 0;
-//! - the host is never loopback (`127/8`, `::1`, `localhost`), link-local
-//!   (`169.254/16`, `fe80::/10`), unspecified, multicast or broadcast;
+//! - the host is never loopback (`127/8`, `::1`, `localhost`), private
+//!   (`10/8`, `172.16/12`, `192.168/16`, `fc00::/7`), link-local
+//!   (`169.254/16`, `fe80::/10`), unspecified (`0/8`, `::`), multicast or
+//!   broadcast; Tailscale addresses (`100.64.0.0/10`, `fd7a:115c:a1e0::/48`)
+//!   are allowed. The HTTP client applies the same rule to every address a
+//!   name resolves to ([`forbidden_ip`]), so DNS cannot point a public name
+//!   at the LAN or at the host itself;
 //! - `https://` to any other host; `http://` only to a Tailscale address
 //!   (`100.64.0.0/10` or a name ending exactly in `.ts.net`).
 
-use std::net::{Ipv4Addr, Ipv6Addr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use thiserror::Error;
 use url::{Host, Url};
 
-use crate::shared::domain::net::is_tailnet_ipv4;
+use crate::shared::domain::net::{is_tailnet_ipv4, is_tailnet_ipv6};
 
 #[derive(Debug, Error, PartialEq, Eq, Clone)]
 pub enum EndpointError {
@@ -18,14 +23,18 @@ pub enum EndpointError {
     Scheme,
     #[error("endpoint URL is malformed")]
     Malformed,
-    #[error("endpoint host is not allowed (loopback, link-local, unspecified or multicast)")]
+    #[error(
+        "endpoint host is not allowed (loopback, private, link-local, unspecified or multicast)"
+    )]
     Host,
 }
 
 fn forbidden_v4(ip: Ipv4Addr) -> bool {
     ip.is_loopback()
+        || ip.is_private()
         || ip.is_link_local()
         || ip.is_unspecified()
+        || ip.octets()[0] == 0
         || ip.is_multicast()
         || ip.is_broadcast()
 }
@@ -35,7 +44,16 @@ fn forbidden_v6(ip: Ipv6Addr) -> bool {
         return forbidden_v4(v4);
     }
     let link_local = (ip.segments()[0] & 0xffc0) == 0xfe80;
-    ip.is_loopback() || ip.is_unspecified() || ip.is_multicast() || link_local
+    let unique_local = (ip.segments()[0] & 0xfe00) == 0xfc00 && !is_tailnet_ipv6(ip);
+    ip.is_loopback() || ip.is_unspecified() || ip.is_multicast() || link_local || unique_local
+}
+
+/// An address a push must never be sent to (see the module rules).
+pub fn forbidden_ip(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(v4) => forbidden_v4(v4),
+        IpAddr::V6(v6) => forbidden_v6(v6),
+    }
 }
 
 fn valid_dns_name(name: &str) -> bool {
@@ -132,7 +150,7 @@ mod tests {
         );
         assert_eq!(
             validate_endpoint("http://192.168.1.2/up"),
-            Err(EndpointError::Scheme)
+            Err(EndpointError::Host)
         );
         assert_eq!(
             validate_endpoint("http://100.200.1.2/up"),
@@ -165,6 +183,14 @@ mod tests {
             "https://[ff02::1]/x",
             "https://255.255.255.255/x",
             "http://localhost.ts.net.evil/x",
+            "https://10.0.0.5/x",
+            "https://172.16.0.1/x",
+            "https://172.31.255.255/x",
+            "https://192.168.1.10:8443/x",
+            "https://0.1.2.3/x",
+            "https://[fc00::1]/x",
+            "https://[fd12:3456::1]/x",
+            "https://[::ffff:10.1.1.1]/x",
         ] {
             assert!(validate_endpoint(u).is_err(), "{u}");
         }
@@ -177,6 +203,9 @@ mod tests {
             "https://[fec0::1]/x",
             "https://169.255.0.1/x",
             "https://128.0.0.1/x",
+            "https://172.32.0.1/x",
+            "https://100.101.1.2/x",
+            "https://[fd7a:115c:a1e0::1]/x",
         ] {
             assert_eq!(validate_endpoint(u), Ok(()), "{u}");
         }

@@ -60,9 +60,9 @@ impl<R: DeviceRegistry, S: Sealer, P: PushPublisher> PublishEvent<'_, R, S, P> {
                 PostOutcome::Delivered => report.delivered += 1,
                 PostOutcome::Stale => {
                     report.stale += 1;
-                    let mut d = device;
-                    d.endpoint_stale = true;
-                    self.registry.update(d)?;
+                    // Re-checked under the registry lock: the user may have
+                    // set a new endpoint while this push was in flight.
+                    self.registry.mark_stale(&device.id, &target.endpoint)?;
                 }
                 PostOutcome::Failed(reason) => {
                     report.failed += 1;
@@ -151,5 +151,30 @@ mod tests {
         );
         assert!(reg.get("b").unwrap().endpoint_stale);
         assert!(!reg.get("a").unwrap().endpoint_stale);
+    }
+
+    #[test]
+    fn an_endpoint_rotated_during_the_push_is_not_marked_stale() {
+        let reg = MemRegistry::with(vec![device("b", "https://gone", false)]);
+        // The user runs `devices set-endpoint` while the 410 is on its way.
+        struct Rotating<'a>(&'a MemRegistry);
+        impl PushPublisher for Rotating<'_> {
+            fn post(&self, _: &str, _: &str) -> PostOutcome {
+                let mut d = self.0.get("b").unwrap();
+                d.endpoint = "https://new".into();
+                self.0.update(d).unwrap();
+                PostOutcome::Stale
+            }
+        }
+        let uc = PublishEvent {
+            registry: &reg,
+            sealer: &EchoSealer,
+            publisher: &Rotating(&reg),
+        };
+        let pt = PushPlaintext::new("e1", 1, "h", "claude", "done", "t", "s", "p", 1);
+        uc.publish(&pt).unwrap();
+        let d = reg.get("b").unwrap();
+        assert_eq!(d.endpoint, "https://new");
+        assert!(!d.endpoint_stale, "the new endpoint stays active");
     }
 }

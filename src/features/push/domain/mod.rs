@@ -2,7 +2,7 @@
 
 mod endpoint;
 
-pub use endpoint::{validate_endpoint, EndpointError};
+pub use endpoint::{forbidden_ip, validate_endpoint, EndpointError};
 
 use serde::Serialize;
 use thiserror::Error;
@@ -28,6 +28,25 @@ pub struct PushPlaintext {
     pub summary: String,
     pub pane: String,
     pub ts: u64,
+}
+
+/// Plaintext sizes pushes are padded to, so the ciphertext length (visible to
+/// the push relay) says little about the content. The largest bucket that
+/// still fits [`MAX_BODY_BYTES`] once encrypted and base64-encoded is 2048.
+pub const PAD_BUCKETS: &[usize] = &[512, 1024, 2048];
+
+/// `json` followed by spaces up to the next bucket (JSON allows trailing
+/// whitespace, so the phone parses it unchanged). Longer input is left as is.
+pub fn pad_plaintext(json: &str) -> String {
+    let target = PAD_BUCKETS
+        .iter()
+        .copied()
+        .find(|b| *b >= json.len())
+        .unwrap_or(json.len());
+    let mut out = String::with_capacity(target);
+    out.push_str(json);
+    out.extend(std::iter::repeat_n(' ', target - json.len()));
+    out
 }
 
 pub fn truncate_chars(s: &str, max: usize) -> String {
