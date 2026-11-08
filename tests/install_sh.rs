@@ -26,8 +26,20 @@ fn gh_logged_in() -> (&'static str, String) {
     )
 }
 
-/// Runs `install.sh --dry-run` and returns the raw output; the HOME must stay empty.
+/// Like `dry_run_output_bare`, with a signature verifier on PATH (it must not
+/// run in a dry run): the signature is required by default.
 fn dry_run_output(
+    args: &[&str],
+    env: &[(&str, &str)],
+    fakes: &[(&str, String)],
+) -> (tempfile::TempDir, Output) {
+    let mut all = vec![verifier("minisign")];
+    all.extend(fakes.iter().cloned());
+    dry_run_output_bare(args, env, &all)
+}
+
+/// Runs `install.sh --dry-run` and returns the raw output; the HOME must stay empty.
+fn dry_run_output_bare(
     args: &[&str],
     env: &[(&str, &str)],
     fakes: &[(&str, String)],
@@ -88,8 +100,9 @@ fn dry_run_with(
 fn release_dry_run_prints_every_step() {
     let (_t, out) = dry_run(&[]);
     assert!(out.contains("(dry run: nothing will be changed)"));
-    assert!(out.contains("releases/latest/download/openmosh-hook-"));
-    assert!(out.contains("releases/latest/download/SHA256SUMS"));
+    assert!(out.contains("(dry run: would resolve the latest release to its tag)"));
+    assert!(out.contains("releases/download/<latest>/openmosh-hook-"));
+    assert!(out.contains("releases/download/<latest>/SHA256SUMS"));
     assert!(out.contains("would verify openmosh-hook-"));
     assert!(out.contains("openmosh-hook service install"));
     assert!(out.contains("openmosh-hook doctor"));
@@ -104,6 +117,13 @@ fn from_source_and_binary_modes() {
         "+ cargo install --git https://github.com/lesquel/openmosh-hook --locked --root"
     ));
     assert!(!out.contains("service install"));
+    let (_t, out) = dry_run(&["--from-source", "--version", "v0.2.0", "--no-service"]);
+    assert!(
+        out.contains(
+            "+ cargo install --git https://github.com/lesquel/openmosh-hook --tag v0.2.0 --locked --root"
+        ),
+        "{out}"
+    );
     let (_t, out) = dry_run(&["--binary", env!("CARGO_BIN_EXE_openmosh-hook")]);
     assert!(out.contains(&format!(
         "+ install -m 0755 {}",
@@ -132,7 +152,7 @@ fn release_asset_matches_the_platform() {
         );
         assert!(
             out.contains(&format!(
-                "releases/latest/download/openmosh-hook-{target}.tar.gz"
+                "releases/download/<latest>/openmosh-hook-{target}.tar.gz"
             )),
             "{os}/{arch}: {out}"
         );
@@ -159,7 +179,7 @@ fn logged_in_gh_downloads_the_private_release() {
     );
     assert!(out.contains("Using the GitHub CLI"), "{out}");
     assert!(out.contains(
-        "+ gh release download --repo lesquel/openmosh-hook --pattern openmosh-hook-aarch64-apple-darwin.tar.gz --pattern SHA256SUMS --pattern SHA256SUMS.minisig --dir <tmpdir>"
+        "+ gh release download <latest> --repo lesquel/openmosh-hook --pattern openmosh-hook-aarch64-apple-darwin.tar.gz --pattern SHA256SUMS --pattern SHA256SUMS.minisig --dir <tmpdir>"
     ), "{out}");
     assert!(!out.contains("curl"));
     let (_t, out) = dry_run_with(
@@ -213,12 +233,43 @@ fn the_pinned_key_matches_minisign_pub() {
 }
 
 #[test]
-fn without_a_verifier_it_warns_checksum_only() {
+fn without_a_verifier_it_refuses_with_install_instructions() {
     if system_verifier() {
         return;
     }
-    let (_t, out) = dry_run_output(
-        &["--no-service"],
+    for extra in [&[][..], &["--require-signature"][..]] {
+        let mut args = vec!["--no-service"];
+        args.extend_from_slice(extra);
+        let (_t, out) = dry_run_output_bare(
+            &args,
+            &[("OPENMOSH_NO_GH", "1")],
+            &[uname("Linux", "x86_64")],
+        );
+        assert_eq!(out.status.code(), Some(1));
+        let stdout = String::from_utf8(out.stdout).unwrap();
+        let stderr = String::from_utf8(out.stderr).unwrap();
+        assert!(
+            stderr
+                .contains("error: minisign or rsign is required to verify the release signature."),
+            "{stderr}"
+        );
+        assert!(stderr.contains("sudo apt install minisign"), "{stderr}");
+        assert!(stderr.contains("cargo install rsign2 --locked"), "{stderr}");
+        assert!(stderr.contains("--insecure-no-signature"), "{stderr}");
+        assert!(
+            !stdout.contains("download"),
+            "aborts before downloading: {stdout}"
+        );
+    }
+}
+
+#[test]
+fn insecure_no_signature_checks_checksums_only_and_says_so() {
+    if system_verifier() {
+        return;
+    }
+    let (_t, out) = dry_run_output_bare(
+        &["--insecure-no-signature", "--no-service"],
         &[("OPENMOSH_NO_GH", "1")],
         &[uname("Linux", "x86_64")],
     );
@@ -227,41 +278,14 @@ fn without_a_verifier_it_warns_checksum_only() {
     let stderr = String::from_utf8(out.stderr).unwrap();
     assert!(
         stderr.contains(
-            "warning: minisign/rsign not found: checking SHA256SUMS only, without its signature."
+            "warning: --insecure-no-signature: checking SHA256SUMS only, without its signature."
         ),
         "{stderr}"
     );
-    assert!(stderr.contains("--require-signature"), "{stderr}");
-    assert!(
-        !stdout.contains("SHA256SUMS.minisig"),
-        "no signature to fetch: {stdout}"
-    );
+    assert!(!stdout.contains("SHA256SUMS.minisig"), "{stdout}");
     assert!(stdout.contains(
         "would verify openmosh-hook-x86_64-unknown-linux-musl.tar.gz against SHA256SUMS"
     ));
-}
-
-#[test]
-fn require_signature_aborts_without_a_verifier() {
-    if system_verifier() {
-        return;
-    }
-    let (_t, out) = dry_run_output(
-        &["--require-signature", "--no-service"],
-        &[("OPENMOSH_NO_GH", "1")],
-        &[uname("Linux", "x86_64")],
-    );
-    assert_eq!(out.status.code(), Some(1));
-    let stdout = String::from_utf8(out.stdout).unwrap();
-    let stderr = String::from_utf8(out.stderr).unwrap();
-    assert!(
-        stderr.contains("error: --require-signature: install minisign (https://jedisct1.github.io/minisign/) or rsign2 first"),
-        "{stderr}"
-    );
-    assert!(
-        !stdout.contains("download"),
-        "aborts before downloading: {stdout}"
-    );
 }
 
 #[test]
@@ -270,7 +294,7 @@ fn a_verifier_checks_the_signature_with_the_pinned_key() {
         for extra in [&[][..], &["--require-signature"][..]] {
             let mut args = vec!["--no-service"];
             args.extend_from_slice(extra);
-            let (_t, out) = dry_run_output(
+            let (_t, out) = dry_run_output_bare(
                 &args,
                 &[("OPENMOSH_NO_GH", "1")],
                 &[uname("Linux", "x86_64"), verifier(tool)],
@@ -281,13 +305,13 @@ fn a_verifier_checks_the_signature_with_the_pinned_key() {
             if !system_verifier() || tool == "minisign" {
                 assert!(
                     stdout.contains(&format!(
-                        "(dry run: would verify SHA256SUMS.minisig with {tool} and key {PUBKEY})"
+                        "(dry run: would verify SHA256SUMS.minisig with {tool} and key {PUBKEY}, trusted comment \"openmosh-hook <latest>\")"
                     )),
                     "{tool}: {stdout}"
                 );
             }
             assert!(
-                stdout.contains("releases/latest/download/SHA256SUMS.minisig"),
+                stdout.contains("releases/download/<latest>/SHA256SUMS.minisig"),
                 "{stdout}"
             );
             assert!(!stderr.contains("checking SHA256SUMS only"), "{stderr}");
@@ -307,6 +331,7 @@ fn require_signature_is_listed_in_help() {
         .unwrap();
     let stdout = String::from_utf8(out.stdout).unwrap();
     assert!(stdout.contains("--require-signature"), "{stdout}");
+    assert!(stdout.contains("--insecure-no-signature"), "{stdout}");
 }
 
 #[test]
@@ -332,4 +357,154 @@ fn version_must_be_a_plain_release_tag() {
         "{}",
         String::from_utf8_lossy(&out.stderr)
     );
+}
+
+/// A real (not dry) install against fake downloads: `curl` serves files from
+/// a fixture directory, `minisign` accepts every signature, so what is
+/// tested is the installer's own logic (checksums, trusted comment, tag).
+struct Release {
+    t: tempfile::TempDir,
+}
+
+impl Release {
+    /// A release `served_tag` whose signature's trusted comment is `comment`.
+    fn new(served_tag: &str, comment: &str) -> Self {
+        let t = tempfile::tempdir().unwrap();
+        let fix = t.path().join("fix");
+        let pkg = t.path().join("pkg");
+        let bin = t.path().join("bin");
+        for d in [&fix, &pkg, &bin, &t.path().join("home")] {
+            fs::create_dir_all(d).unwrap();
+        }
+        let exe = pkg.join("openmosh-hook");
+        fs::write(&exe, "#!/bin/sh\necho fake-hook \"$@\"\n").unwrap();
+        fs::set_permissions(&exe, fs::Permissions::from_mode(0o755)).unwrap();
+        let asset = "openmosh-hook-x86_64-unknown-linux-musl.tar.gz";
+        assert!(Command::new("tar")
+            .args(["-czf"])
+            .arg(fix.join(asset))
+            .arg("-C")
+            .arg(&pkg)
+            .arg("openmosh-hook")
+            .status()
+            .unwrap()
+            .success());
+        let sums = Command::new("sha256sum")
+            .arg(asset)
+            .current_dir(&fix)
+            .output()
+            .unwrap();
+        fs::write(fix.join("SHA256SUMS"), sums.stdout).unwrap();
+        fs::write(
+            fix.join("SHA256SUMS.minisig"),
+            format!("untrusted comment: x\nRUQ=\ntrusted comment: {comment}\nAAA=\n"),
+        )
+        .unwrap();
+        let fakes = [
+            uname("Linux", "x86_64"),
+            (
+                "curl",
+                format!(
+                    "#!/bin/sh\nout=''; w=''; for a in \"$@\"; do case \"$prev\" in -o) out=$a ;; -w) w=$a ;; esac; prev=$a; url=$a; done\n\
+                     echo \"$url\" >> \"{log}\"\n\
+                     if [ -n \"$w\" ]; then printf 'https://github.com/lesquel/openmosh-hook/releases/tag/{served_tag}'; exit 0; fi\n\
+                     case \"$url\" in */download/{served_tag}/*) cp \"{fix}/${{url##*/}}\" \"$out\" ;; *) exit 22 ;; esac\n",
+                    log = t.path().join("curl.log").display(),
+                    fix = fix.display(),
+                ),
+            ),
+            ("minisign", "#!/bin/sh\nexit 0\n".to_string()),
+            ("tailscale", "#!/bin/sh\nexit 1\n".to_string()),
+            // A runtime is "installed", so no installer is ever offered.
+            ("tmux", "#!/bin/sh\nexit 0\n".to_string()),
+        ];
+        for (name, script) in fakes {
+            let p = bin.join(name);
+            fs::write(&p, script).unwrap();
+            fs::set_permissions(&p, fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        Self { t }
+    }
+
+    fn install(&self, args: &[&str]) -> Output {
+        Command::new("sh")
+            .arg(concat!(env!("CARGO_MANIFEST_DIR"), "/install.sh"))
+            .args(args)
+            .arg("--no-service")
+            .env_clear()
+            .env("HOME", self.t.path().join("home"))
+            .env("OPENMOSH_NO_GH", "1")
+            .env(
+                "PATH",
+                format!("{}:/usr/bin:/bin", self.t.path().join("bin").display()),
+            )
+            .output()
+            .unwrap()
+    }
+
+    fn installed(&self) -> bool {
+        self.t.path().join("home/.local/bin/openmosh-hook").exists()
+    }
+
+    fn fetched(&self) -> String {
+        fs::read_to_string(self.t.path().join("curl.log")).unwrap_or_default()
+    }
+}
+
+#[test]
+fn a_signed_release_installs_and_latest_is_resolved_to_its_tag() {
+    let r = Release::new("v9.9.9", "openmosh-hook v9.9.9");
+    let out = r.install(&[]);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        out.status.success(),
+        "{stdout}\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        stdout.contains("ok: SHA256SUMS signature verified (key 59E37F1EF15B67E2, release v9.9.9)"),
+        "{stdout}"
+    );
+    assert!(r.installed());
+    let fetched = r.fetched();
+    assert!(fetched.contains("https://github.com/lesquel/openmosh-hook/releases/latest\n"));
+    assert!(
+        fetched.contains("/releases/download/v9.9.9/SHA256SUMS.minisig"),
+        "downloads use the resolved tag: {fetched}"
+    );
+    assert!(!fetched.contains("/latest/download/"), "{fetched}");
+}
+
+#[test]
+fn a_signature_for_another_release_is_refused() {
+    // The server answers for v9.9.9 with files (validly) signed for v0.1.0.
+    let r = Release::new("v9.9.9", "openmosh-hook v0.1.0");
+    let out = r.install(&["--version", "v9.9.9"]);
+    assert_eq!(out.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains(
+            "the signature is for \"openmosh-hook v0.1.0\", not \"openmosh-hook v9.9.9\""
+        ),
+        "{stderr}"
+    );
+    assert!(!r.installed(), "nothing is installed");
+    let r = Release::new("v9.9.9", "something else");
+    assert_eq!(r.install(&[]).status.code(), Some(1));
+    assert!(!r.installed());
+}
+
+#[test]
+fn a_tampered_download_is_refused_even_with_a_valid_signature() {
+    let r = Release::new("v9.9.9", "openmosh-hook v9.9.9");
+    fs::write(
+        r.t.path()
+            .join("fix/openmosh-hook-x86_64-unknown-linux-musl.tar.gz"),
+        b"evil",
+    )
+    .unwrap();
+    let out = r.install(&["--version", "v9.9.9"]);
+    assert_eq!(out.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("checksum mismatch"));
+    assert!(!r.installed());
 }

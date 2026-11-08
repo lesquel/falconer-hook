@@ -19,10 +19,13 @@ openmosh-hook pair         # scan the QR code with OpenMosh
 
 The installer downloads the release binary for your platform (`openmosh-hook-<target>.tar.gz`
 for `x86_64`/`aarch64` Linux (static musl) and macOS) and checks it against the release's
-`SHA256SUMS`. When [minisign](https://jedisct1.github.io/minisign/) or `rsign` (rsign2) is
-installed, it first verifies `SHA256SUMS.minisig` with the pinned release key and aborts on
-failure; without either it warns that only the checksum is checked (pass `--require-signature`
-to abort instead). **While the repository is private**, anonymous downloads fail: install the
+`SHA256SUMS`, after verifying `SHA256SUMS.minisig` with the pinned release key. The signature
+is required: install [minisign](https://jedisct1.github.io/minisign/) (`apt`/`dnf`/`pacman`/
+`brew install minisign`) or `rsign` (`cargo install rsign2 --locked`) first; without either the
+installer stops before downloading and says how to get one (`--insecure-no-signature` checks the
+checksums only, not recommended). The signature's trusted comment must be exactly
+`openmosh-hook <tag>` for the release being installed (`latest` is resolved to its tag first),
+so an older or different release cannot be served in its place. **While the repository is private**, anonymous downloads fail: install the
 [GitHub CLI](https://cli.github.com), run `gh auth login`, and the installer uses
 `gh release download` instead (set `OPENMOSH_NO_GH=1` to never use it). From a clone you can
 also run `sh install.sh --from-source` or `--binary <path>`.
@@ -30,12 +33,13 @@ also run `sh install.sh --from-source` or `--binary <path>`.
 | Option | Effect |
 |---|---|
 | `--dry-run` | Print every step, change nothing |
-| `--from-source` | `cargo install --git https://github.com/lesquel/openmosh-hook --locked` (the repository is private for now, so this uses your git credentials) |
+| `--from-source` | `cargo install --git https://github.com/lesquel/openmosh-hook --locked`, with `--tag <tag>` when `--version` is given (else the default branch); the repository is private for now, so this uses your git credentials |
 | `--binary <path>` | Install a binary you already built |
 | `--version <tag>` | Release to download (default: latest), with `gh` or curl/wget |
 | `--yes` | Accept the offers to install Herdr / Tailscale with their official installers |
 | `--no-service` | Skip `openmosh-hook service install` |
-| `--require-signature` | Abort unless `SHA256SUMS.minisig` can be verified (needs `minisign` or `rsign`); release downloads only |
+| `--insecure-no-signature` | Skip the signature check (checksums only); prints a warning. Not recommended |
+| `--require-signature` | Accepted for compatibility: the signature is always required |
 
 The installer puts the binary in `~/.local/bin`, checks `sshd`, Herdr or tmux and Tailscale,
 writes `~/.config/openmosh/config.toml` (`0600`), registers the user service and runs
@@ -58,6 +62,8 @@ minisign -Vm SHA256SUMS -P RWTiZ1vxHn/jWfqAEjobeqloI9cL9pOA0/in+ayyCgPqT0gYDRKR1
 # or: rsign verify -P RWTiZ1vxHn/jWfqAEjobeqloI9cL9pOA0/in+ayyCgPqT0gYDRKR1Ox5 -x SHA256SUMS.minisig SHA256SUMS
 sha256sum --ignore-missing -c SHA256SUMS     # macOS: shasum -a 256 --ignore-missing -c SHA256SUMS
 ```
+
+Check that the trusted comment minisign prints is `openmosh-hook <the tag you downloaded>`.
 
 ### Setup and uninstall
 
@@ -338,7 +344,9 @@ cargo test --test cli -- --ignored   # QR pairing end to end over this machine's
 CLI tests (`tests/cli.rs`, `tests/agents.rs`, `tests/lifecycle.rs`, sharing `tests/common/`) run
 the binary against a temporary HOME with fake `herdr`, `tmux`, `tailscale` and `systemctl`
 scripts; no test sends keys to a real pane or touches real user files. `tests/install_sh.rs`
-runs `install.sh --dry-run` with fake `uname`/`gh`/`minisign`/`rsign`.
+runs `install.sh --dry-run` with fake `uname`/`gh`/`minisign`/`rsign`, and real installs into a
+temporary HOME against a fake `curl` that serves a fixture release (signature tag check,
+checksum mismatch).
 
 ### Releases
 
@@ -346,10 +354,16 @@ Pushing a `v*` tag runs [`.github/workflows/release.yml`](./.github/workflows/re
 builds `x86_64-unknown-linux-musl`, `aarch64-unknown-linux-musl` (with `cross`),
 `x86_64-apple-darwin` and `aarch64-apple-darwin`, and publishes
 `openmosh-hook-<target>.tar.gz` plus one `SHA256SUMS` and its minisign signature
-`SHA256SUMS.minisig` to the GitHub release. The signing key is the repository secret
-`MINISIGN_SECRET_KEY` (an unencrypted minisign secret key file); the job writes it to
+`SHA256SUMS.minisig` (trusted comment `openmosh-hook <tag>`) to the GitHub release. Build,
+checksum, signing and publishing are separate jobs. The signing key is the repository secret
+`MINISIGN_SECRET_KEY` (an unencrypted minisign secret key file), visible only to the `sign` job,
+which downloads nothing but `SHA256SUMS`, runs no third-party action, installs `rsign2` from a
+crate whose SHA-256 is pinned in the workflow (with its locked dependencies), writes the key to
 `$RUNNER_TEMP` with umask `077`, deletes it right after signing, and checks the signature
 against the committed [`minisign.pub`](./minisign.pub), so a mismatched secret fails the release.
+Every action in every workflow is pinned to a full commit SHA (CI fails otherwise; Dependabot
+proposes updates), the release uses only `actions/*` actions plus `rustup` and `gh`, and it
+caches nothing.
 
 ## License
 

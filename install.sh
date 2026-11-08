@@ -25,7 +25,8 @@ BINARY=""
 VERSION="latest"
 ASSUME_YES=0
 NO_SERVICE=0
-REQUIRE_SIG=0
+# The release signature is required unless --insecure-no-signature.
+REQUIRE_SIG=1
 
 usage() {
 	cat <<'EOF'
@@ -35,15 +36,22 @@ Usage: install.sh [options]
   --from-source      Build with `cargo install --git` (needs Rust and, while the
                      repository is private, git access to it).
   --binary <path>    Install an already-built openmosh-hook binary.
-  --version <tag>    Release tag to download (default: latest).
+  --version <tag>    Release tag to download, or to build with --from-source
+                     (default: the latest release; --from-source: main).
                      Downloads use `gh release download` when the GitHub CLI
                      is installed and logged in (needed while the repository
-                     is private), else curl/wget. Every download is checked
-                     against the release's SHA256SUMS, and SHA256SUMS against
-                     its minisign signature when minisign or rsign is installed.
+                     is private), else curl/wget. "latest" is resolved to its
+                     tag first. Every download is checked against the
+                     release's SHA256SUMS, SHA256SUMS against its minisign
+                     signature (needs minisign or rsign), and the signature's
+                     trusted comment must be "openmosh-hook <tag>", so an
+                     older release cannot be passed off as the requested one.
+  --insecure-no-signature
+                     Install without verifying the signature (checksums
+                     only). Not recommended.
   --require-signature
-                     Abort unless the signature can be verified (needs
-                     minisign or rsign).
+                     Accepted for compatibility; the signature is always
+                     required unless --insecure-no-signature.
   --yes              Accept offers to install missing Herdr/Tailscale.
   --no-service       Do not run `openmosh-hook service install`.
   -h, --help         Show this help.
@@ -117,6 +125,7 @@ while [ $# -gt 0 ]; do
 	--yes) ASSUME_YES=1 ;;
 	--no-service) NO_SERVICE=1 ;;
 	--require-signature) REQUIRE_SIG=1 ;;
+	--insecure-no-signature) REQUIRE_SIG=0 ;;
 	-h | --help)
 		usage
 		exit 0
@@ -180,7 +189,8 @@ sig_tool() {
 	fi
 }
 
-# verify_signature <SHA256SUMS> <SHA256SUMS.minisig>: checked with the pinned key.
+# verify_signature <SHA256SUMS> <SHA256SUMS.minisig> <tag>: checked with the
+# pinned key; the (signed) trusted comment must name exactly this release.
 verify_signature() {
 	case "$(sig_tool)" in
 	minisign) minisign -V -q -P "$PUBKEY" -m "$1" -x "$2" >/dev/null ||
@@ -189,21 +199,66 @@ verify_signature() {
 		die "signature verification failed for SHA256SUMS" ;;
 	*) die "minisign or rsign is required to verify the signature" ;;
 	esac
-	say "ok: SHA256SUMS signature verified (key 59E37F1EF15B67E2)"
+	comment=$(sed -n 's/^trusted comment: //p' "$2" | head -n 1)
+	[ "$comment" = "openmosh-hook $3" ] ||
+		die "the signature is for \"$comment\", not \"openmosh-hook $3\": refusing (a different or older release was served)"
+	say "ok: SHA256SUMS signature verified (key 59E37F1EF15B67E2, release $3)"
 }
 
-# Says how the download will be authenticated; aborts early when a required
-# signature cannot be checked.
+# Says how the download will be authenticated; aborts before downloading
+# when the signature cannot be checked.
 signature_policy() {
 	tool=$(sig_tool)
-	if [ -n "$tool" ]; then
+	if [ "$REQUIRE_SIG" -eq 0 ]; then
+		warn "--insecure-no-signature: checking SHA256SUMS only, without its signature."
+		warn "Anyone who can change the download can change the checksums too."
+	elif [ -n "$tool" ]; then
 		say "Signature: SHA256SUMS is verified with $tool and the pinned key 59E37F1EF15B67E2"
-	elif [ "$REQUIRE_SIG" -eq 1 ]; then
-		die "--require-signature: install minisign (https://jedisct1.github.io/minisign/) or rsign2 first"
 	else
-		warn "minisign/rsign not found: checking SHA256SUMS only, without its signature."
-		warn "Install minisign to verify releases, or pass --require-signature to insist."
+		printf '%s\n' \
+			"error: minisign or rsign is required to verify the release signature." \
+			"Install one, then run the installer again:" \
+			"  Debian/Ubuntu: sudo apt install minisign" \
+			"  Fedora:        sudo dnf install minisign" \
+			"  Arch:          sudo pacman -S minisign" \
+			"  macOS:         brew install minisign" \
+			"  Any (Rust):    cargo install rsign2 --locked" \
+			"  Other:         https://jedisct1.github.io/minisign/" \
+			"Or, not recommended, pass --insecure-no-signature to check checksums only." >&2
+		exit 1
 	fi
+}
+
+# The release tag to install: --version, or the latest release resolved to
+# its tag (so the signature's trusted comment can be checked against it).
+resolve_tag() {
+	if [ "$VERSION" != latest ]; then
+		echo "$VERSION"
+		return
+	fi
+	if [ "$DRY_RUN" -eq 1 ]; then
+		echo "<latest>"
+		return
+	fi
+	if use_gh; then
+		t=$(gh release view --repo "$REPO" --json tagName --jq .tagName 2>/dev/null) || t=""
+	elif have curl; then
+		t=$(curl -fsSLI --proto '=https' --tlsv1.2 -o /dev/null -w '%{url_effective}' \
+			"https://github.com/$REPO/releases/latest" 2>/dev/null) || t=""
+		t=${t##*/}
+	else
+		t=$(wget -q --https-only --max-redirect=0 -S -O /dev/null \
+			"https://github.com/$REPO/releases/latest" 2>&1 | sed -n 's/^ *[Ll]ocation: *//p' | tr -d '\r' | head -n 1) || t=""
+		t=${t##*/}
+	fi
+	case "$t" in
+	v[0-9]*) ;;
+	*) die "could not resolve the latest release tag. While the repository is private, run 'gh auth login' first, or pass --version <tag>" ;;
+	esac
+	case "$t" in
+	*[!0-9A-Za-z.+-]*) die "unexpected latest release tag: $t" ;;
+	esac
+	echo "$t"
 }
 
 # The GitHub CLI is used when installed and logged in (private repository).
@@ -214,8 +269,14 @@ use_gh() {
 install_release() {
 	detect_target
 	asset="openmosh-hook-$TARGET.tar.gz"
-	say "Installing openmosh-hook ($TARGET) from GitHub Releases ($VERSION)"
 	signature_policy
+	if [ "$VERSION" = latest ]; then
+		if [ "$DRY_RUN" -eq 1 ]; then
+			say "(dry run: would resolve the latest release to its tag)"
+		fi
+	fi
+	tag=$(resolve_tag) || exit 1
+	say "Installing openmosh-hook ($TARGET) from GitHub Releases ($tag)"
 	if [ "$DRY_RUN" -eq 1 ]; then
 		tmp="<tmpdir>"
 	else
@@ -224,37 +285,27 @@ install_release() {
 	fi
 	if use_gh; then
 		say "Using the GitHub CLI (logged in)"
-		if [ "$VERSION" = latest ]; then
-			tag=""
-		else
-			tag="$VERSION"
-		fi
-		# shellcheck disable=SC2086 # empty $tag means "latest release"
-		run gh release download $tag --repo "$REPO" --pattern "$asset" --pattern SHA256SUMS --pattern SHA256SUMS.minisig --dir "$tmp" ||
+		run gh release download "$tag" --repo "$REPO" --pattern "$asset" --pattern SHA256SUMS --pattern SHA256SUMS.minisig --dir "$tmp" ||
 			die "gh release download failed (is a release published for $TARGET?)"
 	else
-		if [ "$VERSION" = latest ]; then
-			base="https://github.com/$REPO/releases/latest/download"
-		else
-			base="https://github.com/$REPO/releases/download/$VERSION"
-		fi
+		base="https://github.com/$REPO/releases/download/$tag"
 		if ! download "$base/$asset" "$tmp/$asset" || ! download "$base/SHA256SUMS" "$tmp/SHA256SUMS"; then
 			die "download failed. While the repository is private, run 'gh auth login' first (the installer then uses 'gh release download'), or use --from-source or --binary <path>"
 		fi
-		if [ -n "$(sig_tool)" ]; then
+		if [ "$REQUIRE_SIG" -eq 1 ]; then
 			download "$base/SHA256SUMS.minisig" "$tmp/SHA256SUMS.minisig" ||
 				die "could not download SHA256SUMS.minisig"
 		fi
 	fi
 	if [ "$DRY_RUN" -eq 0 ]; then
-		if [ -n "$(sig_tool)" ]; then
+		if [ "$REQUIRE_SIG" -eq 1 ]; then
 			[ -f "$tmp/SHA256SUMS.minisig" ] || die "the release has no SHA256SUMS.minisig"
-			verify_signature "$tmp/SHA256SUMS" "$tmp/SHA256SUMS.minisig"
+			verify_signature "$tmp/SHA256SUMS" "$tmp/SHA256SUMS.minisig" "$tag"
 		fi
 		verify_sha256 "$tmp/$asset" "$tmp/SHA256SUMS"
 	else
-		if [ -n "$(sig_tool)" ]; then
-			say "(dry run: would verify SHA256SUMS.minisig with $(sig_tool) and key $PUBKEY)"
+		if [ "$REQUIRE_SIG" -eq 1 ]; then
+			say "(dry run: would verify SHA256SUMS.minisig with $(sig_tool) and key $PUBKEY, trusted comment \"openmosh-hook $tag\")"
 		fi
 		say "(dry run: would verify $asset against SHA256SUMS)"
 	fi
@@ -270,7 +321,11 @@ install_source() {
 	root=$(dirname "$BIN_DIR")
 	CARGO_NET_GIT_FETCH_WITH_CLI=true
 	export CARGO_NET_GIT_FETCH_WITH_CLI
-	run cargo install --git "https://github.com/$REPO" --locked --root "$root" openmosh-hook
+	if [ "$VERSION" = latest ]; then
+		run cargo install --git "https://github.com/$REPO" --locked --root "$root" openmosh-hook
+	else
+		run cargo install --git "https://github.com/$REPO" --tag "$VERSION" --locked --root "$root" openmosh-hook
+	fi
 }
 
 install_binary() {
