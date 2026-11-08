@@ -164,9 +164,16 @@ pub fn serve(ctx: &Ctx) -> Result<Reply, CliError> {
                     Err(_) => {}
                 }
             }
+            // Sleep until the next poll; the SIGINT/SIGTERM handler unparks
+            // this thread, so stopping stays immediate without waking up
+            // every few milliseconds. Idle agents are polled less often.
+            let wait = watch.as_ref().map_or(poll, |w| w.detector.next_poll(poll));
             let start = Instant::now();
-            while start.elapsed() < poll && !ctx.stop.load(Ordering::SeqCst) {
-                std::thread::sleep(Duration::from_millis(50));
+            while !ctx.stop.load(Ordering::SeqCst) {
+                let Some(left) = wait.checked_sub(start.elapsed()) else {
+                    break;
+                };
+                std::thread::park_timeout(left);
             }
         }
         log(Level::Info, "serve stopped", &[]);

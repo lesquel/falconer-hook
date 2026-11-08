@@ -119,7 +119,29 @@ pub struct TransitionDetector {
     primed: bool,
 }
 
+/// Poll interval while every agent is idle (or none runs). A finished turn
+/// or an approval prompt always follows a `working` state, which switches
+/// back to the configured fast interval, so nothing is detected late.
+pub const IDLE_POLL: std::time::Duration = std::time::Duration::from_secs(5);
+
 impl TransitionDetector {
+    /// Whether any agent seen in the last poll is working or blocked.
+    pub fn any_active(&self) -> bool {
+        self.seen
+            .values()
+            .any(|(s, _)| matches!(s, AgentStatus::Working | AgentStatus::Blocked))
+    }
+
+    /// The next poll interval: [fast] while something runs, else [IDLE_POLL]
+    /// (never slower than a configured interval that is already longer).
+    pub fn next_poll(&self, fast: std::time::Duration) -> std::time::Duration {
+        if self.any_active() {
+            fast
+        } else {
+            fast.max(IDLE_POLL)
+        }
+    }
+
     pub fn observe(&mut self, agents: &[Agent]) -> Vec<Transition> {
         let mut out = Vec::new();
         let mut next = HashMap::with_capacity(agents.len());
@@ -203,6 +225,22 @@ mod tests {
         d.observe(&[agent("p", Blocked, 5)]);
         let t = d.observe(&[agent("p", Blocked, 7)]);
         assert_eq!(t, vec![Transition::Blocked(agent("p", Blocked, 7))]);
+    }
+
+    #[test]
+    fn polls_fast_only_while_an_agent_works_or_waits() {
+        use std::time::Duration;
+        use AgentStatus::*;
+        let fast = Duration::from_millis(1000);
+        let mut d = TransitionDetector::default();
+        assert_eq!(d.next_poll(fast), IDLE_POLL, "nothing seen yet");
+        d.observe(&[agent("p", Idle, 1)]);
+        assert_eq!(d.next_poll(fast), IDLE_POLL);
+        d.observe(&[agent("p", Working, 2)]);
+        assert_eq!(d.next_poll(fast), fast);
+        d.observe(&[agent("p", Blocked, 3)]);
+        assert_eq!(d.next_poll(fast), fast);
+        assert_eq!(d.next_poll(Duration::from_secs(9)), Duration::from_secs(9));
     }
 
     #[test]

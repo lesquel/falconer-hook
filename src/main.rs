@@ -58,8 +58,13 @@ fn main() -> ExitCode {
     let result = app::Ctx::from_env().and_then(|ctx| {
         if matches!(command, Command::Serve | Command::Pair { .. }) {
             let stop = ctx.stop.clone();
-            // SIGINT/SIGTERM: stop the loop so the pairing token is burned.
-            let _ = ctrlc::set_handler(move || stop.store(true, Ordering::SeqCst));
+            let main = std::thread::current();
+            // SIGINT/SIGTERM: stop the loop so the pairing token is burned,
+            // and wake the main thread from its sleep.
+            let _ = ctrlc::set_handler(move || {
+                stop.store(true, Ordering::SeqCst);
+                main.unpark();
+            });
         }
         app::run(&ctx, command)
     });

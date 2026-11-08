@@ -281,7 +281,7 @@ marks a `done` agent in that pane as seen.
 
 | Path | Mode | Content |
 |---|---|---|
-| `$XDG_CONFIG_HOME/openmosh/config.toml` | `0600` | `host_alias`, `retention_days` (7), `poll_interval_ms` (1000), `sources`, `ssh_port`, `ssh_host_key_pub`, `[push] server`, `[bins]` |
+| `$XDG_CONFIG_HOME/openmosh/config.toml` | `0600` | `host_alias`, `retention_days` (7), `poll_interval_ms` (1000, while an agent works or waits; every 5 s when all are idle), `sources`, `ssh_port`, `ssh_host_key_pub`, `[push] server`, `[bins]` |
 | `$XDG_STATE_HOME/openmosh/` | `0700` | state directory |
 | `…/events.db` | `0600` | SQLite inbox |
 | `…/devices.toml` | `0600` | paired devices |
