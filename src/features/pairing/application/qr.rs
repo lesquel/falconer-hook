@@ -178,16 +178,10 @@ where
 
     /// QR content for a listener bound on `port`.
     pub fn offer(&self, port: u16) -> PairOffer {
-        let ip = self.preflight.ipv4.to_string();
         PairOffer {
-            v: 1,
+            v: 2,
             alias: self.facts.alias.clone(),
-            addr: self
-                .preflight
-                .dns_name
-                .clone()
-                .unwrap_or_else(|| ip.clone()),
-            ip,
+            ip: self.preflight.ipv4.to_string(),
             ssh_port: self.facts.ssh_port,
             ssh_user: self.facts.ssh_user.clone(),
             ssh_fp: self.facts.ssh_fp.clone(),

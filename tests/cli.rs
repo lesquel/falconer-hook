@@ -699,8 +699,8 @@ fn qr_pairing_end_to_end_over_tailnet() {
     let mut port = 0u16;
     let mut line = String::new();
     while out.read_line(&mut line).unwrap() > 0 {
-        if let Some(d) = line.trim().strip_prefix("openmosh://pair?d=") {
-            uri = d.to_string();
+        if line.trim().starts_with("openmosh://pair?") {
+            uri = line.trim().to_string();
         }
         if line.starts_with("Listening on") {
             port = line
@@ -716,25 +716,24 @@ fn qr_pairing_end_to_end_over_tailnet() {
         }
         line.clear();
     }
-    let offer: Value = serde_json::from_slice(&phone::decode(&uri)).unwrap();
-    assert_eq!(offer["v"], 1);
-    assert_eq!(offer["ip"], ip.as_str());
-    assert_eq!(offer["port"], port);
-    assert_eq!(offer["alias"], "e2e");
-    assert_eq!(
-        offer["ssh_fp"],
-        "SHA256:XmA4TG6/WNqReEVbojfXfv3nyHYvdvEr6WbFjs7VdLM"
-    );
-    let hpk: [u8; 32] = phone::decode(offer["hpk"].as_str().unwrap())
-        .try_into()
-        .unwrap();
-    let tok = phone::decode(offer["tok"].as_str().unwrap());
+    let offer: std::collections::HashMap<String, String> = url::Url::parse(&uri)
+        .unwrap()
+        .query_pairs()
+        .into_owned()
+        .collect();
+    assert_eq!(offer["v"], "2");
+    assert_eq!(offer["i"], ip.as_str());
+    assert_eq!(offer["p"], port.to_string());
+    assert_eq!(offer["n"], "e2e");
+    assert_eq!(offer["f"], "XmA4TG6_WNqReEVbojfXfv3nyHYvdvEr6WbFjs7VdLM");
+    let hpk: [u8; 32] = phone::decode(&offer["k"]).try_into().unwrap();
+    let tok = phone::decode(&offer["t"]);
     let eph = [9u8; 32];
     let device_ssh =
         "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJYwG729z8R85TUE6pHTEWVG3RxgVSZik0RW18NtXepH phone";
     let plaintext = format!(
         r#"{{"tok":"{}","name":"Pixel 8","ssh_pub":"{device_ssh}","ppk":"B6N8vBQgk8i3VdwbEOhstCY3StFqqFPtC9_AsrhtHHw","endpoint":"https://ntfy.sh/upE2E?up=1"}}"#,
-        offer["tok"].as_str().unwrap()
+        offer["t"]
     );
     let exchange = |req: &str| {
         let mut s = TcpStream::connect((ip.as_str(), port)).unwrap();

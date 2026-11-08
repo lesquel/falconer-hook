@@ -129,16 +129,40 @@ fn offer_has_wire_fields() {
     let p = w.pairing();
     let o = p.offer(41234);
     assert_eq!(o.ip, "100.88.77.66");
-    assert_eq!(o.addr, "host.tail.ts.net");
     assert_eq!(o.exp, 1_300);
     assert_eq!(o.tok, b64u_encode(&TOKEN));
-    let json = serde_json::to_string(&o).unwrap();
-    assert!(json.starts_with(r#"{"v":1,"alias":"devbox","addr":"host.tail.ts.net","ip":"100.88.77.66","ssh_port":22,"ssh_user":"me","ssh_fp":"SHA256:abc","hpk":""#));
-    assert!(json.ends_with(&format!(
-        r#","port":41234,"tok":"{}","exp":1300}}"#,
-        b64u_encode(&TOKEN)
-    )));
-    assert!(o.uri().starts_with("openmosh://pair?d="));
+    assert_eq!(
+        o.uri(),
+        format!(
+            "openmosh://pair?v=2&n=devbox&i=100.88.77.66&s=22&u=me&f=abc&k={}&p=41234&t={}&e=1300",
+            b64u_encode(&[1u8; 32]),
+            b64u_encode(&TOKEN)
+        )
+    );
+}
+
+#[test]
+fn offer_uri_is_compact_and_query_safe() {
+    let o = PairOffer {
+        v: 2,
+        alias: "my box/ñ&x".into(),
+        ip: "100.64.0.1".into(),
+        ssh_port: 2222,
+        ssh_user: "me".into(),
+        ssh_fp: "SHA256:XmA4TG6/WNqReEVbojfXfv3nyHYvdvEr6WbFjs7VdLM".into(),
+        hpk: "h".repeat(43),
+        port: 1,
+        tok: "t".repeat(43),
+        exp: 9,
+    };
+    let uri = o.uri();
+    assert!(uri.contains("&n=my+box%2F%C3%B1%26x&"), "{uri}");
+    assert!(
+        uri.contains("&f=XmA4TG6_WNqReEVbojfXfv3nyHYvdvEr6WbFjs7VdLM&"),
+        "{uri}"
+    );
+    assert!(!uri.contains("SHA256"));
+    assert!(uri.len() < 230, "{} chars", uri.len());
 }
 
 #[test]
