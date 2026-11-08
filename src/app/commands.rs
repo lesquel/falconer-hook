@@ -226,16 +226,26 @@ pub fn devices_list(ctx: &Ctx) -> Result<Reply, CliError> {
 }
 
 pub fn devices_revoke(ctx: &Ctx, id: &str) -> Result<Reply, CliError> {
+    use crate::features::pairing::infrastructure::ssh_sessions::{ancestry, ProcSshSessions};
+    use std::os::unix::fs::MetadataExt;
     let st = open_state(ctx)?;
-    let d = DeviceAdmin {
+    let proc_root = std::path::PathBuf::from("/proc");
+    let sessions = ProcSshSessions {
+        uid: std::fs::metadata(proc_root.join("self")).map_or(u32::MAX, |m| m.uid()),
+        protect: ancestry(&proc_root, std::process::id()),
+        proc_root,
+        runner: &ctx.runner,
+    };
+    let r = DeviceAdmin {
         registry: &st.registry,
         keys: &st.keys,
     }
-    .revoke(id)?;
-    Ok(Reply::new(
-        &json!({"revoked": d}),
-        format!("Revoked {}", d.name),
-    ))
+    .revoke(id, &sessions)?;
+    let mut human = format!("Revoked {}", r.revoked.name);
+    for c in &r.checklist {
+        let _ = write!(human, "\n- {c}");
+    }
+    Ok(Reply::new(&r, human))
 }
 
 pub fn devices_set_endpoint(ctx: &Ctx, id: &str, url: &str) -> Result<Reply, CliError> {

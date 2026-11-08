@@ -85,6 +85,14 @@ pub trait AuthorizedKeys {
     fn remove_tagged(&self, dry_run: bool) -> Result<usize, RegistryError>;
 }
 
+/// Live SSH sessions of this user, found by the peer address they came from.
+pub trait LiveSessions {
+    /// Ends this user's SSH sessions whose peer is one of `ips`, never the
+    /// session the caller itself runs in. Returns the ended session process
+    /// ids, or `None` when sessions cannot be inspected on this system.
+    fn end_sessions_from(&self, ips: &[IpAddr]) -> Option<Vec<u32>>;
+}
+
 /// Whether an `authorized_keys` line belongs to a paired phone.
 /// A line OpenMosh wrote: its comment is exactly `openmosh:<device id>`, where the id is
 /// 16 random bytes in b64url (22 characters). Hand-written comments that merely start with
@@ -198,6 +206,21 @@ pub mod fakes {
                 .ok_or(RegistryError::NotFound)?;
             *slot = device;
             Ok(())
+        }
+    }
+
+    /// Records which addresses it was asked to cut off.
+    #[derive(Default)]
+    pub struct FakeSessions {
+        pub asked: RefCell<Vec<Vec<IpAddr>>>,
+        pub ended: Vec<u32>,
+        pub unsupported: bool,
+    }
+
+    impl LiveSessions for FakeSessions {
+        fn end_sessions_from(&self, ips: &[IpAddr]) -> Option<Vec<u32>> {
+            self.asked.borrow_mut().push(ips.to_vec());
+            (!self.unsupported).then(|| self.ended.clone())
         }
     }
 

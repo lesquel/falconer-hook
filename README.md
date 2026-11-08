@@ -110,7 +110,7 @@ else (it would recreate state); quit with `q`.
 | `openmosh-hook inbox list --json [--since <seq>] [--limit <n>]` | Events with `seq > since` (default limit 100, max 500) |
 | `openmosh-hook respond <event-id> --action allow\|deny\|text [--text <msg>] --json` | Deliver the answer into the agent's pane and push `resolved` to every device. Text answers are sent as one line (newlines become spaces, control characters are removed), then Enter |
 | `openmosh-hook devices list --json` | Paired devices |
-| `openmosh-hook devices revoke <id> [--json]` | Remove the device's `authorized_keys` line and its record |
+| `openmosh-hook devices revoke <id> [--json]` | Remove the device's `authorized_keys` line and its record, end its live SSH sessions (this user's sessions whose `SSH_CONNECTION` peer is one of the phone's pinned addresses, found in `/proc`; never the session running the command; devices paired before addresses were pinned cannot be told apart and get `sessions_ended: null`), and print a lost-phone checklist (`checklist` in `--json`) |
 | `openmosh-hook devices set-endpoint <id> <url> [--json]` | Rotate the push endpoint (clears `endpoint_stale`); also turns notifications on for a device paired without one |
 | `openmosh-hook integration install\|uninstall <agent> [--settings <path>] [--json]` | Add/remove the [agent's hooks](#agents) calling `emit --source <agent>`; `--settings` overrides the default file |
 | `openmosh-hook integration list [--json]` | Every supported agent: detected on this machine (binary on `PATH` or config dir present), integration installed, file, docs link |

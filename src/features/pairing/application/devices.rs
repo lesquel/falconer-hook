@@ -2,8 +2,10 @@
 
 use serde::Serialize;
 
+use std::net::IpAddr;
+
 use crate::features::pairing::domain::{
-    authorized_keys_line, AuthorizedKeys, Device, DeviceRegistry, RegistryError,
+    authorized_keys_line, AuthorizedKeys, Device, DeviceRegistry, LiveSessions, RegistryError,
 };
 use crate::features::push::domain::validate_endpoint;
 use crate::shared::domain::ids::is_valid_id;
@@ -30,6 +32,41 @@ impl From<Device> for DeviceView {
             ssh_authorized: d.ssh_key.is_some(),
         }
     }
+}
+
+/// What `devices revoke` did, plus what is left for the user to do.
+#[derive(Debug, Serialize, PartialEq, Eq)]
+pub struct RevokeReport {
+    pub revoked: DeviceView,
+    /// Process ids of the SSH sessions that were ended; `null` when they
+    /// could not be identified (device paired before addresses were pinned,
+    /// or no `/proc`).
+    pub sessions_ended: Option<Vec<u32>>,
+    /// Lost-phone checklist: done items first, then the user's next steps.
+    pub checklist: Vec<String>,
+}
+
+/// The lost-phone checklist for a revoked device.
+pub fn lost_phone_checklist(name: &str, ips: &[String], ended: Option<&[u32]>) -> Vec<String> {
+    let mut c = vec![format!(
+        "Done: the SSH key of \"{name}\" was removed from authorized_keys and its push key deleted, so it gets no more notifications."
+    )];
+    c.push(match ended {
+        Some([]) => "Done: no live SSH session from this phone was found.".to_string(),
+        Some(p) => format!(
+            "Done: ended {} live SSH session(s) from {}.",
+            p.len(),
+            ips.join(", ")
+        ),
+        None => "Check: live SSH sessions of this phone could not be identified; run `who` and end any you do not expect (or restart sshd).".to_string(),
+    });
+    c.push("Next: remove the phone from your tailnet in the Tailscale admin console (Machines > the phone > Remove), so it cannot reach this host at all.".into());
+    c.push(
+        "Next: if the phone stored SSH keys for other hosts, remove those keys from each host too."
+            .into(),
+    );
+    c.push("Next: run `openmosh-hook doctor` and review ~/.ssh/authorized_keys for keys you do not recognize.".into());
+    c
 }
 
 pub struct DeviceAdmin<'a, R, A> {
@@ -67,16 +104,35 @@ impl<R: DeviceRegistry, A: AuthorizedKeys> DeviceAdmin<'_, R, A> {
             .collect())
     }
 
-    /// Removes the device's `authorized_keys` line and its registry record.
+    /// Removes the device's `authorized_keys` line and its registry record,
+    /// then ends its live SSH sessions (identified by its pinned addresses).
     /// If the registry write fails, the key line is restored.
-    pub fn revoke(&self, id: &str) -> Result<DeviceView, DeviceAdminError> {
+    pub fn revoke(
+        &self,
+        id: &str,
+        sessions: &dyn LiveSessions,
+    ) -> Result<RevokeReport, DeviceAdminError> {
         if !is_valid_id(id) {
             return Err(DeviceAdminError::BadId);
         }
         let device = self.registry.get(id)?;
         self.keys.remove_device(id)?;
         match self.registry.remove(id) {
-            Ok(d) => Ok(d.into()),
+            Ok(d) => {
+                let ips: Vec<IpAddr> = d.peer_ips.iter().filter_map(|i| i.parse().ok()).collect();
+                // Without pinned addresses the phone's sessions cannot be told apart.
+                let ended = if ips.is_empty() {
+                    None
+                } else {
+                    sessions.end_sessions_from(&ips)
+                };
+                let checklist = lost_phone_checklist(&d.name, &d.peer_ips, ended.as_deref());
+                Ok(RevokeReport {
+                    revoked: d.into(),
+                    sessions_ended: ended,
+                    checklist,
+                })
+            }
             Err(e) => {
                 if let Some(k) = &device.ssh_key {
                     let _ = self
@@ -105,7 +161,7 @@ impl<R: DeviceRegistry, A: AuthorizedKeys> DeviceAdmin<'_, R, A> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::features::pairing::domain::fakes::{MemAuthorizedKeys, MemRegistry};
+    use crate::features::pairing::domain::fakes::{FakeSessions, MemAuthorizedKeys, MemRegistry};
     use crate::shared::domain::error::ErrorCode;
 
     const ID: &str = "AAAAAAAAAAAAAAAAAAAA01";
@@ -140,14 +196,55 @@ mod tests {
             registry: &reg,
             keys: &keys,
         };
-        assert_eq!(admin.revoke(ID).unwrap().id, ID);
+        let sessions = FakeSessions::default();
+        let r = admin.revoke(ID, &sessions).unwrap();
+        assert_eq!(r.revoked.id, ID);
+        assert_eq!(r.sessions_ended, None, "no pinned addresses: unknown");
+        assert!(sessions.asked.borrow().is_empty());
+        assert!(r.checklist[1].starts_with("Check:"));
         assert!(reg.list().unwrap().is_empty());
         assert_eq!(
             keys.lines.borrow().as_slice(),
             ["ssh-ed25519 AAAAuser laptop"]
         );
-        assert_eq!(admin.revoke(ID).unwrap_err().code(), "not_found");
-        assert_eq!(admin.revoke("../etc").unwrap_err().code(), "invalid_input");
+        assert_eq!(admin.revoke(ID, &sessions).unwrap_err().code(), "not_found");
+        assert_eq!(
+            admin.revoke("../etc", &sessions).unwrap_err().code(),
+            "invalid_input"
+        );
+    }
+
+    #[test]
+    fn revoke_ends_the_phones_live_sessions_and_lists_next_steps() {
+        let (reg, keys) = setup();
+        let mut d = reg.get(ID).unwrap();
+        d.peer_ips = vec!["100.101.1.2".into(), "fd7a:115c:a1e0::1:2".into()];
+        reg.update(d).unwrap();
+        let sessions = FakeSessions {
+            ended: vec![4711],
+            ..Default::default()
+        };
+        let admin = DeviceAdmin {
+            registry: &reg,
+            keys: &keys,
+        };
+        let r = admin.revoke(ID, &sessions).unwrap();
+        assert_eq!(r.sessions_ended, Some(vec![4711]));
+        assert_eq!(
+            sessions.asked.borrow().as_slice(),
+            [vec![
+                "100.101.1.2".parse::<IpAddr>().unwrap(),
+                "fd7a:115c:a1e0::1:2".parse().unwrap()
+            ]]
+        );
+        assert_eq!(
+            r.checklist[1],
+            "Done: ended 1 live SSH session(s) from 100.101.1.2, fd7a:115c:a1e0::1:2."
+        );
+        assert!(r
+            .checklist
+            .iter()
+            .any(|c| c.contains("Tailscale admin console")));
     }
 
     #[test]

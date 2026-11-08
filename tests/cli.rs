@@ -346,7 +346,23 @@ fn pair_ssh_then_devices_lifecycle() {
     );
 
     let (code, v) = e.json(&["devices", "revoke", &id, "--json"], None, &[]);
-    assert_eq!(ok_data(code, &v)["revoked"]["id"], id.as_str());
+    let d = ok_data(code, &v);
+    assert_eq!(d["revoked"]["id"], id.as_str());
+    // pair-ssh pins no address: its sessions cannot be identified.
+    assert_eq!(d["sessions_ended"], Value::Null);
+    let checklist: Vec<&str> = d["checklist"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c.as_str().unwrap())
+        .collect();
+    assert!(
+        checklist
+            .iter()
+            .any(|c| c.contains("Tailscale admin console")),
+        "{checklist:?}"
+    );
+    assert!(!e.calls().iter().any(|c| c[0] == "kill"));
     let (code, v) = e.json(&["devices", "revoke", &id, "--json"], None, &[]);
     assert_eq!(err_code(code, &v), "not_found");
 
