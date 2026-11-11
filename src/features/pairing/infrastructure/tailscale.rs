@@ -55,6 +55,15 @@ struct WhoisNode {
     addresses: Vec<String>,
 }
 
+/// `RunSSH` from `tailscale debug prefs` (the node's `ipn.Prefs` as JSON).
+/// `None` when the output is not that JSON or lacks the field.
+pub fn parse_ssh_prefs(stdout: &str) -> Option<bool> {
+    serde_json::from_str::<serde_json::Value>(stdout)
+        .ok()?
+        .get("RunSSH")?
+        .as_bool()
+}
+
 /// `LoginName` Tailscale reports for nodes owned by tags instead of a user.
 pub const TAGGED_LOGIN: &str = "tagged-devices";
 
@@ -123,6 +132,18 @@ impl TailscaleCli<'_> {
 }
 
 impl Tailnet for TailscaleCli<'_> {
+    /// Relies only on `tailscale debug prefs` -> `RunSSH`. `tailscale status
+    /// --json` is not a fallback: `Self.Capabilities`/`CapMap` list
+    /// `https://tailscale.com/cap/ssh` whenever the tailnet policy allows SSH,
+    /// even with `RunSSH` false, so it cannot tell if the server is running.
+    fn ssh_enabled(&self) -> Option<bool> {
+        let out = self.run(&["debug", "prefs"]).ok()?;
+        if !out.success() {
+            return None;
+        }
+        parse_ssh_prefs(&out.stdout)
+    }
+
     fn status(&self) -> Result<TailnetStatus, TailnetError> {
         let out = self.run(&["status", "--json"])?;
         // `tailscale status` exits non-zero when stopped but still prints JSON.
@@ -213,6 +234,52 @@ mod tests {
                 "100.101.1.2".parse::<IpAddr>().unwrap(),
                 "fd7a:115c:a1e0::1:2".parse().unwrap()
             ]
+        );
+    }
+
+    fn ssh_enabled_with(reply: Result<CommandOutput, CommandError>) -> Option<bool> {
+        let r = RecordingRunner::default();
+        r.reply(reply);
+        let t = TailscaleCli {
+            runner: &r,
+            program: "tailscale".into(),
+        };
+        let got = t.ssh_enabled();
+        assert_eq!(r.argv(), vec![vec!["tailscale", "debug", "prefs"]]);
+        got
+    }
+
+    #[test]
+    fn ssh_enabled_reads_run_ssh_from_debug_prefs() {
+        let ok = |s: &str| {
+            Ok(CommandOutput {
+                status: 0,
+                stdout: s.into(),
+                stderr: String::new(),
+            })
+        };
+        assert_eq!(
+            ssh_enabled_with(ok(r#"{"RunSSH":true,"WantRunning":true}"#)),
+            Some(true)
+        );
+        assert_eq!(ssh_enabled_with(ok(r#"{"RunSSH":false}"#)), Some(false));
+        assert_eq!(ssh_enabled_with(ok(r#"{"WantRunning":true}"#)), None);
+        assert_eq!(ssh_enabled_with(ok("not json")), None);
+    }
+
+    #[test]
+    fn ssh_enabled_is_unknown_when_the_command_is_missing_or_fails() {
+        assert_eq!(
+            ssh_enabled_with(Err(CommandError::NotFound("tailscale".into()))),
+            None
+        );
+        assert_eq!(
+            ssh_enabled_with(Ok(CommandOutput {
+                status: 1,
+                stdout: r#"{"RunSSH":true}"#.into(),
+                stderr: "denied".into()
+            })),
+            None
         );
     }
 

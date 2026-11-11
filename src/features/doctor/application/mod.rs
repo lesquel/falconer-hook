@@ -2,7 +2,10 @@
 
 use crate::features::agents::domain::{AgentError, AgentRuntime};
 use crate::features::doctor::domain::Check;
-use crate::features::pairing::domain::{DeviceRegistry, Tailnet, TailnetError};
+use crate::features::pairing::domain::{
+    DeviceRegistry, Tailnet, TailnetError, TAILSCALE_SSH_FIX, TAILSCALE_SSH_PORT,
+    TAILSCALE_SSH_REASON,
+};
 use crate::features::responses::domain::Keymap;
 
 pub fn check_tailscale(t: &impl Tailnet) -> Check {
@@ -16,6 +19,24 @@ pub fn check_tailscale(t: &impl Tailnet) -> Check {
             Ok(ip) => Check::ok("tailscale", format!("running, {ip}")),
             Err(_) => Check::fail("tailscale", "running but has no IPv4 address"),
         },
+    }
+}
+
+/// Tailscale SSH shadows OpenSSH on port 22 of the tailnet address.
+/// Fails only when it is detected as on and `ssh_port` is 22; unknown is ok.
+pub fn check_tailscale_ssh(t: &impl Tailnet, ssh_port: u16) -> Check {
+    const NAME: &str = "tailscale_ssh";
+    match t.ssh_enabled() {
+        Some(true) if ssh_port == TAILSCALE_SSH_PORT => Check::fail(
+            NAME,
+            format!("enabled: {TAILSCALE_SSH_REASON}; run `{TAILSCALE_SSH_FIX}`"),
+        ),
+        Some(true) => Check::ok(
+            NAME,
+            format!("enabled, but ssh_port {ssh_port} is not intercepted"),
+        ),
+        Some(false) => Check::ok(NAME, "disabled"),
+        None => Check::ok(NAME, "not detected"),
     }
 }
 
@@ -112,6 +133,21 @@ mod tests {
         assert_eq!(check_tailscale(&t).status, Status::Fail);
         t.missing = true;
         assert_eq!(check_tailscale(&t).status, Status::Fail);
+    }
+
+    #[test]
+    fn tailscale_ssh_states() {
+        let mut t = FakeTailnet::running("me", &[]);
+        t.ssh = Some(true);
+        let c = check_tailscale_ssh(&t, 22);
+        assert_eq!((c.name, c.status), ("tailscale_ssh", Status::Fail));
+        assert!(c.detail.contains("sudo tailscale set --ssh=false"));
+        assert!(c.detail.contains("intercepts port 22"));
+        assert_eq!(check_tailscale_ssh(&t, 2222).status, Status::Ok);
+        t.ssh = Some(false);
+        assert_eq!(check_tailscale_ssh(&t, 22).detail, "disabled");
+        t.ssh = None;
+        assert_eq!(check_tailscale_ssh(&t, 22).status, Status::Ok);
     }
 
     #[test]

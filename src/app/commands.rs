@@ -9,7 +9,7 @@ use crate::cli::output::{CliError, Reply};
 use crate::cli::{ActionArg, KindArg};
 use crate::features::agents::application::{ListAgents, ListSessions};
 use crate::features::doctor::application::{
-    check_devices, check_keymaps, check_runtimes, check_tailscale,
+    check_devices, check_keymaps, check_runtimes, check_tailscale, check_tailscale_ssh,
 };
 use crate::features::doctor::domain::{Check, DoctorReport, Status};
 use crate::features::doctor::infrastructure::{
@@ -282,6 +282,7 @@ pub fn doctor(ctx: &Ctx) -> Result<Reply, CliError> {
         program: cfg.bins.tailscale.clone(),
     };
     checks.push(check_tailscale(&tailscale));
+    checks.push(check_tailscale_ssh(&tailscale, cfg.ssh_port));
     let rts = Runtimes::new(ctx, &cfg);
     checks.extend(check_runtimes(&rts.enabled()));
     let p = &ctx.paths;

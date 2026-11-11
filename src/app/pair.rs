@@ -11,7 +11,7 @@ use crate::cli::output::{CliError, Reply};
 use crate::features::pairing::application::{
     HostFacts, PairError, Preflight, QrPairing, SshPairing,
 };
-use crate::features::pairing::domain::PairConfirm;
+use crate::features::pairing::domain::{tailscale_ssh_warning, PairConfirm};
 use crate::features::pairing::infrastructure::listener::{run_listener, ListenEnd};
 use crate::features::pairing::infrastructure::pair_crypto::X25519PairCrypto;
 use crate::features::pairing::infrastructure::qr_render::render_qr;
@@ -111,6 +111,9 @@ pub fn pair(
         program: cfg.bins.tailscale.clone(),
     };
     let preflight = Preflight::check(&tailscale)?;
+    if let Some(w) = tailscale_ssh_warning(&tailscale, cfg.ssh_port) {
+        eprintln!("{w}");
+    }
     let ssh_fp = std::fs::read_to_string(&cfg.ssh_host_key_pub)
         .ok()
         .as_deref()
@@ -194,6 +197,13 @@ pub fn pair(
 
 pub fn pair_ssh(ctx: &Ctx) -> Result<Reply, CliError> {
     let cfg = ctx.config()?;
+    let tailscale = TailscaleCli {
+        runner: &ctx.runner,
+        program: cfg.bins.tailscale.clone(),
+    };
+    if let Some(w) = tailscale_ssh_warning(&tailscale, cfg.ssh_port) {
+        eprintln!("{w}");
+    }
     let input = read_stdin(16 * 1024)?;
     let st = open_state(ctx)?;
     let uc = SshPairing {
@@ -211,6 +221,20 @@ pub fn pair_ssh(ctx: &Ctx) -> Result<Reply, CliError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::features::pairing::domain::fakes::FakeTailnet;
+
+    #[test]
+    fn ssh_warning_only_when_enabled_on_port_22() {
+        let mut t = FakeTailnet::running("me", &[]);
+        t.ssh = Some(true);
+        let w = tailscale_ssh_warning(&t, 22).unwrap();
+        assert!(w.contains("sudo tailscale set --ssh=false"), "{w}");
+        assert_eq!(tailscale_ssh_warning(&t, 2222), None);
+        t.ssh = Some(false);
+        assert_eq!(tailscale_ssh_warning(&t, 22), None);
+        t.ssh = None;
+        assert_eq!(tailscale_ssh_warning(&t, 22), None);
+    }
 
     #[test]
     fn only_y_or_yes_confirms() {
