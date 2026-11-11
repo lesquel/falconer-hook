@@ -99,6 +99,9 @@ pub enum MirrorError {
     Closed,
     #[error("herdr protocol error: {0}")]
     Protocol(&'static str),
+    /// Herdr answered with an error (its code, reduced to `[a-z0-9_]`).
+    #[error("herdr refused the request: {0}")]
+    Refused(String),
     #[error("failed to start {0}")]
     Launch(String),
 }
@@ -107,7 +110,7 @@ impl ErrorCode for MirrorError {
     fn code(&self) -> &'static str {
         match self {
             MirrorError::Unavailable | MirrorError::Closed => "runtime_unavailable",
-            MirrorError::Protocol(_) => "runtime_error",
+            MirrorError::Protocol(_) | MirrorError::Refused(_) => "runtime_error",
             MirrorError::Launch(_) => "runtime_unavailable",
         }
     }

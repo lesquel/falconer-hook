@@ -92,6 +92,70 @@ pub fn parse_snapshot(result: &Value) -> FocusSnapshot {
     }
 }
 
+/// Connects to Herdr's socket; with `owner`, only to a socket that user owns
+/// (another user's socket on a shared path could feed fake data or receive ours).
+pub fn open_socket(path: &Path, owner: Option<u32>) -> Result<UnixStream, MirrorError> {
+    use std::os::unix::fs::{FileTypeExt, MetadataExt};
+    if let Some(uid) = owner {
+        let m = std::fs::metadata(path).map_err(|_| MirrorError::Unavailable)?;
+        if m.uid() != uid || !m.file_type().is_socket() {
+            return Err(MirrorError::Unavailable);
+        }
+    }
+    let s = UnixStream::connect(path).map_err(|_| MirrorError::Unavailable)?;
+    s.set_write_timeout(Some(REQUEST_TIMEOUT))
+        .map_err(|_| MirrorError::Unavailable)?;
+    Ok(s)
+}
+
+/// One JSON-RPC request on its own connection (Herdr 0.9 closes a request
+/// connection after one reply); returns the reply's `result`. Lines with
+/// another id are skipped; an error reply becomes `Refused(code)`.
+pub fn request_once(
+    path: &Path,
+    owner: Option<u32>,
+    id: &str,
+    method: &str,
+    params: Value,
+    timeout: Duration,
+) -> Result<Value, MirrorError> {
+    let line = json!({"id": id, "method": method, "params": params}).to_string();
+    let mut stream = open_socket(path, owner)?;
+    stream
+        .set_read_timeout(Some(timeout))
+        .map_err(|_| MirrorError::Closed)?;
+    writeln!(stream, "{line}").map_err(|_| MirrorError::Closed)?;
+    let mut cmd = BufReader::new(stream);
+    loop {
+        let mut reply = String::new();
+        let n = cmd
+            .by_ref()
+            .take(MAX_LINE as u64)
+            .read_line(&mut reply)
+            .map_err(|_| MirrorError::Closed)?;
+        if n == 0 || !reply.ends_with('\n') {
+            return Err(MirrorError::Closed);
+        }
+        let v: Value =
+            serde_json::from_str(&reply).map_err(|_| MirrorError::Protocol("bad_json"))?;
+        if v.get("id").and_then(Value::as_str) != Some(id) {
+            continue;
+        }
+        if let Some(err) = v.get("error") {
+            let code: String = err
+                .get("code")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown")
+                .chars()
+                .filter(|c| c.is_ascii_alphanumeric() || *c == '_')
+                .take(64)
+                .collect();
+            return Err(MirrorError::Refused(code.to_ascii_lowercase()));
+        }
+        return Ok(v.get("result").cloned().unwrap_or(Value::Null));
+    }
+}
+
 /// Unix-socket client: one long-lived subscription; every request opens its
 /// own connection, because Herdr 0.9 closes a request connection after one
 /// reply.
@@ -122,17 +186,7 @@ impl HerdrSocket {
     }
 
     fn open(&self) -> Result<UnixStream, MirrorError> {
-        use std::os::unix::fs::{FileTypeExt, MetadataExt};
-        if let Some(uid) = self.owner {
-            let m = std::fs::metadata(&self.path).map_err(|_| MirrorError::Unavailable)?;
-            if m.uid() != uid || !m.file_type().is_socket() {
-                return Err(MirrorError::Unavailable);
-            }
-        }
-        let s = UnixStream::connect(&self.path).map_err(|_| MirrorError::Unavailable)?;
-        s.set_write_timeout(Some(REQUEST_TIMEOUT))
-            .map_err(|_| MirrorError::Unavailable)?;
-        Ok(s)
+        open_socket(&self.path, self.owner)
     }
 
     fn id(&mut self, prefix: &str) -> String {
@@ -146,33 +200,13 @@ impl HerdrSocket {
             return Err(MirrorError::Closed);
         }
         let id = self.id("req");
-        let line = json!({"id": id, "method": method, "params": params}).to_string();
-        let mut stream = self.open().map_err(|_| MirrorError::Closed)?;
-        stream
-            .set_read_timeout(Some(REQUEST_TIMEOUT))
-            .map_err(|_| MirrorError::Closed)?;
-        writeln!(stream, "{line}").map_err(|_| MirrorError::Closed)?;
-        let mut cmd = BufReader::new(stream);
-        loop {
-            let mut reply = String::new();
-            let n = cmd
-                .by_ref()
-                .take(MAX_LINE as u64)
-                .read_line(&mut reply)
-                .map_err(|_| MirrorError::Closed)?;
-            if n == 0 || !reply.ends_with('\n') {
-                return Err(MirrorError::Closed);
+        request_once(&self.path, self.owner, &id, method, params, REQUEST_TIMEOUT).map_err(|e| {
+            match e {
+                MirrorError::Refused(_) => MirrorError::Protocol("request_refused"),
+                MirrorError::Unavailable => MirrorError::Closed,
+                other => other,
             }
-            let v: Value =
-                serde_json::from_str(&reply).map_err(|_| MirrorError::Protocol("bad_json"))?;
-            if v.get("id").and_then(Value::as_str) != Some(id.as_str()) {
-                continue;
-            }
-            if v.get("error").is_some() {
-                return Err(MirrorError::Protocol("request_refused"));
-            }
-            return Ok(v.get("result").cloned().unwrap_or(Value::Null));
-        }
+        })
     }
 
     /// Reads from the subscription until a full line is buffered or `wait` passes.
