@@ -176,6 +176,7 @@ mod tests {
             endpoint_stale: true,
             ssh_key: None,
             peer_ips: Vec::new(),
+            webpush: None,
         };
         assert_eq!(
             check_devices(&MemRegistry::with(vec![d.clone()])).status,

@@ -231,6 +231,8 @@ pub fn run(ctx: &Ctx, command: Command) -> Result<Reply, CliError> {
             DevicesCmd::SetEndpoint { id, url, .. } => {
                 commands::devices_set_endpoint(ctx, &id, &url)
             }
+            DevicesCmd::SetWebpush { id, .. } => commands::devices_set_webpush(ctx, &id),
+            DevicesCmd::ClearWebpush { id, .. } => commands::devices_clear_webpush(ctx, &id),
         },
         Command::Integration { cmd } => match cmd {
             IntegrationCmd::Install {
@@ -277,16 +279,20 @@ pub fn with_notifier<T>(
     use crate::features::push::application::PublishEvent;
     use crate::features::push::infrastructure::notifier::PushNotifier;
     use crate::features::push::infrastructure::ntfy_publisher::HttpPublisher;
+    use crate::features::push::infrastructure::webpush_publisher::WebPushPublisher;
     use crate::features::push::infrastructure::xchacha_sealer::XChaChaSealer;
 
     let sealer = XChaChaSealer::new(st.identity.secret());
     let publisher =
         HttpPublisher::new().map_err(|_| CliError::new("internal", "HTTP client unavailable"))?;
+    let webpush = WebPushPublisher::new()
+        .map_err(|_| CliError::new("internal", "HTTP client unavailable"))?;
     let notifier = PushNotifier {
         publish: PublishEvent {
             registry: &st.registry,
             sealer: &sealer,
             publisher: &publisher,
+            webpush: &webpush,
         },
         host_alias: ctx.host_alias(cfg),
     };

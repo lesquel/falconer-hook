@@ -129,6 +129,8 @@ else (it would recreate state); quit with `q`.
 | `openmosh-hook devices list --json` | Paired devices |
 | `openmosh-hook devices revoke <id> [--json]` | Remove the device's `authorized_keys` line and its record, end its live SSH sessions (this user's sessions whose `SSH_CONNECTION` peer is one of the phone's pinned addresses, found in `/proc`; never the session running the command; devices paired before addresses were pinned cannot be told apart and get `sessions_ended: null`), and print a lost-phone checklist (`checklist` in `--json`) |
 | `openmosh-hook devices set-endpoint <id> <url> [--json]` | Rotate the push endpoint (clears `endpoint_stale`); also turns notifications on for a device paired without one |
+| `openmosh-hook devices set-webpush <id> [--json]` | Register a [Web Push](#web-push-ios-and-android-browsers) subscription: one JSON object on stdin (the PWA's output, forwarded by the app) |
+| `openmosh-hook devices clear-webpush <id> [--json]` | Remove the device's Web Push subscription |
 | `openmosh-hook integration install\|uninstall <agent> [--settings <path>] [--json]` | Add/remove the [agent's hooks](#agents) calling `emit --source <agent>`; `--settings` overrides the default file |
 | `openmosh-hook integration list [--json]` | Every supported agent: detected on this machine (binary on `PATH` or config dir present), integration installed, file, docs link |
 | `openmosh-hook setup [--yes] [--no-service] [--json]` | First-time [setup](#setup-and-uninstall) |
@@ -262,6 +264,36 @@ input (Claude `PermissionRequest`, and the `tool_input`/`details`/`input` object
 send), as one line of at most 200 characters (`…` marks a cut) without control, bidi,
 zero-width or format characters. It travels only inside the encrypted push. `integration install` run from a new
 executable path repoints the existing hooks at it.
+
+### Web Push (iOS and Android browsers)
+
+A device can receive pushes over two independent transports, and may use both: the
+**ntfy/UnifiedPush** transport above (end-to-end encrypted with the device's X25519 key, sent to
+`endpoint`) and **Web Push** ([RFC 8030](https://www.rfc-editor.org/rfc/rfc8030),
+[RFC 8291](https://www.rfc-editor.org/rfc/rfc8291) `aes128gcm`,
+[RFC 8292](https://www.rfc-editor.org/rfc/rfc8292) VAPID), sent straight to the browser's push
+service (Apple, Google or Mozilla). The PWA that creates the subscription lives in
+[openmosh-web](https://github.com/lesquel/openmosh-web); the app forwards what it produces:
+
+```sh
+openmosh-hook devices set-webpush <id> --json < subscription.json
+openmosh-hook devices clear-webpush <id> --json
+```
+
+`subscription.json` is one object, unknown fields refused:
+`{"v":1,"endpoint":"https://…","p256dh":"<b64url, 65-byte P-256 point>","auth":"<b64url, 16 bytes>","vapid_pub":"<b64url, 65-byte P-256 point>","vapid_priv":"<b64url, 32-byte scalar>","sub":"https://… or mailto:…"}`.
+`vapid_priv` must derive `vapid_pub`; invalid input fails with `webpush_invalid`. The private key
+is stored in `devices.toml` (`0600`) and never printed or logged; `devices list` only shows
+`webpush` and `webpush_stale`.
+
+The notification is displayed by the browser on the lock screen, so its payload is generic and
+carries no host, agent, command, summary or pane: only a title by kind ("An agent needs
+approval", "An agent has a question", "An agent finished", otherwise "OpenMosh") and "Open
+OpenMosh to respond.". The message uses `TTL: 900` (an approval is stale after 15 minutes) and
+`Urgency: high`, is padded to 256 or 512 bytes, and is signed with a 12-hour VAPID token. A
+`404`/`410` marks only the subscription stale (`webpush_stale`), separately from
+`endpoint_stale`; run `set-webpush` again to renew it. A device with no ntfy endpoint still
+receives Web Push. Delivery is not retried, like the other transport.
 
 ## Mirroring
 

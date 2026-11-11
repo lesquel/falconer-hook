@@ -205,6 +205,7 @@ mod tests {
                         endpoint_stale: false,
                         ssh_key: None,
                         peer_ips: vec![],
+                        webpush: None,
                     },
                     reply: "{\"v\":1}".into(),
                 },

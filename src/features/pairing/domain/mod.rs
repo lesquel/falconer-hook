@@ -1,11 +1,15 @@
 //! Devices, pairing wire plaintexts, validation rules and ports.
 
 mod rules;
+mod webpush;
 mod wire;
 
 pub use rules::{
     authorized_keys_line, device_comment, normalize_ssh_ed25519, sanitize_name, valid_ppk,
 };
+#[cfg(test)]
+pub use webpush::fixtures as webpush_fixtures;
+pub use webpush::{WebPush, WebPushError, WebPushInput};
 pub use wire::{PairOffer, PairRequestPlain, PairResponsePlain};
 
 /// One-time pairing token length: 128 bits keeps the QR small and is far
@@ -37,6 +41,9 @@ pub struct Device {
     /// paired before v0.2.1 (whole tailnet) and for `pair-ssh`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub peer_ips: Vec<String>,
+    /// Web Push subscription, when the phone registered one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub webpush: Option<Box<WebPush>>,
 }
 
 #[derive(Debug, Error)]
@@ -70,6 +77,9 @@ pub trait DeviceRegistry {
     /// step: an endpoint rotated meanwhile (`devices set-endpoint`) is kept
     /// and stays active. Returns whether the flag was set.
     fn mark_stale(&self, id: &str, endpoint: &str) -> Result<bool, RegistryError>;
+    /// Same as [`Self::mark_stale`] for the Web Push subscription: only while
+    /// its endpoint is still `endpoint`.
+    fn mark_webpush_stale(&self, id: &str, endpoint: &str) -> Result<bool, RegistryError>;
 
     fn get(&self, id: &str) -> Result<Device, RegistryError> {
         self.list()?
@@ -232,6 +242,15 @@ pub mod fakes {
                 }
                 None => Ok(false),
             }
+        }
+        fn mark_webpush_stale(&self, id: &str, endpoint: &str) -> Result<bool, RegistryError> {
+            let mut v = self.0.borrow_mut();
+            let wp = v
+                .iter_mut()
+                .find(|d| d.id == id)
+                .and_then(|d| d.webpush.as_mut())
+                .filter(|w| w.endpoint == endpoint);
+            Ok(wp.map(|w| w.stale = true).is_some())
         }
         fn update(&self, device: Device) -> Result<(), RegistryError> {
             let mut v = self.0.borrow_mut();

@@ -1,8 +1,10 @@
 //! Push wire model (plaintext and body), endpoint rules and ports.
 
 mod endpoint;
+mod webpush;
 
 pub use endpoint::{forbidden_ip, validate_endpoint, EndpointError};
+pub use webpush::{WebPushPayload, WebPushSender, WEBPUSH_PAD_BUCKETS, WEBPUSH_TTL_SECS};
 
 use serde::Serialize;
 use thiserror::Error;

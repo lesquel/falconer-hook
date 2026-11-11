@@ -52,6 +52,7 @@ impl<R: DeviceRegistry, K: Clock, I: IdGenerator> SshPairing<'_, R, K, I> {
             endpoint_stale: false,
             ssh_key: None,
             peer_ips: Vec::new(),
+            webpush: None,
         };
         let device_id = device.id.clone();
         self.registry.add(device).map_err(|_| PairError::Storage)?;

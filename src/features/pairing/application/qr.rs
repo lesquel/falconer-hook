@@ -360,6 +360,7 @@ where
             endpoint_stale: false,
             ssh_key: Some(ssh_key.clone()),
             peer_ips: peer_addresses(peer, &peer_info),
+            webpush: None,
         };
         if self
             .keys
