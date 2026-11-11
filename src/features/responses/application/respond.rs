@@ -287,7 +287,7 @@ mod tests {
         assert_eq!(code(r.run("a", Action::Text, None)), "invalid_input");
         assert_eq!(code(r.run("a", Action::Allow, Some("x"))), "invalid_input");
         assert_eq!(
-            code(r.run("a", Action::Text, Some(&"a".repeat(4097)))),
+            code(r.run("a", Action::Text, Some(&"a".repeat(16385)))),
             "text_too_long"
         );
         assert_eq!(code(r.run("n", Action::Allow, None)), "no_pane");

@@ -21,7 +21,7 @@ fn version_envelope() {
     let (code, v) = e.json(&["version", "--json"], None, &[]);
     let d = ok_data(code, &v);
     assert_eq!(d["version"], env!("CARGO_PKG_VERSION"));
-    assert_eq!(d["protocol"], json!({"pair": 1, "push": 1}));
+    assert_eq!(d["protocol"], json!({"pair": 1, "push": 1, "herdr": 1}));
     let raw = String::from_utf8(e.run(&["version", "--json"], None, &[]).stdout).unwrap();
     assert!(
         raw.starts_with(r#"{"ok":true,"data":"#),
@@ -203,7 +203,6 @@ fn respond_text_from_herdr_pane_uses_one_argv_entry() {
                 "herdr",
                 "pane",
                 "send-text",
-                "--",
                 "w7:pA",
                 "-n; $(rm -rf ~) `x`[2J next"
             ],
@@ -260,7 +259,7 @@ fn respond_errors() {
     let id = ok_data(code, &v)["event_id"].as_str().unwrap().to_string();
     let (code, v) = e.json(&["respond", &id, "--action", "allow", "--json"], None, &[]);
     assert_eq!(err_code(code, &v), "no_pane");
-    let long = "a".repeat(4097);
+    let long = "a".repeat(16385);
     let (code, v) = e.json(
         &[
             "respond", &id, "--action", "text", "--text", &long, "--json",

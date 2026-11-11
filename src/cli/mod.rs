@@ -161,6 +161,12 @@ pub enum Command {
         #[command(subcommand)]
         cmd: ServiceCmd,
     },
+    /// Herdr navigator for the phone: structured snapshot, pane screen and a
+    /// fixed allowlist of actions on a Herdr session's socket.
+    Herdr {
+        #[command(subcommand)]
+        cmd: HerdrCmd,
+    },
     /// Run a multiplexer client with focus mirroring across attached clients.
     Attach {
         #[command(subcommand)]
@@ -182,6 +188,54 @@ pub enum AttachCmd {
         /// Named Herdr session (`herdr session attach <name>`).
         #[arg(long)]
         session: Option<String>,
+    },
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct PollArgs {
+    /// Named Herdr session (default: Herdr's own resolution).
+    #[arg(long)]
+    pub session: Option<String>,
+    /// The `rev` the caller already has: answer `{"rev","unchanged":true}`
+    /// while the state still matches it.
+    #[arg(long)]
+    pub since: Option<String>,
+    /// With `--since`, wait up to this many milliseconds for a change
+    /// (capped at 20000), re-reading Herdr every 250 ms.
+    #[arg(long, default_value_t = 0)]
+    pub wait_ms: u64,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum HerdrCmd {
+    /// Workspaces, tabs and panes with agent status, plus their `rev`.
+    Snapshot {
+        #[command(flatten)]
+        poll: PollArgs,
+        #[command(flatten)]
+        out: JsonFlag,
+    },
+    /// A pane's own text (escape sequences and control characters removed)
+    /// with its agent and status.
+    Read {
+        /// Pane id, e.g. `w1:p2`.
+        #[arg(long, allow_hyphen_values = true)]
+        pane: String,
+        /// Last lines to return (1..=2000).
+        #[arg(long, default_value_t = crate::features::navigator::domain::DEFAULT_LINES)]
+        lines: u32,
+        #[command(flatten)]
+        poll: PollArgs,
+        #[command(flatten)]
+        out: JsonFlag,
+    },
+    /// Run one allowlisted action; the request JSON `{"op":…}` comes on stdin.
+    Action {
+        /// Named Herdr session (default: Herdr's own resolution).
+        #[arg(long)]
+        session: Option<String>,
+        #[command(flatten)]
+        out: JsonFlag,
     },
 }
 
@@ -345,6 +399,11 @@ impl Command {
             },
             Command::Service { cmd } => match cmd {
                 ServiceCmd::Install { out, .. } | ServiceCmd::Uninstall { out, .. } => out.json,
+            },
+            Command::Herdr { cmd } => match cmd {
+                HerdrCmd::Snapshot { out, .. }
+                | HerdrCmd::Read { out, .. }
+                | HerdrCmd::Action { out, .. } => out.json,
             },
         }
     }

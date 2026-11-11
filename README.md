@@ -138,8 +138,11 @@ else (it would recreate state); quit with `q`.
 | `openmosh-hook harden-ssh [--dry-run] [--yes] [--json]` | Make sshd accept SSH keys only: pipes a fixed drop-in into `/usr/bin/sudo /usr/bin/tee /etc/ssh/sshd_config.d/10-openmosh.conf` (absolute paths, no staged file), sets it `0644`, validates it with `sshd -t` (removed again on failure) and reloads sshd. Asks before changing anything; also `s` on the TUI Status screen |
 | `openmosh-hook service install\|uninstall [--dry-run] [--json]` | Register/remove the user service. The systemd unit runs with `UMask=0077`, `NoNewPrivileges`, `SystemCallFilter=@system-service`, `RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6`, `RestrictNamespaces`, `RestrictRealtime`, `RestrictSUIDSGID` and `LockPersonality`. Mount sandboxing (`ProtectSystem=`, `PrivateTmp=`) is not used: user services need unprivileged user namespaces for it and would not start where those are off |
 | `openmosh-hook attach herdr [--session <name>]` | Run the Herdr client (`herdr` or `herdr session attach <name>`, from `[bins] herdr`) with [focus mirroring](#mirroring); exits with Herdr's status code. Session names are `[A-Za-z0-9._-]`, not starting with `-`; the mirror only uses a Herdr socket owned by the owner of `$HOME` |
+| `openmosh-hook herdr snapshot [--session <name>] [--since <rev>] [--wait-ms <n>] --json` | [Navigator](#herdr-navigator) snapshot: `{"rev","unchanged":false,"workspaces":[{"id","label","focused"}],"tabs":[{"id","workspace_id","label","number","agent_status","pane_count","focused"}],"panes":[{"id","tab_id","workspace_id","agent","agent_status","focused"}]}`; with `--since` equal to the current `rev` it waits up to `--wait-ms` (max 20000) for a change and answers `{"rev","unchanged":true}` when none came |
+| `openmosh-hook herdr read --pane <id> [--session <name>] [--since <rev>] [--wait-ms <n>] [--lines <n>] --json` | The pane's own text, last `--lines` lines (default 200, max 2000), escape sequences and control characters removed: `{"rev","unchanged","agent","agent_status","lines":[…]}`; long-polls like `snapshot` |
+| `openmosh-hook herdr action [--session <name>] --json` | Run one allowlisted [navigator action](#herdr-navigator); the request `{"op":…}` comes on stdin, the answer is `{"op","id"?}` |
 | `openmosh-hook tui` | The [terminal UI](#tui) (also `openmosh-hook` alone on a terminal) |
-| `openmosh-hook version [--json]` | Version and wire protocol versions |
+| `openmosh-hook version [--json]` | Version and wire protocol versions (`protocol.herdr` is the navigator's) |
 
 Ids are b64url and may start with `-`; positional id arguments accept that.
 
@@ -153,7 +156,7 @@ With `--json` every command prints exactly one line:
 ```
 
 Exit code is `0` on success and `1` on error. Messages never contain secrets. Error codes:
-`invalid_input`, `not_found`, `already_resolved`, `text_too_long`, `no_pane`, `stale`, `expired`, `no_keymap`,
+`invalid_input`, `invalid_request`, `not_found`, `already_resolved`, `text_too_long`, `no_pane`, `stale`, `expired`, `no_keymap`,
 `runtime_unavailable`, `runtime_error`, `invalid_endpoint`, `permissions_too_open`,
 `config_error`, `io_error`, `store_error`, `registry_corrupt`, `storage_error`,
 `tailscale_missing`, `tailscale_not_running`, `tailscale_tagged`, `tailscale_error`, `ssh_host_key_missing`,
@@ -283,6 +286,35 @@ the same way.
 
 Limits: pane sizes follow the last active client (Herdr resizes to it), and an explicit focus
 marks a `done` agent in that pane as seen.
+
+## Herdr navigator
+
+The phone browses a Herdr session as structured data instead of painting the screen: `herdr
+snapshot` lists workspaces, tabs and panes with each agent's status (`working`, `blocked`, `done`,
+`idle`, `unknown`), `herdr read` returns one pane's text, and `herdr action` runs one action from a
+fixed allowlist. Everything goes over Herdr's local socket (the one `attach herdr` uses, and only
+when the owner of `$HOME` owns it) inside the phone's paired SSH session.
+
+- **Real time without a daemon.** Each answer carries `rev`, the first 16 hex digits of the SHA-256
+  of the returned fields. The phone calls again with `--since <rev> --wait-ms 20000`; the hook
+  re-reads Herdr every 250 ms and answers as soon as `rev` changes, or `{"rev","unchanged":true}`
+  at the deadline. Nothing runs while no phone is asking. While waiting, `herdr read` only checks
+  a cheap marker each tick (`pane.get` plus the pane's last screenful) and re-reads the full
+  history only when that marker changes.
+- **Actions** (`{"op":…}` on stdin): `workspace.create {label?}`, `workspace.rename {id,label}`,
+  `workspace.close {id}`, `workspace.focus {id}`, `tab.create {workspace_id,label?}`,
+  `tab.rename {id,label}`, `tab.close {id}`, `tab.focus {id}`, `pane.focus {id}`,
+  `agent.start {pane_id,agent}`, `pane.keys {pane_id,keys}`, `pane.text {pane_id,text,submit}`.
+  Closing happens only when asked; the phone confirms first.
+- **Validation.** Unknown ops or fields are refused with `invalid_request`, as is every id that is
+  malformed or not in the current snapshot, a label that is blank, over 64 characters or has
+  control characters, a key outside `enter esc tab space backspace up down left right y n 1`-`9`
+  (at most 8), text over 4000 characters, and an agent other than `claude`, `codex`, `gemini`,
+  `cursor`, `copilot`, `kiro`, `opencode`, `amp` or `pi` (`herdr agent start` cannot start Aider).
+- **Text** goes through the same path as `respond --text`: one argv entry to `herdr pane
+  send-text` (with `--` when it starts with `-`), newlines turned into spaces and control characters
+  removed, then Enter when `submit` is true. Keys use the socket's `pane.send_keys`, which works on
+  any pane.
 
 ## Files
 

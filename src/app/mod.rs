@@ -7,6 +7,7 @@ mod commands;
 mod harden;
 mod integrations;
 mod lifecycle;
+mod navigator;
 mod pair;
 mod serve;
 pub mod tui;
@@ -262,6 +263,7 @@ pub fn run(ctx: &Ctx, command: Command) -> Result<Reply, CliError> {
             Err(CliError::new("internal", "dispatched by main"))
         }
         Command::Version { .. } => Ok(commands::version()),
+        Command::Herdr { cmd } => navigator::run(ctx, cmd),
     }
 }
 

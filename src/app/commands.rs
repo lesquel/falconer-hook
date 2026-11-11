@@ -379,7 +379,7 @@ pub fn service(ctx: &Ctx, install: bool, dry_run: bool) -> Result<Reply, CliErro
 
 pub fn version() -> Reply {
     Reply::new(
-        &json!({"version": env!("CARGO_PKG_VERSION"), "protocol": {"pair": 1, "push": 1}}),
+        &json!({"version": env!("CARGO_PKG_VERSION"), "protocol": {"pair": 1, "push": 1, "herdr": 1}}),
         format!("openmosh-hook {}", env!("CARGO_PKG_VERSION")),
     )
 }

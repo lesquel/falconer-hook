@@ -227,3 +227,41 @@ fn launcher_returns_the_child_exit_code_and_signal() {
         Err(MirrorError::Launch(_))
     ));
 }
+
+#[test]
+fn refused_and_lost_requests_keep_their_mirror_errors() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("herdr.sock");
+    let listener = UnixListener::bind(&path).unwrap();
+    let server = std::thread::spawn(move || {
+        let (sub, _) = listener.accept().unwrap();
+        let mut sub_r = BufReader::new(sub.try_clone().unwrap());
+        let mut sub_w = sub;
+        let id = read_req(&mut sub_r)["id"].as_str().unwrap().to_string();
+        writeln!(
+            sub_w,
+            r#"{{"id":"{id}","result":{{"type":"subscription_started"}}}}"#
+        )
+        .unwrap();
+        let (cmd, _) = listener.accept().unwrap();
+        let mut cmd_r = BufReader::new(cmd.try_clone().unwrap());
+        let mut cmd_w = cmd;
+        let id = read_req(&mut cmd_r)["id"].as_str().unwrap().to_string();
+        writeln!(
+            cmd_w,
+            r#"{{"id":"{id}","error":{{"code":"tab_not_found","message":"x"}}}}"#
+        )
+        .unwrap();
+        sub_w
+    });
+    let mut s = HerdrSocket::new(path.clone());
+    s.connect().unwrap();
+    let target = FocusTarget::new(FocusKind::Tab, "w1:t9").unwrap();
+    assert_eq!(
+        s.focus(&target),
+        Err(MirrorError::Protocol("request_refused"))
+    );
+    let _sub = server.join().unwrap();
+    std::fs::remove_file(&path).unwrap();
+    assert_eq!(s.snapshot(), Err(MirrorError::Closed), "socket gone");
+}
