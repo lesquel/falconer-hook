@@ -362,6 +362,21 @@ Keystrokes per agent live in [`data/keymaps/`](./data/keymaps) and are embedded 
 `enter`. **All of them still need field verification** against the agent version in use;
 `doctor` warns until a keymap is marked `verified = true`.
 
+## Troubleshooting
+
+**Stuck on "connecting" / Tailscale SSH.** Pairing works but the app never gets past
+"connecting". If Tailscale SSH is enabled on the host (`RunSSH: true`), tailscaled intercepts
+port 22 on the tailnet address, so the phone never reaches OpenSSH: its key in
+`~/.ssh/authorized_keys` is not consulted, the pinned host key is not tailscaled's, and in
+Tailscale SSH "check" mode the login waits for a browser approval. `openmosh-hook doctor` reports
+this as the failing `tailscale_ssh` check, and `pair` / `pair-ssh` print a warning on stderr
+(skipped when `ssh_port` is not 22). Detection reads `RunSSH` from `tailscale debug prefs`; if
+that is unavailable the check passes as "not detected". Fix:
+
+```sh
+sudo tailscale set --ssh=false
+```
+
 ## Shared test vectors
 
 [`tests/vectors/push_v1.json`](./tests/vectors/push_v1.json) and

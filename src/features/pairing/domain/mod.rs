@@ -149,6 +149,27 @@ pub trait Tailnet {
     fn ipv4(&self) -> Result<Ipv4Addr, TailnetError>;
     /// The user-owned node behind `ip`, if any (tagged nodes have none).
     fn whois(&self, ip: IpAddr) -> Result<Option<Peer>, TailnetError>;
+    /// Whether Tailscale SSH (`RunSSH`) is on for this node; `None` when it
+    /// cannot be told. Never an error: unknown means "not detected".
+    fn ssh_enabled(&self) -> Option<bool>;
+}
+
+/// Tailscale SSH only takes over the standard SSH port.
+pub const TAILSCALE_SSH_PORT: u16 = 22;
+/// Why Tailscale SSH breaks OpenMosh.
+pub const TAILSCALE_SSH_REASON: &str =
+    "it intercepts port 22 on the tailnet address, so OpenMosh cannot reach OpenSSH";
+/// How to switch it off.
+pub const TAILSCALE_SSH_FIX: &str = "sudo tailscale set --ssh=false";
+
+/// The pairing preflight warning, when Tailscale SSH is detected and would
+/// shadow the configured `ssh_port`.
+pub fn tailscale_ssh_warning(t: &impl Tailnet, ssh_port: u16) -> Option<String> {
+    (ssh_port == TAILSCALE_SSH_PORT && t.ssh_enabled() == Some(true)).then(|| {
+        format!(
+            "warning: Tailscale SSH is enabled: {TAILSCALE_SSH_REASON}. The phone will stay on \"connecting\". Fix: {TAILSCALE_SSH_FIX}"
+        )
+    })
 }
 
 /// The host user's go-ahead before a phone's key is authorized.
@@ -283,6 +304,7 @@ pub mod tailnet_fakes {
         pub missing: bool,
         pub whois_fails: bool,
         pub whois_calls: std::cell::Cell<u32>,
+        pub ssh: Option<bool>,
     }
 
     impl FakeTailnet {
@@ -301,11 +323,15 @@ pub mod tailnet_fakes {
                 missing: false,
                 whois_fails: false,
                 whois_calls: Default::default(),
+                ssh: Some(false),
             }
         }
     }
 
     impl Tailnet for FakeTailnet {
+        fn ssh_enabled(&self) -> Option<bool> {
+            self.ssh
+        }
         fn status(&self) -> Result<TailnetStatus, TailnetError> {
             if self.missing {
                 return Err(TailnetError::Missing);
