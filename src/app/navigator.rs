@@ -8,7 +8,6 @@ use super::commands::read_stdin;
 use super::Ctx;
 use crate::cli::output::{CliError, Reply};
 use crate::cli::{HerdrCmd, PollArgs};
-use crate::features::agents::infrastructure::herdr::HerdrRuntime;
 use crate::features::mirror::domain::valid_session_name;
 use crate::features::mirror::infrastructure::{socket_path, SystemMonoClock};
 use crate::features::navigator::application::{execute, read_screen, snapshot, Poll};
@@ -80,13 +79,8 @@ pub fn run(ctx: &Ctx, cmd: HerdrCmd) -> Result<Reply, CliError> {
         HerdrCmd::Action { session, .. } => {
             check_session(session.as_deref())?;
             let op = Op::parse(&read_stdin(MAX_REQUEST_BYTES)?)?;
-            let cfg = ctx.config()?;
-            let text = HerdrRuntime {
-                runner: &ctx.runner,
-                program: cfg.bins.herdr.clone(),
-            };
             let mut nav = navigator(ctx, session.as_deref());
-            let done = execute(&mut nav, &text, session.as_deref(), &op)?;
+            let done = execute(&mut nav, &op)?;
             let human = match &done.id {
                 Some(id) => format!("{} {id}", done.op),
                 None => done.op.to_string(),

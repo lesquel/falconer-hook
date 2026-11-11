@@ -113,13 +113,17 @@ fn every_socket_action_maps_to_its_herdr_method() {
             "pane.send_keys",
             json!({"pane_id":"w1:p1","keys":["down","enter"]}),
         ),
+        (
+            r#"{"op":"pane.text","pane_id":"w1:p1","text":"-n hola"}"#,
+            "pane.send_text",
+            json!({"pane_id":"w1:p1","text":"-n hola"}),
+        ),
     ];
     for (body, method, params) in cases {
         let (m, p, wait) = socket_call(&op(body)).unwrap();
         assert_eq!((m, &p), (method, &params), "{body}");
         assert!(wait <= Duration::from_secs(25));
     }
-    assert!(socket_call(&op(r#"{"op":"pane.text","pane_id":"w1:p1","text":"x"}"#)).is_none());
 }
 
 /// A fake Herdr socket: one request per connection, replies from `reply`.

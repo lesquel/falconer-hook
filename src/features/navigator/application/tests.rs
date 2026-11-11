@@ -1,6 +1,5 @@
 use super::*;
 use crate::features::agents::domain::AgentStatus;
-use crate::features::agents::infrastructure::herdr::HerdrRuntime;
 use crate::features::navigator::domain::{NavPane, NavTab, NavWorkspace};
 use crate::shared::domain::command::fakes::RecordingRunner;
 use crate::shared::domain::error::ErrorCode;
@@ -188,13 +187,10 @@ fn run(
     op: &str,
     session: Option<&str>,
 ) -> (Result<ActionDone, NavError>, FakeApi, Vec<Vec<String>>) {
+    let _ = session;
     let mut a = api(vec![snap(AgentStatus::Idle)]);
     let r = RecordingRunner::default();
-    let rt = HerdrRuntime {
-        runner: &r,
-        program: "herdr".into(),
-    };
-    let got = Op::parse(op).and_then(|op| execute(&mut a, &rt, session, &op));
+    let got = Op::parse(op).and_then(|op| execute(&mut a, &op));
     (got, a, r.argv())
 }
 
@@ -233,7 +229,8 @@ fn rejected_actions_never_reach_herdr() {
 }
 
 #[test]
-fn text_uses_the_cli_send_path_then_enter() {
+fn text_goes_over_the_socket_then_enter() {
+    // Over SSH the `herdr` binary is often not on PATH; the socket always is.
     let (got, a, argv) = run(
         r#"{"op":"pane.text","pane_id":"w1:p1","text":"-rf \u001b[2Jnow\nok","submit":true}"#,
         Some("work"),
@@ -245,35 +242,26 @@ fn text_uses_the_cli_send_path_then_enter() {
             id: None
         }
     );
-    assert_eq!(
-        argv,
-        vec![vec![
-            "herdr",
-            "--session",
-            "work",
-            "pane",
-            "send-text",
-            "w1:p1",
-            "-rf [2Jnow ok"
-        ]]
+    assert!(argv.is_empty(), "no CLI call: {argv:?}");
+    assert!(
+        a.calls[1].contains("PaneText") && a.calls[1].contains("-rf [2Jnow ok"),
+        "{:?}",
+        a.calls
     );
     assert!(
-        a.calls[1].contains("PaneKeys") && a.calls[1].contains("\"enter\""),
+        a.calls[2].contains("PaneKeys") && a.calls[2].contains("\"enter\""),
         "{:?}",
         a.calls
     );
 
     let (_, a, argv) = run(r#"{"op":"pane.text","pane_id":"w1:p1","text":"hi"}"#, None);
-    assert_eq!(
-        argv,
-        vec![vec!["herdr", "pane", "send-text", "w1:p1", "hi"]]
-    );
-    assert_eq!(a.calls, vec!["snapshot"], "no Enter without submit");
+    assert!(argv.is_empty());
+    assert_eq!(a.calls.len(), 2, "no Enter without submit: {:?}", a.calls);
 
-    let (got, _, argv) = run(
+    let (got, a, _) = run(
         r#"{"op":"pane.text","pane_id":"w1:p1","text":"\u0007"}"#,
         None,
     );
     assert_eq!(got.unwrap_err().code(), "invalid_request");
-    assert!(argv.is_empty());
+    assert_eq!(a.calls, vec!["snapshot"]);
 }

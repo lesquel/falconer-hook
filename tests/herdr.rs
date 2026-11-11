@@ -183,9 +183,12 @@ fn actions_run_only_from_the_allowlist() {
         &[],
     );
     ok_data(code, &v);
+    // Over the socket, not the `herdr` binary (often off PATH over SSH).
+    assert!(e.calls().is_empty(), "{:?}", e.calls());
+    let methods = h.methods();
     assert_eq!(
-        e.calls(),
-        vec![vec!["herdr", "pane", "send-text", "w1:p1", "-y $(id)"]]
+        &methods[methods.len() - 2..],
+        ["pane.send_text", "pane.send_keys"]
     );
     assert_eq!(
         h.last()["params"],

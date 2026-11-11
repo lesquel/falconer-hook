@@ -4,14 +4,12 @@
 use serde::Serialize;
 use std::time::Duration;
 
-use crate::features::agents::domain::AgentRuntime;
 use crate::features::mirror::domain::MonoClock;
 use crate::features::navigator::domain::{
     check_pane, rev_of, screen_lines, validate, NavError, NavSnapshot, NavigatorApi, Op,
     PaneScreen, Polled, MAX_WAIT_MS, POLL_MS,
 };
 use crate::features::responses::domain::sanitize_text;
-use crate::shared::domain::runtime::{PaneRef, Runtime};
 
 /// Long-poll parameters: the revision the caller has and how long it may wait.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -92,25 +90,20 @@ pub struct ActionDone {
     pub id: Option<String>,
 }
 
-/// Validates `op` against a fresh snapshot, then runs it. Text goes through
-/// the hook's existing send-text path (one argv entry, control
-/// characters removed), then Enter when `submit` is set.
-pub fn execute<A: NavigatorApi>(
-    api: &mut A,
-    text_runtime: &dyn AgentRuntime,
-    session: Option<&str>,
-    op: &Op,
-) -> Result<ActionDone, NavError> {
+/// Validates `op` against a fresh snapshot, then runs it. Text is sanitized
+/// (control characters removed) and sent over the socket like every other
+/// action, never through the `herdr` binary, which an SSH session may not
+/// have on PATH; then Enter when `submit` is set.
+pub fn execute<A: NavigatorApi>(api: &mut A, op: &Op) -> Result<ActionDone, NavError> {
     let snap = api.snapshot()?;
     validate(op, &snap)?;
     let id = match op {
         Op::PaneText(t) => {
             let clean = sanitize_text(&t.text).map_err(|e| NavError::Invalid(e.to_string()))?;
-            let mut pane = PaneRef::new(Runtime::Herdr, t.pane_id.clone());
-            pane.context.session = session.map(str::to_string);
-            text_runtime
-                .send_text(&pane, &clean)
-                .map_err(|_| NavError::Refused("send_text_failed".into()))?;
+            api.apply(&Op::PaneText(crate::features::navigator::domain::Text {
+                text: clean,
+                ..t.clone()
+            }))?;
             if t.submit {
                 api.apply(&Op::PaneKeys(crate::features::navigator::domain::Keys {
                     pane_id: t.pane_id.clone(),

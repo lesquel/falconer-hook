@@ -113,8 +113,7 @@ pub fn parse_nav_snapshot(result: &Value) -> NavSnapshot {
     }
 }
 
-/// The socket method, params and wait for a socket action; `None` for
-/// `pane.text`, which is not sent over the socket.
+/// The socket method, params and wait for an action.
 pub fn socket_call(op: &Op) -> Option<(&'static str, Value, Duration)> {
     let t = REQUEST_TIMEOUT;
     Some(match op {
@@ -150,7 +149,11 @@ pub fn socket_call(op: &Op) -> Option<(&'static str, Value, Duration)> {
             json!({"pane_id": k.pane_id, "keys": k.keys}),
             t,
         ),
-        Op::PaneText(_) => return None,
+        Op::PaneText(x) => (
+            "pane.send_text",
+            json!({"pane_id": x.pane_id, "text": x.text}),
+            t,
+        ),
     })
 }
 
