@@ -66,7 +66,7 @@ pub fn run(ctx: &Ctx, cmd: HerdrCmd) -> Result<Reply, CliError> {
         } => {
             check_session(poll.session.as_deref())?;
             if lines == 0 || lines > MAX_LINES {
-                return Err(invalid("--lines must be 1-400"));
+                return Err(invalid("--lines must be 1-2000"));
             }
             let mut nav = navigator(ctx, poll.session.as_deref());
             let got = read_screen(&mut nav, &clock, &poll_of(&poll), &pane, lines)?;

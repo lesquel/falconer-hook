@@ -18,7 +18,7 @@ pub const MAX_WAIT_MS: u64 = 20_000;
 pub const POLL_MS: u64 = 250;
 /// `herdr read --lines` default and maximum.
 pub const DEFAULT_LINES: u32 = 200;
-pub const MAX_LINES: u32 = 400;
+pub const MAX_LINES: u32 = 2000;
 /// Workspace and tab labels, in characters.
 pub const MAX_LABEL_CHARS: usize = 64;
 /// `pane.text` text, in characters (before sanitization).

@@ -109,6 +109,29 @@ fn snapshot_then_unchanged_with_the_same_rev() {
 }
 
 #[test]
+fn read_accepts_up_to_2000_lines_of_history() {
+    let e = Env::new();
+    let h = FakeHerdr::start(&e, Some("work"));
+    let (code, v) = e.json(
+        &[
+            "herdr",
+            "read",
+            "--pane",
+            "w1:p1",
+            "--session",
+            "work",
+            "--lines",
+            "2000",
+            "--json",
+        ],
+        None,
+        &[],
+    );
+    ok_data(code, &v);
+    assert_eq!(h.last()["params"]["lines"], 2000);
+}
+
+#[test]
 fn read_returns_the_pane_screen() {
     let e = Env::new();
     let h = FakeHerdr::start(&e, Some("work"));
@@ -142,7 +165,7 @@ fn read_returns_the_pane_screen() {
             vec!["--pane", "w1:p1; rm", "--session", "work"],
             "bad pane id",
         ),
-        (vec!["--pane", "w1:p1", "--lines", "401"], "too many lines"),
+        (vec!["--pane", "w1:p1", "--lines", "2001"], "too many lines"),
         (vec!["--pane", "w1:p1", "--lines", "0"], "zero lines"),
         (vec!["--pane", "w1:p1", "--session", "../x"], "bad session"),
     ] {

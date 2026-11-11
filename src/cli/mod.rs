@@ -221,7 +221,7 @@ pub enum HerdrCmd {
         /// Pane id, e.g. `w1:p2`.
         #[arg(long, allow_hyphen_values = true)]
         pane: String,
-        /// Last lines to return (1..=400).
+        /// Last lines to return (1..=2000).
         #[arg(long, default_value_t = crate::features::navigator::domain::DEFAULT_LINES)]
         lines: u32,
         #[command(flatten)]
