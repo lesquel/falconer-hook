@@ -21,7 +21,7 @@ fn version_envelope() {
     let (code, v) = e.json(&["version", "--json"], None, &[]);
     let d = ok_data(code, &v);
     assert_eq!(d["version"], env!("CARGO_PKG_VERSION"));
-    assert_eq!(d["protocol"], json!({"pair": 1, "push": 1}));
+    assert_eq!(d["protocol"], json!({"pair": 1, "push": 1, "herdr": 1}));
     let raw = String::from_utf8(e.run(&["version", "--json"], None, &[]).stdout).unwrap();
     assert!(
         raw.starts_with(r#"{"ok":true,"data":"#),
