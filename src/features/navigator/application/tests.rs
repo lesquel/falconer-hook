@@ -27,6 +27,13 @@ struct FakeApi {
     snaps: Vec<NavSnapshot>,
     reads: usize,
     text: String,
+    /// Texts served by successive `read_pane` calls (the last repeats);
+    /// `text` when empty.
+    texts: Vec<String>,
+    text_reads: usize,
+    /// Markers served in order (the last repeats); none → unavailable.
+    markers: Vec<String>,
+    marker_calls: usize,
     calls: Vec<String>,
 }
 
@@ -39,7 +46,14 @@ impl NavigatorApi for FakeApi {
     }
     fn read_pane(&mut self, pane_id: &str, lines: u32) -> Result<String, NavError> {
         self.calls.push(format!("read {pane_id} {lines}"));
-        Ok(self.text.clone())
+        let i = self.text_reads.min(self.texts.len().saturating_sub(1));
+        self.text_reads += 1;
+        Ok(self.texts.get(i).unwrap_or(&self.text).clone())
+    }
+    fn pane_marker(&mut self, _pane_id: &str) -> Result<String, NavError> {
+        let i = self.marker_calls.min(self.markers.len().saturating_sub(1));
+        self.marker_calls += 1;
+        self.markers.get(i).cloned().ok_or(NavError::Unavailable)
     }
     fn apply(&mut self, op: &Op) -> Result<Option<String>, NavError> {
         self.calls.push(format!("apply {op:?}"));
@@ -172,6 +186,94 @@ fn read_returns_clean_lines_with_the_pane_agent() {
     };
     let again = read_screen(&mut a, &clock, &since, "w1:p1", 2).unwrap();
     assert!(again.unchanged && again.body.is_none());
+}
+
+fn screen(text: &str) -> PaneScreen {
+    PaneScreen {
+        agent: Some("claude".into()),
+        agent_status: AgentStatus::Idle,
+        lines: screen_lines(text, 2000),
+    }
+}
+
+fn read_poll(text: &str, wait_ms: u64) -> Poll {
+    Poll {
+        since: Some(rev_of(&screen(text))),
+        wait_ms,
+    }
+}
+
+#[test]
+fn an_unchanged_pane_marker_skips_the_full_read_while_waiting() {
+    let mut a = api(vec![snap(AgentStatus::Idle)]);
+    a.text = "hello".into();
+    a.markers = vec!["m1".into()];
+    let clock = FakeClock::default();
+    let got = read_screen(&mut a, &clock, &read_poll("hello", 1000), "w1:p1", 2000).unwrap();
+    assert!(got.unchanged && got.body.is_none());
+    assert_eq!(got.rev, rev_of(&screen("hello")));
+    assert_eq!(
+        a.calls,
+        vec!["snapshot", "read w1:p1 2000"],
+        "one full read"
+    );
+    assert_eq!(a.marker_calls, 5, "one cheap check per tick");
+    assert_eq!(*clock.sleeps.borrow(), vec![250, 250, 250, 250]);
+}
+
+#[test]
+fn a_changed_pane_marker_reads_once_and_returns_early() {
+    let mut a = api(vec![snap(AgentStatus::Idle)]);
+    a.texts = vec!["old".into(), "new".into()];
+    a.markers = vec!["m1".into(), "m1".into(), "m2".into()];
+    let clock = FakeClock::default();
+    let got = read_screen(&mut a, &clock, &read_poll("old", 20_000), "w1:p1", 2000).unwrap();
+    assert!(!got.unchanged);
+    assert_eq!(got.body, Some(screen("new")));
+    assert_eq!(got.rev, rev_of(&screen("new")));
+    assert_eq!(
+        a.text_reads, 2,
+        "the first read and the one after the change"
+    );
+    assert_eq!(*clock.sleeps.borrow(), vec![250, 250]);
+}
+
+#[test]
+fn a_changed_marker_with_the_same_screen_keeps_waiting() {
+    let mut a = api(vec![snap(AgentStatus::Idle)]);
+    a.text = "same".into();
+    a.markers = vec!["m1".into(), "m2".into(), "m3".into()];
+    let clock = FakeClock::default();
+    let got = read_screen(&mut a, &clock, &read_poll("same", 500), "w1:p1", 2000).unwrap();
+    assert!(got.unchanged);
+    assert_eq!(a.text_reads, 3);
+}
+
+#[test]
+fn without_a_marker_the_pane_is_read_every_tick() {
+    // An older Herdr without `pane.get`: today's behavior.
+    let mut a = api(vec![snap(AgentStatus::Idle)]);
+    a.text = "hello".into();
+    let clock = FakeClock::default();
+    let got = read_screen(&mut a, &clock, &read_poll("hello", 500), "w1:p1", 2000).unwrap();
+    assert!(got.unchanged);
+    assert_eq!(a.text_reads, 3);
+}
+
+#[test]
+fn a_pane_closed_while_waiting_is_reported() {
+    let mut a = api(vec![snap(AgentStatus::Idle), NavSnapshot::default()]);
+    a.text = "hello".into();
+    a.markers = vec!["m1".into(), "gone".into()];
+    let err = read_screen(
+        &mut a,
+        &FakeClock::default(),
+        &read_poll("hello", 1000),
+        "w1:p1",
+        2000,
+    )
+    .unwrap_err();
+    assert_eq!(err, NavError::Invalid("pane not found".into()));
 }
 
 #[test]

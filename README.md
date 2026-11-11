@@ -298,7 +298,9 @@ when the owner of `$HOME` owns it) inside the phone's paired SSH session.
 - **Real time without a daemon.** Each answer carries `rev`, the first 16 hex digits of the SHA-256
   of the returned fields. The phone calls again with `--since <rev> --wait-ms 20000`; the hook
   re-reads Herdr every 250 ms and answers as soon as `rev` changes, or `{"rev","unchanged":true}`
-  at the deadline. Nothing runs while no phone is asking.
+  at the deadline. Nothing runs while no phone is asking. While waiting, `herdr read` only checks
+  a cheap marker each tick (`pane.get` plus the pane's last screenful) and re-reads the full
+  history only when that marker changes.
 - **Actions** (`{"op":…}` on stdin): `workspace.create {label?}`, `workspace.rename {id,label}`,
   `workspace.close {id}`, `workspace.focus {id}`, `tab.create {workspace_id,label?}`,
   `tab.rename {id,label}`, `tab.close {id}`, `tab.focus {id}`, `pane.focus {id}`,

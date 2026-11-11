@@ -19,28 +19,40 @@ pub struct Poll {
 }
 
 /// Fetches until the revision differs from `since` or the wait (capped at
-/// [`MAX_WAIT_MS`]) is over, re-reading every [`POLL_MS`]. Without `since`
-/// the first read is returned.
-pub fn long_poll<T: Serialize, C: MonoClock>(
+/// [`MAX_WAIT_MS`]) is over, checking every [`POLL_MS`]. Without `since`
+/// the first fetch is returned. `fetch` answers `None` when it knows nothing
+/// changed since its last body (it must return a body the first time); a
+/// body equal to the previous one reuses its revision instead of hashing.
+pub fn long_poll<T: Serialize + PartialEq, C: MonoClock>(
     clock: &C,
     poll: &Poll,
-    mut fetch: impl FnMut() -> Result<T, NavError>,
+    mut fetch: impl FnMut() -> Result<Option<T>, NavError>,
 ) -> Result<Polled<T>, NavError> {
     let deadline = clock.now_ms() + poll.wait_ms.min(MAX_WAIT_MS);
+    let mut last: Option<(String, T)> = None;
     loop {
-        let body = fetch()?;
-        let rev = rev_of(&body);
-        if poll.since.as_deref() != Some(rev.as_str()) {
-            return Ok(Polled {
-                rev,
-                unchanged: false,
-                body: Some(body),
-            });
+        if let Some(body) = fetch()? {
+            let rev = match &last {
+                Some((rev, prev)) if *prev == body => rev.clone(),
+                _ => rev_of(&body),
+            };
+            if poll.since.as_deref() != Some(rev.as_str()) {
+                return Ok(Polled {
+                    rev,
+                    unchanged: false,
+                    body: Some(body),
+                });
+            }
+            last = Some((rev, body));
         }
+        let rev = match &last {
+            Some((rev, _)) => rev,
+            None => return Err(NavError::Protocol("no_body")),
+        };
         let now = clock.now_ms();
         if now >= deadline {
             return Ok(Polled {
-                rev,
+                rev: rev.clone(),
                 unchanged: true,
                 body: None,
             });
@@ -55,10 +67,12 @@ pub fn snapshot<A: NavigatorApi, C: MonoClock>(
     clock: &C,
     poll: &Poll,
 ) -> Result<Polled<NavSnapshot>, NavError> {
-    long_poll(clock, poll, || api.snapshot())
+    long_poll(clock, poll, || api.snapshot().map(Some))
 }
 
 /// `herdr read`: the pane's last `lines` lines with its agent and status.
+/// While the pane's cheap marker stays the same, the long-poll does not
+/// re-read the history; without a marker (older Herdr) it reads every tick.
 pub fn read_screen<A: NavigatorApi, C: MonoClock>(
     api: &mut A,
     clock: &C,
@@ -66,19 +80,35 @@ pub fn read_screen<A: NavigatorApi, C: MonoClock>(
     pane_id: &str,
     lines: u32,
 ) -> Result<Polled<PaneScreen>, NavError> {
+    let mut seen: Option<String> = None;
     long_poll(clock, poll, || {
-        let snap = api.snapshot()?;
-        check_pane(&snap, pane_id)?;
-        let pane = snap
-            .pane(pane_id)
-            .cloned()
-            .ok_or(NavError::Protocol("pane"))?;
-        let text = api.read_pane(pane_id, lines)?;
-        Ok(PaneScreen {
-            agent: pane.agent,
-            agent_status: pane.agent_status,
-            lines: screen_lines(&text, lines as usize),
-        })
+        // Taken before the read, so a change in between is seen next tick.
+        let marker = api.pane_marker(pane_id).ok();
+        if marker.is_some() && marker == seen {
+            return Ok(None);
+        }
+        let body = fetch_screen(api, pane_id, lines)?;
+        seen = marker;
+        Ok(Some(body))
+    })
+}
+
+fn fetch_screen<A: NavigatorApi>(
+    api: &mut A,
+    pane_id: &str,
+    lines: u32,
+) -> Result<PaneScreen, NavError> {
+    let snap = api.snapshot()?;
+    check_pane(&snap, pane_id)?;
+    let pane = snap
+        .pane(pane_id)
+        .cloned()
+        .ok_or(NavError::Protocol("pane"))?;
+    let text = api.read_pane(pane_id, lines)?;
+    Ok(PaneScreen {
+        agent: pane.agent,
+        agent_status: pane.agent_status,
+        lines: screen_lines(&text, lines as usize),
     })
 }
 

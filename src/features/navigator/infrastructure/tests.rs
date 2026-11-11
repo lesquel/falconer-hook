@@ -203,3 +203,31 @@ fn a_socket_of_another_user_is_not_used() {
     let mut nav = SocketNavigator::new(path, Some(me.wrapping_add(1)));
     assert_eq!(nav.snapshot(), Err(NavError::Unavailable));
 }
+
+#[test]
+fn the_pane_marker_is_pane_get_plus_the_last_viewport() {
+    let pane = |history: u64| {
+        json!({"result":{"type":"pane_info","pane":{"pane_id":"w1:p1","agent":"claude",
+            "agent_status":"working","revision":1,
+            "scroll":{"offset_from_bottom":9,"max_offset_from_bottom":history,"viewport_rows":3}}}})
+    };
+    let replies = std::sync::Mutex::new(vec![
+        pane(10),
+        json!({"result":{"type":"pane_read","read":{"text":"a\nb\nc\n"}}}),
+        pane(11),
+        json!({"result":{"type":"pane_read","read":{"text":"a\nb\nc\n"}}}),
+    ]);
+    let (_d, path, rx, h) = serve(4, move |_| replies.lock().unwrap().remove(0));
+    let mut nav = SocketNavigator::new(path, None);
+    let first = nav.pane_marker("w1:p1").unwrap();
+    assert_eq!(rx.recv().unwrap()["params"], json!({"pane_id":"w1:p1"}));
+    assert_eq!(
+        rx.recv().unwrap()["params"],
+        json!({"pane_id":"w1:p1","source":"recent","lines":3,"format":"text","strip_ansi":true}),
+        "only the viewport, from the bottom whatever the user's scroll"
+    );
+    let second = nav.pane_marker("w1:p1").unwrap();
+    assert_ne!(first, second, "a grown scrollback is a change");
+    h.join().unwrap();
+    assert_eq!(nav.pane_marker("w1:p1"), Err(NavError::Unavailable));
+}

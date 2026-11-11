@@ -435,6 +435,9 @@ pub trait NavigatorApi {
     fn snapshot(&mut self) -> Result<NavSnapshot, NavError>;
     /// The pane's recent text (escape sequences may remain).
     fn read_pane(&mut self, pane_id: &str, lines: u32) -> Result<String, NavError>;
+    /// A cheap change marker for the pane: equal markers mean the pane's
+    /// recent text, agent and status have not changed in between.
+    fn pane_marker(&mut self, pane_id: &str) -> Result<String, NavError>;
     /// Runs a validated socket action; returns the id of what it created.
     /// `pane.text` is not a socket action (it goes through the CLI send path).
     fn apply(&mut self, op: &Op) -> Result<Option<String>, NavError>;

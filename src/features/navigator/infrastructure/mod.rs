@@ -16,7 +16,7 @@ use crate::features::agents::domain::AgentStatus;
 use crate::features::mirror::domain::{valid_target_id, MirrorError};
 use crate::features::mirror::infrastructure::request_once;
 use crate::features::navigator::domain::{
-    NavError, NavPane, NavSnapshot, NavTab, NavWorkspace, NavigatorApi, Op,
+    NavError, NavPane, NavSnapshot, NavTab, NavWorkspace, NavigatorApi, Op, MAX_LINES,
 };
 use crate::shared::domain::text::clip;
 
@@ -217,6 +217,28 @@ impl NavigatorApi for SocketNavigator {
             .and_then(Value::as_str)
             .map(str::to_string)
             .ok_or(NavError::Protocol("no_text"))
+    }
+
+    /// `pane.get` (agent, status, scrollback length, viewport rows) plus the
+    /// last viewport of `recent` text: about 0.6 ms of Herdr CPU against
+    /// ~9 ms for a 2000-line `pane.read` (herdr 0.9.0). The pane's own
+    /// `revision` does not follow output in 0.9.0, so it is not used. A
+    /// TUI redraw changes the viewport, scrolling grows the scrollback, and
+    /// `recent` ignores where the user scrolled to.
+    fn pane_marker(&mut self, pane_id: &str) -> Result<String, NavError> {
+        let r = self.call("pane.get", json!({"pane_id": pane_id}), REQUEST_TIMEOUT)?;
+        let pane = r.get("pane").ok_or(NavError::Protocol("no_pane"))?;
+        let scroll = pane.get("scroll").unwrap_or(&Value::Null);
+        let rows = num(scroll, "viewport_rows").clamp(1, u64::from(MAX_LINES));
+        let tail = self.read_pane(pane_id, rows as u32)?;
+        Ok(json!([
+            s(pane, "agent"),
+            s(pane, "agent_status"),
+            num(scroll, "max_offset_from_bottom"),
+            rows,
+            tail
+        ])
+        .to_string())
     }
 
     fn apply(&mut self, op: &Op) -> Result<Option<String>, NavError> {
