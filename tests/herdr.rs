@@ -185,14 +185,7 @@ fn actions_run_only_from_the_allowlist() {
     ok_data(code, &v);
     assert_eq!(
         e.calls(),
-        vec![vec![
-            "herdr",
-            "pane",
-            "send-text",
-            "--",
-            "w1:p1",
-            "-y $(id)"
-        ]]
+        vec![vec!["herdr", "pane", "send-text", "w1:p1", "-y $(id)"]]
     );
     assert_eq!(
         h.last()["params"],

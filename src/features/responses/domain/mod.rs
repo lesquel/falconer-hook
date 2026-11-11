@@ -9,7 +9,7 @@ use crate::shared::domain::error::ErrorCode;
 use crate::shared::domain::text::is_spoofing_char;
 
 /// Maximum `respond --text` length in bytes, after sanitization.
-pub const MAX_TEXT_BYTES: usize = 4096;
+pub const MAX_TEXT_BYTES: usize = 16384;
 
 /// Key names a keymap may use (mapped per runtime by the adapters).
 pub const KNOWN_KEYS: &[&str] = &[
@@ -87,7 +87,7 @@ pub enum ResponseError {
     TextArgument,
     #[error("text is empty after removing control characters")]
     EmptyText,
-    #[error("text exceeds 4096 bytes")]
+    #[error("text exceeds 16384 bytes")]
     TextTooLong,
     #[error("event has no pane to answer, or the pane is gone")]
     NoPane,
@@ -318,13 +318,25 @@ mod tests {
     fn enforces_limits() {
         assert_eq!(sanitize_text("\u{1b}\u{7}"), Err(ResponseError::EmptyText));
         assert_eq!(sanitize_text(" \n "), Err(ResponseError::EmptyText));
-        assert!(sanitize_text(&"a".repeat(4096)).is_ok());
+        assert!(sanitize_text(&"a".repeat(MAX_TEXT_BYTES)).is_ok());
         assert_eq!(
-            sanitize_text(&"a".repeat(4097)),
+            sanitize_text(&"a".repeat(MAX_TEXT_BYTES + 1)),
             Err(ResponseError::TextTooLong)
         );
         // Control characters do not count toward the limit.
-        assert!(sanitize_text(&format!("{}{}", "a".repeat(4096), "\u{1b}".repeat(10))).is_ok());
+        assert!(sanitize_text(&format!(
+            "{}{}",
+            "a".repeat(MAX_TEXT_BYTES),
+            "\u{1b}".repeat(10)
+        ))
+        .is_ok());
+    }
+
+    #[test]
+    fn accepts_4000_multibyte_characters() {
+        // The navigator allows 4000 characters; accented text is 2 bytes each.
+        assert!(sanitize_text(&"é".repeat(4000)).is_ok());
+        assert!(sanitize_text(&"🙂".repeat(4000)).is_ok());
     }
 
     #[test]

@@ -146,13 +146,10 @@ impl AgentRuntime for HerdrRuntime<'_> {
         if !valid_pane_id(id) {
             return Err(AgentError::Failed("herdr"));
         }
-        // `--` only when the text could be mistaken for an option.
-        if text.starts_with('-') {
-            self.on(pane, &["pane", "send-text", "--", id, text])
-                .map(|_| ())
-        } else {
-            self.on(pane, &["pane", "send-text", id, text]).map(|_| ())
-        }
+        // No `--` guard: herdr 0.9 sends everything after the pane id as
+        // literal text (`-n`, `--help` included), and a `--` would be typed
+        // into the pane as part of the message.
+        self.on(pane, &["pane", "send-text", id, text]).map(|_| ())
     }
 
     fn probe(&self, pane: &PaneRef) -> Result<PaneProbe, AgentError> {
@@ -271,7 +268,7 @@ mod tests {
                     "w7:pA",
                     "use $(rm -rf ~); `x`\nok"
                 ],
-                vec!["herdr", "pane", "send-text", "--", "w7:pA", "-rf please"],
+                vec!["herdr", "pane", "send-text", "w7:pA", "-rf please"],
                 vec![
                     "herdr",
                     "--session",

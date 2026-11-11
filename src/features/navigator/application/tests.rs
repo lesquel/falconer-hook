@@ -253,7 +253,6 @@ fn text_uses_the_cli_send_path_then_enter() {
             "work",
             "pane",
             "send-text",
-            "--",
             "w1:p1",
             "-rf [2Jnow ok"
         ]]

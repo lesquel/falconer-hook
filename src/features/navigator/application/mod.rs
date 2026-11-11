@@ -93,7 +93,7 @@ pub struct ActionDone {
 }
 
 /// Validates `op` against a fresh snapshot, then runs it. Text goes through
-/// the hook's existing send-text path (one argv entry, `--` guard, control
+/// the hook's existing send-text path (one argv entry, control
 /// characters removed), then Enter when `submit` is set.
 pub fn execute<A: NavigatorApi>(
     api: &mut A,
