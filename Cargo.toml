@@ -20,7 +20,7 @@ chacha20poly1305 = "0.10"
 clap = { version = "4", features = ["derive"] }
 ctrlc = { version = "3", features = ["termination"] }
 hkdf = "0.12"
-p256 = { version = "0.13", features = ["ecdh", "ecdsa"] }
+p256 = { version = "0.14", features = ["ecdh", "ecdsa", "getrandom"] }
 qrcode = { version = "0.14", default-features = false }
 rand_core = { version = "0.6", features = ["getrandom"] }
 ratatui = { version = "0.30", default-features = false, features = ["crossterm"] }

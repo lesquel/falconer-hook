@@ -27,12 +27,12 @@ fn seeded_scalar(label: &str) -> String {
 fn webpush_input(endpoint: &str) -> String {
     use base64::engine::general_purpose::URL_SAFE_NO_PAD as B64U;
     use base64::Engine;
-    use p256::elliptic_curve::sec1::ToEncodedPoint;
+    use p256::elliptic_curve::sec1::ToSec1Point;
     use p256::SecretKey;
     let public = |label: &str| {
         let scalar = B64U.decode(seeded_scalar(label)).unwrap();
         let sk = SecretKey::from_slice(&scalar).unwrap();
-        B64U.encode(sk.public_key().to_encoded_point(false).as_bytes())
+        B64U.encode(sk.public_key().to_sec1_point(false).as_bytes())
     };
     json!({
         "v": 1,

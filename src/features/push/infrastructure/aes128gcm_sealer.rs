@@ -12,8 +12,8 @@
 use aes_gcm::aead::{Aead, KeyInit};
 use aes_gcm::{Aes128Gcm, Nonce};
 use hkdf::Hkdf;
-use p256::elliptic_curve::sec1::ToEncodedPoint;
-use p256::{ecdh::diffie_hellman, PublicKey, SecretKey};
+use p256::elliptic_curve::sec1::ToSec1Point;
+use p256::{ecdh::diffie_hellman, elliptic_curve::Generate, PublicKey, SecretKey};
 use sha2::Sha256;
 use zeroize::Zeroizing;
 
@@ -50,7 +50,7 @@ pub fn encrypt_with(
     pad_to: usize,
 ) -> Result<Vec<u8>, PushError> {
     let ua = PublicKey::from_sec1_bytes(ua_public).map_err(|_| PushError::BadKey)?;
-    let as_public = as_secret.public_key().to_encoded_point(false);
+    let as_public = as_secret.public_key().to_sec1_point(false);
     let as_public = as_public.as_bytes();
     let shared = diffie_hellman(as_secret.to_nonzero_scalar(), ua.as_affine());
 
@@ -93,7 +93,7 @@ pub fn encrypt_with(
 /// Encrypts `plaintext` for a subscription with a fresh sender key and salt,
 /// padded to the bucket sizes of [`padded_len`].
 pub fn seal(ua_public: &[u8; 65], auth: &[u8; 16], plaintext: &[u8]) -> Result<Vec<u8>, PushError> {
-    let as_secret = SecretKey::random(&mut rand_core::OsRng);
+    let as_secret = SecretKey::generate();
     let salt = random_bytes::<16>();
     encrypt_with(
         ua_public,
@@ -120,7 +120,7 @@ mod tests {
         assert_eq!(u32::from_be_bytes(body[16..20].try_into().unwrap()), 4096);
         assert_eq!(body[20], 65);
         let as_public = &body[21..HEADER_LEN];
-        let ua_public = ua_secret.public_key().to_encoded_point(false);
+        let ua_public = ua_secret.public_key().to_sec1_point(false);
         let as_pub = PublicKey::from_sec1_bytes(as_public).unwrap();
         let shared = diffie_hellman(ua_secret.to_nonzero_scalar(), as_pub.as_affine());
         let mut info = b"WebPush: info\0".to_vec();
@@ -182,10 +182,10 @@ mod tests {
 
     #[test]
     fn round_trips_and_pads_to_fixed_buckets() {
-        let ua = SecretKey::random(&mut rand_core::OsRng);
+        let ua = SecretKey::generate();
         let ua_public: [u8; 65] = ua
             .public_key()
-            .to_encoded_point(false)
+            .to_sec1_point(false)
             .as_bytes()
             .try_into()
             .unwrap();
@@ -212,7 +212,7 @@ mod tests {
 
     #[test]
     fn a_bad_subscription_key_is_refused() {
-        let sk = SecretKey::random(&mut rand_core::OsRng);
+        let sk = SecretKey::generate();
         assert_eq!(
             encrypt_with(&[4u8; 65], &[0; 16], b"x", &sk, &[0; 16], 256),
             Err(PushError::BadKey)

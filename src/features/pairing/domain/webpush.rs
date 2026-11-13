@@ -2,7 +2,7 @@
 //! of what the app forwards for it. The VAPID private key is a secret: it is
 //! never printed, logged or part of any view.
 
-use p256::elliptic_curve::sec1::ToEncodedPoint;
+use p256::elliptic_curve::sec1::ToSec1Point;
 use p256::{PublicKey, SecretKey};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -107,7 +107,7 @@ impl WebPushInput {
         let vapid_pub = valid_point(&self.vapid_pub).ok_or(WebPushError::VapidPub)?;
         let scalar = b64u_decode_array::<32>(&self.vapid_priv).ok_or(WebPushError::VapidPriv)?;
         let secret = SecretKey::from_slice(&*scalar).map_err(|_| WebPushError::VapidPriv)?;
-        if secret.public_key().to_encoded_point(false).as_bytes() != vapid_pub {
+        if secret.public_key().to_sec1_point(false).as_bytes() != vapid_pub {
             return Err(WebPushError::VapidPriv);
         }
         let sub_ok = (self.sub.starts_with("https://") || self.sub.starts_with("mailto:"))
@@ -137,7 +137,7 @@ pub mod fixtures {
     pub fn input(sub: &str) -> serde_json::Value {
         let point = |seed: u8| {
             let sk = SecretKey::from_slice(&[seed; 32]).unwrap();
-            b64u_encode(sk.public_key().to_encoded_point(false).as_bytes())
+            b64u_encode(sk.public_key().to_sec1_point(false).as_bytes())
         };
         serde_json::json!({
             "v": 1,
