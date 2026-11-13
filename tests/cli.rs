@@ -445,7 +445,13 @@ fn service_dry_run_writes_nothing() {
     let (code, v) = e.json(&["service", "install", "--dry-run", "--json"], None, &[]);
     let d = ok_data(code, &v);
     assert_eq!(d["dry_run"], true);
-    assert!(d["contents"].as_str().unwrap().contains("serve\n"));
+    // The unit format follows the host: a launchd plist on macOS, a systemd unit elsewhere.
+    let expected = if cfg!(target_os = "macos") {
+        "<string>serve</string>"
+    } else {
+        "serve\n"
+    };
+    assert!(d["contents"].as_str().unwrap().contains(expected));
     assert!(!e.root.join("config/systemd").exists());
     assert!(e.calls().is_empty(), "no command ran");
 }
@@ -740,16 +746,20 @@ fn qr_pairing_end_to_end_over_tailnet() {
 }
 
 /// Fake Herdr socket: acks the focus subscription, pushes one `tab_focused`
-/// event, answers `session.snapshot`, and records every other request.
+/// event, answers `session.snapshot` with the tab last focused (as a real
+/// server would, so the mirror's snapshot poll sees no drift), and records
+/// every other request.
 fn fake_herdr_socket(path: &Path, release: PathBuf) -> std::sync::mpsc::Receiver<Value> {
     use std::io::{BufRead, BufReader};
     use std::os::unix::net::UnixListener;
     let listener = UnixListener::bind(path).unwrap();
     let (tx, rx) = std::sync::mpsc::channel();
+    let focused_tab = std::sync::Arc::new(std::sync::Mutex::new("w1:t1".to_string()));
     std::thread::spawn(move || {
         for conn in listener.incoming() {
             let Ok(conn) = conn else { break };
             let tx = tx.clone();
+            let focused_tab = focused_tab.clone();
             let release = release.clone();
             std::thread::spawn(move || {
                 let mut w = conn.try_clone().unwrap();
@@ -763,7 +773,10 @@ fn fake_herdr_socket(path: &Path, release: PathBuf) -> std::sync::mpsc::Receiver
                         }
                         Some("session.snapshot") => json!({"id": id, "result": {
                             "type": "session_snapshot",
-                            "snapshot": {"focused_workspace_id": "w1", "focused_tab_id": "w1:t1"}
+                            "snapshot": {
+                                "focused_workspace_id": "w1",
+                                "focused_tab_id": focused_tab.lock().unwrap().clone()
+                            }
                         }}),
                         _ => json!({"id": id, "result": {"type": "ok"}}),
                     };
@@ -777,6 +790,9 @@ fn fake_herdr_socket(path: &Path, release: PathBuf) -> std::sync::mpsc::Receiver
                         }
                         Some("session.snapshot") => {}
                         _ => {
+                            if let Some(tab) = req["params"]["tab_id"].as_str() {
+                                *focused_tab.lock().unwrap() = tab.to_string();
+                            }
                             let _ = tx.send(req);
                             fs::write(&release, "").unwrap();
                         }
