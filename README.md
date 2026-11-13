@@ -20,8 +20,7 @@ checks in `respond`, revoke that ends the phone's live sessions, [`usage`](#usag
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/lesquel/openmosh-hook/main/install.sh | sh
-openmosh-hook setup        # config, service, agent hooks, doctor
-openmosh-hook pair         # scan the QR code with OpenMosh
+openmosh-hook setup        # config, service, agent hooks, missing tmux/SSH, doctor, pairing
 ```
 
 The installer downloads the release binary for your platform (`openmosh-hook-<target>.tar.gz`
@@ -77,7 +76,26 @@ Check that the trusted comment minisign prints is `openmosh-hook <the tag you do
 `openmosh-hook setup [--yes] [--no-service] [--json]` writes the default config if there is
 none, installs the user service, offers the integration of every [detected agent](#agents)
 (asks on a terminal; `--yes` installs them all; with `--json` and no `--yes` it only lists
-them), runs `doctor` and prints the next step (`openmosh-hook pair`). Running it again is safe.
+them), fixes what is missing, runs `doctor` and offers to pair. Running it again is safe.
+
+What `setup` fixes, each time showing the exact command first:
+
+- **No agent runtime** (neither Herdr nor tmux): with Homebrew it offers
+  `Install Herdr with brew install herdr? [y/N]` first (Herdr unlocks View as agents in the
+  app), then tmux if you decline. Elsewhere it offers tmux through `apt-get`/`dnf`/`pacman`/
+  `zypper`/`apk` with `sudo`, and only mentions [herdr.dev](https://herdr.dev): none of those
+  managers ships Herdr (Arch has it only in the AUR), and `setup` never runs a `curl | sh`.
+  Without any package manager it prints how to get Homebrew. With tmux but no Herdr,
+  an interactive `setup` offers Herdr once; `doctor` shows `brew install herdr`.
+- **Nothing listening on the SSH port**: `doctor` now fails with the fix, and `setup` offers to
+  run it (macOS `sudo systemsetup -setremotelogin on`, Linux `sudo systemctl enable --now ssh`
+  or `sshd`).
+- **No phone paired** and every check passed: asks `Pair a phone now? [Y/n]` and runs
+  `openmosh-hook pair`.
+
+`--yes` runs the install and SSH commands without asking but never starts pairing (a person
+has to scan the QR code). Without a terminal, or with `--json`, nothing is run: the commands
+are printed (JSON: `prerequisites.agent_runtime` with the `runtime` installed, `prerequisites.ssh` and `pairing`).
 
 `openmosh-hook uninstall [--all] [--dry-run] [--yes] [--json]` removes everything
 openmosh-hook created, and nothing else:

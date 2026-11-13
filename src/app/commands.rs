@@ -317,7 +317,10 @@ pub fn doctor(ctx: &Ctx) -> Result<Reply, CliError> {
     checks.push(check_tailscale(&tailscale));
     checks.push(check_tailscale_ssh(&tailscale, cfg.ssh_port));
     let rts = Runtimes::new(ctx, &cfg);
-    checks.extend(check_runtimes(&rts.enabled()));
+    checks.extend(check_runtimes(
+        &rts.enabled(),
+        super::prereqs::herdr_install_hint(ctx).as_deref(),
+    ));
     let p = &ctx.paths;
     let files = [
         p.config_file(),
@@ -330,6 +333,7 @@ pub fn doctor(ctx: &Ctx) -> Result<Reply, CliError> {
         &files.iter().map(|f| f.as_path()).collect::<Vec<_>>(),
     ));
     checks.push(check_ssh(&cfg.ssh_host_key_pub));
+    checks.push(super::prereqs::ssh_listening_check(ctx, cfg.ssh_port));
     let effective = sshd_password_logins(&ctx.runner, "sshd", ctx.user.as_deref());
     checks.push(check_sshd_auth(effective.as_deref()));
     checks.push(check_authorized_keys(

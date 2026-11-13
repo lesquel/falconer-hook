@@ -3,6 +3,8 @@
 //! `openmosh:`, its `openmosh` config/state directories and, with `--all`,
 //! the `openmosh-hook` binary.
 
+pub mod prereqs;
+
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 

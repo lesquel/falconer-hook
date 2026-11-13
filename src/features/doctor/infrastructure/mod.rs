@@ -52,6 +52,30 @@ pub fn check_ssh(host_key_pub: &Path) -> Check {
     }
 }
 
+/// True when something accepts TCP connections on `port` of this machine.
+pub fn port_listening(port: u16) -> bool {
+    use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, TcpStream};
+    use std::time::Duration;
+    [
+        IpAddr::V4(Ipv4Addr::LOCALHOST),
+        IpAddr::V6(Ipv6Addr::LOCALHOST),
+    ]
+    .into_iter()
+    .any(|ip| {
+        TcpStream::connect_timeout(&SocketAddr::new(ip, port), Duration::from_millis(500)).is_ok()
+    })
+}
+
+/// The host key can exist while sshd is off (macOS "Remote Login"), so this
+/// checks that something actually listens. `fix` says how to turn it on.
+pub fn check_ssh_listening(port: u16, listening: bool, fix: &str) -> Check {
+    if listening {
+        Check::ok("ssh_port", format!("listening on port {port}"))
+    } else {
+        Check::fail("ssh_port", format!("nothing listens on port {port}; {fix}"))
+    }
+}
+
 /// Read-only: `sshd -G` effective settings. Password or keyboard-interactive
 /// logins bypass every key restriction OpenMosh adds, so they are a warning.
 pub fn check_sshd_auth(effective: Option<&str>) -> Check {
@@ -253,6 +277,19 @@ mod tests {
         assert!(c.detail.contains("0755"));
         std::fs::set_permissions(&d, std::fs::Permissions::from_mode(0o700)).unwrap();
         assert_eq!(check_permissions(&[&d], &[]).status, Status::Ok);
+    }
+
+    #[test]
+    fn ssh_port_check_reports_the_fix() {
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = l.local_addr().unwrap().port();
+        assert!(port_listening(port));
+        assert_eq!(check_ssh_listening(port, true, "x").status, Status::Ok);
+        drop(l);
+        assert!(!port_listening(port));
+        let c = check_ssh_listening(port, false, "run `fix`");
+        assert_eq!(c.status, Status::Fail);
+        assert!(c.detail.contains("nothing listens") && c.detail.contains("run `fix`"));
     }
 
     #[test]
