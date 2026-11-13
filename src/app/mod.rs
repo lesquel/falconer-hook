@@ -9,6 +9,7 @@ mod integrations;
 mod lifecycle;
 mod navigator;
 mod pair;
+mod prereqs;
 mod serve;
 pub mod tui;
 mod usage;

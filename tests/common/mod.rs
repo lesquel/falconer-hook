@@ -40,6 +40,8 @@ exit 0
 
 pub struct Env {
     _dir: tempfile::TempDir,
+    /// Stands in for sshd: keeps the configured `ssh_port` open.
+    _sshd: std::net::TcpListener,
     pub root: PathBuf,
     /// `PATH` given to the binary.
     pub path: String,
@@ -51,7 +53,17 @@ impl Env {
         let root = dir.path().to_path_buf();
         let bin = root.join("bin");
         fs::create_dir_all(&bin).unwrap();
-        for name in ["herdr", "tmux", "tailscale", "systemctl", "launchctl"] {
+        for name in [
+            "herdr",
+            "tmux",
+            "tailscale",
+            "systemctl",
+            "launchctl",
+            "brew",
+            "apt-get",
+            "sudo",
+            "systemsetup",
+        ] {
             let p = bin.join(name);
             fs::write(&p, FAKE).unwrap();
             fs::set_permissions(&p, fs::Permissions::from_mode(0o755)).unwrap();
@@ -71,8 +83,10 @@ impl Env {
         fs::create_dir_all(&cfg_dir).unwrap();
         fs::set_permissions(&cfg_dir, fs::Permissions::from_mode(0o700)).unwrap();
         let b = |n: &str| bin.join(n).display().to_string();
+        let sshd = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let ssh_port = sshd.local_addr().unwrap().port();
         let cfg = format!(
-            "host_alias = \"devbox\"\nssh_host_key_pub = \"{}\"\n[bins]\nherdr = \"{}\"\ntmux = \"{}\"\ntailscale = \"{}\"\nsystemctl = \"{}\"\nlaunchctl = \"{}\"\n",
+            "host_alias = \"devbox\"\nssh_port = {ssh_port}\nssh_host_key_pub = \"{}\"\n[bins]\nherdr = \"{}\"\ntmux = \"{}\"\ntailscale = \"{}\"\nsystemctl = \"{}\"\nlaunchctl = \"{}\"\n",
             root.join("ssh_host_ed25519_key.pub").display(),
             b("herdr"),
             b("tmux"),
@@ -87,6 +101,7 @@ impl Env {
         let path = format!("{}:/usr/bin:/bin", root.join("bin").display());
         Self {
             _dir: dir,
+            _sshd: sshd,
             root,
             path,
         }
@@ -108,6 +123,42 @@ impl Env {
         }
         e.path = format!("{}:{}", e.root.join("bin").display(), tools.display());
         e
+    }
+
+    fn edit_config(&self, f: impl FnOnce(String) -> String) {
+        let file = self.root.join("config/openmosh/config.toml");
+        let text = f(fs::read_to_string(&file).unwrap());
+        fs::write(file, text).unwrap();
+    }
+
+    /// Points `ssh_port` at a port nothing listens on.
+    pub fn close_ssh_port(&self) {
+        let port = {
+            let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            l.local_addr().unwrap().port()
+        };
+        let open = self._sshd.local_addr().unwrap().port();
+        self.edit_config(|t| {
+            t.replace(&format!("ssh_port = {open}"), &format!("ssh_port = {port}"))
+        });
+    }
+
+    /// Makes herdr and tmux "not installed".
+    pub fn remove_runtimes(&self) {
+        let gone = self.root.join("nowhere");
+        self.edit_config(|t| {
+            let mut out = t;
+            for n in ["herdr", "tmux"] {
+                let cur = self.root.join("bin").join(n).display().to_string();
+                out = out.replace(&cur, &gone.join(n).display().to_string());
+            }
+            out
+        });
+    }
+
+    /// Removes a fake program from `PATH`.
+    pub fn remove_tool(&self, name: &str) {
+        fs::remove_file(self.root.join("bin").join(name)).unwrap();
     }
 
     pub fn home(&self) -> PathBuf {

@@ -297,6 +297,7 @@ pub fn doctor(ctx: &Ctx) -> Result<Reply, CliError> {
         &files.iter().map(|f| f.as_path()).collect::<Vec<_>>(),
     ));
     checks.push(check_ssh(&cfg.ssh_host_key_pub));
+    checks.push(super::prereqs::ssh_listening_check(ctx, cfg.ssh_port));
     let effective = sshd_password_logins(&ctx.runner, "sshd", ctx.user.as_deref());
     checks.push(check_sshd_auth(effective.as_deref()));
     checks.push(check_authorized_keys(

@@ -6,10 +6,10 @@ use std::fmt::Write as _;
 use std::io::{BufRead, IsTerminal, Write as _};
 use std::path::Path;
 
-use super::{commands, integrations, Ctx};
+use super::{commands, integrations, pair, prereqs, Ctx};
 use crate::cli::output::{CliError, Reply};
 use crate::features::integration::domain::CATALOG;
-use crate::features::pairing::domain::AuthorizedKeys;
+use crate::features::pairing::domain::{AuthorizedKeys, DeviceRegistry};
 use crate::features::pairing::infrastructure::authorized_keys::FileAuthorizedKeys;
 use crate::features::service::application::ApplyPlan;
 use crate::features::service::domain::{uninstall_plan, Platform};
@@ -31,7 +31,19 @@ fn ask(question: &str) -> bool {
 }
 
 fn interactive(json: bool) -> bool {
-    !json && std::io::stdin().is_terminal()
+    // `OPENMOSH_ASSUME_TTY=1` lets tests drive the prompts through a pipe.
+    !json && (std::io::stdin().is_terminal() || std::env::var_os("OPENMOSH_ASSUME_TTY").is_some())
+}
+
+/// Asks `<question> [Y/n]`; Enter means yes.
+fn ask_default_yes(question: &str) -> bool {
+    eprint!("{question} [Y/n] ");
+    let _ = std::io::stderr().flush();
+    let mut line = String::new();
+    if std::io::stdin().lock().read_line(&mut line).is_err() {
+        return false;
+    }
+    !matches!(line.trim(), "n" | "N" | "no" | "NO")
 }
 
 fn platform_unit(ctx: &Ctx) -> (Platform, std::path::PathBuf) {
@@ -137,19 +149,58 @@ pub fn setup(ctx: &Ctx, yes: bool, no_service: bool, json: bool) -> Result<Reply
         );
     }
 
+    let cfg = ctx.config().unwrap_or_default();
+    let mode = prereqs::Mode {
+        yes,
+        interactive: interactive(json),
+        ask: &ask,
+    };
+    let runtime = prereqs::ensure_runtime(ctx, &cfg, &mode, &mut human);
+    let ssh = prereqs::ensure_ssh(ctx, &cfg, &mode, &mut human);
+
     let doctor = commands::doctor(ctx)?;
     let _ = writeln!(human, "\n{}", doctor.human);
+    let healthy = doctor.data["healthy"] == true;
+    let unpaired = ctx.registry().list().map(|d| d.is_empty()).unwrap_or(false);
+    let next_step = "Next: run `openmosh-hook pair` and scan the QR code with OpenMosh.";
+    let pairing = if !healthy || !unpaired {
+        let _ = write!(human, "\n{next_step}");
+        json!({"action": "skipped", "reason": if healthy { "already_paired" } else { "checks_failed" }})
+    } else if yes || !mode.interactive {
+        // Pairing needs a person to scan the QR code and confirm the phone.
+        let _ = write!(human, "\n{next_step}");
+        json!({"action": "skipped", "reason": "needs_a_person"})
+    } else if ask_default_yes("Pair a phone now?") {
+        // Show everything so far before the QR code takes the screen.
+        println!("{}", human.trim_end());
+        human.clear();
+        match pair::pair(ctx, None, 300, false, false, false) {
+            Ok(r) => {
+                let _ = write!(human, "\n{}", r.human);
+                json!({"action": "paired", "device": r.data})
+            }
+            Err(e) => {
+                let _ = write!(
+                    human,
+                    "\nPairing did not finish: {}\n{next_step}",
+                    e.message
+                );
+                json!({"action": "failed", "error": e.message})
+            }
+        }
+    } else {
+        let _ = write!(human, "\n{next_step}");
+        json!({"action": "declined"})
+    };
     let data = json!({
         "config": {"path": config_file, "created": created},
         "service": service,
         "integrations": agents,
+        "prerequisites": {"agent_runtime": runtime, "ssh": ssh},
         "doctor": doctor.data,
+        "pairing": pairing,
         "next": "openmosh-hook pair",
     });
-    let _ = write!(
-        human,
-        "\nNext: run `openmosh-hook pair` and scan the QR code with OpenMosh."
-    );
     Ok(Reply::new(&data, human))
 }
 
