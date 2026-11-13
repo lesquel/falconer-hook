@@ -7,7 +7,7 @@ use p256::{PublicKey, SecretKey};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::features::push::domain::validate_endpoint;
+use crate::features::push::domain::validate_webpush_endpoint;
 use crate::shared::domain::encoding::b64u_decode_array;
 use crate::shared::domain::error::ErrorCode;
 
@@ -101,7 +101,7 @@ impl WebPushInput {
         if self.v != 1 {
             return Err(WebPushError::Version);
         }
-        validate_endpoint(&self.endpoint).map_err(|_| WebPushError::Endpoint)?;
+        validate_webpush_endpoint(&self.endpoint).map_err(|_| WebPushError::Endpoint)?;
         valid_point(&self.p256dh).ok_or(WebPushError::P256dh)?;
         b64u_decode_array::<16>(&self.auth).ok_or(WebPushError::Auth)?;
         let vapid_pub = valid_point(&self.vapid_pub).ok_or(WebPushError::VapidPub)?;
@@ -186,6 +186,15 @@ mod tests {
             ),
             (
                 with("endpoint", "https://127.0.0.1/x".into()),
+                WebPushError::Endpoint,
+            ),
+            (
+                with("endpoint", "http://web.push.apple.com/x".into()),
+                WebPushError::Endpoint,
+            ),
+            // http is fine for ntfy on a tailnet, never for Web Push.
+            (
+                with("endpoint", "http://100.101.1.2:2586/x".into()),
                 WebPushError::Endpoint,
             ),
             (

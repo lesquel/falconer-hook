@@ -391,6 +391,14 @@ fn pair_ssh_then_devices_lifecycle() {
     assert_ne!(bad, wp);
     let (code, v) = e.json(&["devices", "set-webpush", &id, "--json"], Some(&bad), &[]);
     assert_eq!(err_code(code, &v), "webpush_invalid");
+    let insecure = wp.replace("https://web.push.apple.com", "http://web.push.apple.com");
+    assert_ne!(insecure, wp);
+    let (code, v) = e.json(
+        &["devices", "set-webpush", &id, "--json"],
+        Some(&insecure),
+        &[],
+    );
+    assert_eq!(err_code(code, &v), "webpush_invalid");
     let (code, v) = e.json(&["devices", "clear-webpush", &id, "--json"], None, &[]);
     ok_data(code, &v);
     let (code, v) = e.json(&["devices", "list", "--json"], None, &[]);

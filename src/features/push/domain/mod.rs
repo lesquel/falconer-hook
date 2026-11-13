@@ -3,7 +3,7 @@
 mod endpoint;
 mod webpush;
 
-pub use endpoint::{forbidden_ip, validate_endpoint, EndpointError};
+pub use endpoint::{forbidden_ip, validate_endpoint, validate_webpush_endpoint, EndpointError};
 pub use webpush::{WebPushPayload, WebPushSender, WEBPUSH_PAD_BUCKETS, WEBPUSH_TTL_SECS};
 
 use serde::Serialize;

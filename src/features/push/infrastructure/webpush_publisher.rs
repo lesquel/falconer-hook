@@ -7,7 +7,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::features::pairing::domain::WebPush;
 use crate::features::push::domain::{
-    validate_endpoint, PostOutcome, WebPushPayload, WebPushSender, WEBPUSH_TTL_SECS,
+    validate_webpush_endpoint, PostOutcome, WebPushPayload, WebPushSender, WEBPUSH_TTL_SECS,
 };
 use crate::features::push::infrastructure::aes128gcm_sealer;
 use crate::features::push::infrastructure::ntfy_publisher::{build_client, outcome_for};
@@ -32,7 +32,7 @@ impl WebPushPublisher {
     }
 
     fn deliver(&self, wp: &WebPush, kind: &str, now: u64) -> PostOutcome {
-        if validate_endpoint(&wp.endpoint).is_err() {
+        if validate_webpush_endpoint(&wp.endpoint).is_err() {
             return PostOutcome::Failed("invalid_endpoint");
         }
         self.post_message(wp, kind, now)
@@ -133,6 +133,9 @@ mod tests {
         // Plain http to a non-tailnet host is refused before any connection.
         w.endpoint = "http://example.com/x".into();
         assert_eq!(p.send(&w, "done"), PostOutcome::Failed("invalid_endpoint"));
+        // http is refused even to a tailnet host, which ntfy would accept.
+        w.endpoint = "http://100.101.1.2:2586/x".into();
+        assert_eq!(p.send(&w, "done"), PostOutcome::Failed("invalid_endpoint"));
     }
 
     #[test]
@@ -146,7 +149,7 @@ mod tests {
             ("413 Payload Too Large", PostOutcome::Failed("http_status")),
         ] {
             let (url, _rx) = serve_once(status);
-            // `validate_endpoint` refuses loopback; test the POST half.
+            // `validate_webpush_endpoint` refuses loopback; test the POST half.
             w.endpoint = url;
             assert_eq!(p.post_message(&w, "done", 1_000), want, "{status}");
         }

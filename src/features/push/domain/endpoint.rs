@@ -66,6 +66,17 @@ fn valid_dns_name(name: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '.')
 }
 
+/// A Web Push endpoint: everything [`validate_endpoint`] requires, and always
+/// `https://` (the VAPID token and the subscription would otherwise travel in
+/// clear, even to a tailnet host).
+pub fn validate_webpush_endpoint(raw: &str) -> Result<(), EndpointError> {
+    validate_endpoint(raw)?;
+    if !raw.to_ascii_lowercase().starts_with("https://") {
+        return Err(EndpointError::Scheme);
+    }
+    Ok(())
+}
+
 pub fn validate_endpoint(raw: &str) -> Result<(), EndpointError> {
     // The parser silently drops tabs/newlines and treats `\` as `/`; refuse
     // such input instead of validating something other than what was given.
