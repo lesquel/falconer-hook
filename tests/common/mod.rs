@@ -143,17 +143,22 @@ impl Env {
         });
     }
 
-    /// Makes herdr and tmux "not installed".
-    pub fn remove_runtimes(&self) {
+    /// Makes the named runtimes (`herdr`, `tmux`) "not installed".
+    pub fn remove_runtime(&self, names: &[&str]) {
         let gone = self.root.join("nowhere");
         self.edit_config(|t| {
             let mut out = t;
-            for n in ["herdr", "tmux"] {
+            for n in names {
                 let cur = self.root.join("bin").join(n).display().to_string();
                 out = out.replace(&cur, &gone.join(n).display().to_string());
             }
             out
         });
+    }
+
+    /// Makes herdr and tmux "not installed".
+    pub fn remove_runtimes(&self) {
+        self.remove_runtime(&["herdr", "tmux"]);
     }
 
     /// Removes a fake program from `PATH`.

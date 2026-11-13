@@ -5,6 +5,7 @@
 use serde::Serialize;
 
 pub const TMUX: &str = "tmux";
+pub const HERDR: &str = "herdr";
 pub const HERDR_URL: &str = "https://herdr.dev";
 pub const HOMEBREW_URL: &str = "https://brew.sh";
 
@@ -40,6 +41,14 @@ impl PackageManager {
             Self::Zypper => "zypper",
             Self::Apk => "apk",
         }
+    }
+
+    /// Whether this manager ships Herdr. Checked against Repology: only
+    /// Homebrew has it among the supported managers (Arch has it only in the
+    /// AUR, openSUSE only in Tumbleweed, and Debian, Fedora and Alpine not at
+    /// all), and its installer is a `curl | sh` we never run.
+    pub fn has_herdr(self) -> bool {
+        self == Self::Brew
     }
 
     pub fn needs_root(self) -> bool {
@@ -191,6 +200,17 @@ mod tests {
             assert_eq!(display(&pm.install_argv(TMUX)), want);
             assert_eq!(pm.needs_root(), pm != PackageManager::Brew);
         }
+    }
+
+    #[test]
+    fn only_homebrew_ships_herdr() {
+        for pm in PackageManager::ALL {
+            assert_eq!(pm.has_herdr(), pm == PackageManager::Brew);
+        }
+        assert_eq!(
+            display(&PackageManager::Brew.install_argv(HERDR)),
+            "brew install herdr"
+        );
     }
 
     #[test]

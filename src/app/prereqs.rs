@@ -11,7 +11,7 @@ use crate::features::agents::domain::AgentError;
 use crate::features::doctor::infrastructure::{check_ssh_listening, port_listening};
 use crate::features::setup::domain::prereqs::{
     consent, detect_package_manager, display, enable_ssh_argv, privileged, ssh_fix_hint, Consent,
-    Os, PackageManager, HERDR_URL, HOMEBREW_URL, TMUX,
+    Os, PackageManager, HERDR, HERDR_URL, HOMEBREW_URL, TMUX,
 };
 use crate::shared::config::Config;
 use crate::shared::infrastructure::process::run_inherited;
@@ -48,60 +48,136 @@ fn run(argv: &[String]) -> Result<(), String> {
     }
 }
 
-/// Installs tmux when neither Herdr nor tmux is available.
+/// `brew install herdr` when Homebrew is here, for `doctor`.
+pub fn herdr_install_hint(ctx: &Ctx) -> Option<String> {
+    package_manager(ctx)
+        .filter(|pm| pm.has_herdr())
+        .map(|pm| display(&pm.install_argv(HERDR)))
+}
+
+/// Offers one package. `reason` explains an optional install.
+fn offer(
+    ctx: &Ctx,
+    pm: PackageManager,
+    package: &str,
+    reason: Option<&str>,
+    mode: &Mode,
+    human: &mut String,
+) -> Value {
+    let argv = privileged(pm.install_argv(package), pm.needs_root(), is_root(ctx));
+    let cmd = display(&argv);
+    let name = if package == HERDR { "Herdr" } else { package };
+    let decision = consent(mode.yes, mode.interactive, || {
+        let why = reason.map(|r| format!(" ({r})")).unwrap_or_default();
+        (mode.ask)(&format!("Install {name} with {cmd}{why}?"))
+    });
+    match decision {
+        Consent::PrintOnly => json!({"action": "printed", "runtime": package, "command": cmd}),
+        Consent::Declined => json!({"action": "declined", "runtime": package, "command": cmd}),
+        Consent::Run => match run(&argv) {
+            Ok(()) => {
+                let _ = writeln!(human, "Installed {name} ({cmd})");
+                json!({"action": "installed", "runtime": package, "command": cmd})
+            }
+            Err(e) => {
+                let _ = writeln!(human, "Could not install {name}: {e}");
+                json!({"action": "failed", "runtime": package, "command": cmd, "error": e})
+            }
+        },
+    }
+}
+
+fn installed(action: &Value) -> bool {
+    action["action"] == "installed"
+}
+
+/// Makes sure an agent runtime exists. With Homebrew, Herdr comes first (it
+/// unlocks View as agents in the app) and tmux is the fallback; elsewhere
+/// tmux is offered and Herdr is only mentioned.
 pub fn ensure_runtime(ctx: &Ctx, cfg: &Config, mode: &Mode, human: &mut String) -> Value {
     let rts = Runtimes::new(ctx, cfg);
-    let found = rts
-        .enabled()
-        .iter()
-        .any(|r| !matches!(r.list_sessions(), Err(AgentError::Unavailable(_))));
-    if found {
-        return json!({"action": "already_installed"});
+    let present = |r: &dyn crate::features::agents::domain::AgentRuntime| {
+        !matches!(r.list_sessions(), Err(AgentError::Unavailable(_)))
+    };
+    let herdr_here = cfg.source_enabled("herdr") && present(&rts.herdr);
+    let tmux_here = cfg.source_enabled("tmux") && present(&rts.tmux);
+    let pm = package_manager(ctx);
+    let brew = pm.filter(|pm| pm.has_herdr());
+    if herdr_here {
+        return json!({"action": "already_installed", "runtime": "herdr"});
     }
-    let herdr = format!("Herdr ({HERDR_URL}) is the other option; install it from its site.");
-    let Some(pm) = package_manager(ctx) else {
+    if tmux_here {
+        // Optional upgrade: only when a person can answer.
+        let Some(brew) = brew.filter(|_| !mode.yes && mode.interactive) else {
+            return json!({"action": "already_installed", "runtime": "tmux"});
+        };
+        let r = offer(
+            ctx,
+            brew,
+            HERDR,
+            Some("unlocks View as agents in the app"),
+            mode,
+            human,
+        );
+        return json!({"action": "already_installed", "runtime": "tmux", "herdr": r});
+    }
+
+    let herdr_url = format!("Herdr ({HERDR_URL}) is the other option.");
+    let mut herdr_offer = None;
+    if let Some(brew) = brew {
+        let r = offer(
+            ctx,
+            brew,
+            HERDR,
+            Some("unlocks View as agents in the app"),
+            mode,
+            human,
+        );
+        if installed(&r) {
+            return r;
+        }
+        herdr_offer = Some(r);
+    }
+    let Some(pm) = pm else {
         let hint = if cfg!(target_os = "macos") {
-            format!("Install Homebrew from {HOMEBREW_URL}, then run `brew install tmux`.")
+            format!("Install Homebrew from {HOMEBREW_URL}, then run `brew install herdr` or `brew install tmux`.")
         } else {
             "Install tmux with your system's package manager.".to_string()
         };
         let _ = writeln!(
             human,
-            "No agent runtime (herdr or tmux) found and no supported package manager. {hint}\n{herdr}"
+            "No agent runtime (herdr or tmux) found and no supported package manager. {hint}\n{herdr_url}"
         );
         return json!({"action": "unavailable", "note": hint, "alternative": HERDR_URL});
     };
-    let argv = privileged(pm.install_argv(TMUX), pm.needs_root(), is_root(ctx));
-    let cmd = display(&argv);
-    let decision = consent(mode.yes, mode.interactive, || {
-        (mode.ask)(&format!("Install tmux with {cmd}?"))
-    });
-    match decision {
-        Consent::PrintOnly => {
+    let mut r = offer(ctx, pm, TMUX, None, mode, human);
+    let cmd = r["command"].as_str().unwrap_or_default().to_string();
+    match r["action"].as_str() {
+        Some("printed") => {
+            let herdr_cmd = herdr_offer
+                .as_ref()
+                .and_then(|h| h["command"].as_str())
+                .map(|c| format!("Install Herdr with: {c}\nor tmux with: {cmd}"))
+                .unwrap_or_else(|| format!("Install tmux with: {cmd}\n{herdr_url}"));
             let _ = writeln!(
                 human,
-                "No agent runtime (herdr or tmux) found. Install tmux with: {cmd}\n{herdr}"
+                "No agent runtime (herdr or tmux) found.\n{herdr_cmd}"
             );
-            json!({"action": "printed", "command": cmd, "alternative": HERDR_URL})
         }
-        Consent::Declined => {
+        Some("declined") => {
             let _ = writeln!(
                 human,
-                "tmux not installed (declined). Run `{cmd}` when you are ready.\n{herdr}"
+                "No agent runtime installed (declined). Run `{cmd}` when you are ready."
             );
-            json!({"action": "declined", "command": cmd, "alternative": HERDR_URL})
         }
-        Consent::Run => match run(&argv) {
-            Ok(()) => {
-                let _ = writeln!(human, "Installed tmux ({cmd})");
-                json!({"action": "installed", "command": cmd})
-            }
-            Err(e) => {
-                let _ = writeln!(human, "Could not install tmux: {e}\n{herdr}");
-                json!({"action": "failed", "command": cmd, "error": e})
-            }
-        },
+        _ => {}
     }
+    if let (Some(h), Value::Object(m)) = (herdr_offer, &mut r) {
+        m.insert("herdr".into(), h);
+    } else if let Value::Object(m) = &mut r {
+        m.insert("alternative".into(), json!(HERDR_URL));
+    }
+    r
 }
 
 /// Turns the SSH server on when nothing listens on the configured port.

@@ -80,10 +80,13 @@ them), fixes what is missing, runs `doctor` and offers to pair. Running it again
 
 What `setup` fixes, each time showing the exact command first:
 
-- **No agent runtime** (neither Herdr nor tmux): offers `Install tmux with <cmd>? [y/N]` using
-  the detected package manager (`brew`, or `apt-get`/`dnf`/`pacman`/`zypper`/`apk` through
-  `sudo`). Without Homebrew on macOS it prints how to get it. Herdr is never installed for
-  you (its installer is a `curl | sh`); [herdr.dev](https://herdr.dev) is mentioned instead.
+- **No agent runtime** (neither Herdr nor tmux): with Homebrew it offers
+  `Install Herdr with brew install herdr? [y/N]` first (Herdr unlocks View as agents in the
+  app), then tmux if you decline. Elsewhere it offers tmux through `apt-get`/`dnf`/`pacman`/
+  `zypper`/`apk` with `sudo`, and only mentions [herdr.dev](https://herdr.dev): none of those
+  managers ships Herdr (Arch has it only in the AUR), and `setup` never runs a `curl | sh`.
+  Without any package manager it prints how to get Homebrew. With tmux but no Herdr,
+  an interactive `setup` offers Herdr once; `doctor` shows `brew install herdr`.
 - **Nothing listening on the SSH port**: `doctor` now fails with the fix, and `setup` offers to
   run it (macOS `sudo systemsetup -setremotelogin on`, Linux `sudo systemctl enable --now ssh`
   or `sshd`).
@@ -92,7 +95,7 @@ What `setup` fixes, each time showing the exact command first:
 
 `--yes` runs the install and SSH commands without asking but never starts pairing (a person
 has to scan the QR code). Without a terminal, or with `--json`, nothing is run: the commands
-are printed (JSON: `prerequisites.agent_runtime`, `prerequisites.ssh` and `pairing`).
+are printed (JSON: `prerequisites.agent_runtime` with the `runtime` installed, `prerequisites.ssh` and `pairing`).
 
 `openmosh-hook uninstall [--all] [--dry-run] [--yes] [--json]` removes everything
 openmosh-hook created, and nothing else:

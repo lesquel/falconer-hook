@@ -41,7 +41,9 @@ pub fn check_tailscale_ssh(t: &impl Tailnet, ssh_port: u16) -> Check {
 }
 
 /// One check per runtime, plus a failure when no runtime is usable.
-pub fn check_runtimes(runtimes: &[&dyn AgentRuntime]) -> Vec<Check> {
+/// `herdr_install` is the package-manager command that installs Herdr, when
+/// one is available on this machine.
+pub fn check_runtimes(runtimes: &[&dyn AgentRuntime], herdr_install: Option<&str>) -> Vec<Check> {
     let mut out = Vec::new();
     let mut any = false;
     for r in runtimes {
@@ -52,14 +54,25 @@ pub fn check_runtimes(runtimes: &[&dyn AgentRuntime]) -> Vec<Check> {
                 any = true;
                 out.push(Check::ok(check_name, format!("{} session(s)", s.len())));
             }
-            Err(AgentError::Unavailable(_)) => out.push(Check::warn(check_name, "not installed")),
+            Err(AgentError::Unavailable(_)) => out.push(Check::warn(
+                check_name,
+                match (check_name, herdr_install) {
+                    ("herdr", Some(cmd)) => {
+                        format!("not installed; `{cmd}` unlocks View as agents in the app")
+                    }
+                    _ => "not installed".to_string(),
+                },
+            )),
             Err(_) => out.push(Check::warn(check_name, "installed but not responding")),
         }
     }
     if !any {
         out.push(Check::fail(
             "agent_runtime",
-            "install Herdr (https://herdr.dev) or tmux",
+            match herdr_install {
+                Some(cmd) => format!("install Herdr (`{cmd}`) or tmux"),
+                None => "install Herdr (https://herdr.dev) or tmux".to_string(),
+            },
         ));
     }
     out
@@ -155,13 +168,22 @@ mod tests {
         let h = FakeRuntime::herdr_with_agents(0);
         let t = FakeRuntime::unavailable(Runtime::Tmux);
         let both: [&dyn AgentRuntime; 2] = [&h, &t];
-        let c = check_runtimes(&both);
+        let c = check_runtimes(&both, None);
         assert_eq!(
             c.iter().map(|c| c.status).collect::<Vec<_>>(),
             vec![Status::Ok, Status::Warn]
         );
         let none: [&dyn AgentRuntime; 1] = [&t];
-        assert_eq!(check_runtimes(&none).last().unwrap().status, Status::Fail);
+        assert_eq!(
+            check_runtimes(&none, None).last().unwrap().status,
+            Status::Fail
+        );
+        let hinted = check_runtimes(&none, Some("brew install herdr"));
+        assert!(hinted
+            .last()
+            .unwrap()
+            .detail
+            .contains("`brew install herdr`"));
     }
 
     #[test]

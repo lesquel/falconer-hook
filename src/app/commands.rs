@@ -284,7 +284,10 @@ pub fn doctor(ctx: &Ctx) -> Result<Reply, CliError> {
     checks.push(check_tailscale(&tailscale));
     checks.push(check_tailscale_ssh(&tailscale, cfg.ssh_port));
     let rts = Runtimes::new(ctx, &cfg);
-    checks.extend(check_runtimes(&rts.enabled()));
+    checks.extend(check_runtimes(
+        &rts.enabled(),
+        super::prereqs::herdr_install_hint(ctx).as_deref(),
+    ));
     let p = &ctx.paths;
     let files = [
         p.config_file(),

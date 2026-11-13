@@ -30,58 +30,125 @@ fn no_tmux() -> Env {
 }
 
 #[test]
-fn tmux_offered_and_accepted_installs_with_brew() {
+fn herdr_is_offered_first_with_brew_and_accepted() {
     let e = no_tmux();
     let out = e.run(&["setup", "--no-service"], Some("y\nn\n"), TTY);
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        err.contains(
+            "Install Herdr with brew install herdr (unlocks View as agents in the app)? [y/N]"
+        ),
+        "{err}"
+    );
+    assert!(!err.contains("Install tmux"), "{err}");
+    assert_eq!(calls_to(&e, "brew"), ["brew install herdr"]);
+    assert!(String::from_utf8_lossy(&out.stdout).contains("Installed Herdr"));
+}
+
+#[test]
+fn declining_herdr_offers_tmux_next() {
+    let e = no_tmux();
+    let out = e.run(&["setup", "--no-service"], Some("n\ny\nn\n"), TTY);
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(
         err.contains("Install tmux with brew install tmux? [y/N]"),
         "{err}"
     );
     assert_eq!(calls_to(&e, "brew"), ["brew install tmux"]);
-    assert!(String::from_utf8_lossy(&out.stdout).contains("Installed tmux"));
 }
 
 #[test]
-fn tmux_declined_runs_nothing() {
+fn declining_both_runs_nothing() {
     let e = no_tmux();
-    let out = e.run(&["setup", "--no-service"], Some("n\n"), TTY);
+    let out = e.run(&["setup", "--no-service"], Some("n\nn\n"), TTY);
     assert!(calls_to(&e, "brew").is_empty());
     let text = String::from_utf8_lossy(&out.stdout);
-    assert!(text.contains("tmux not installed (declined)"), "{text}");
-    assert!(text.contains("https://herdr.dev"));
+    assert!(
+        text.contains("No agent runtime installed (declined)"),
+        "{text}"
+    );
 }
 
 #[test]
-fn tmux_with_yes_installs_without_asking() {
+fn yes_installs_herdr_without_asking() {
     let e = no_tmux();
     let (code, v) = e.json(&["setup", "--yes", "--no-service", "--json"], None, &[]);
     let d = ok_data(code, &v);
     assert_eq!(runtime(d)["action"], "installed");
-    assert_eq!(runtime(d)["command"], "brew install tmux");
-    assert_eq!(calls_to(&e, "brew"), ["brew install tmux"]);
+    assert_eq!(runtime(d)["runtime"], "herdr");
+    assert_eq!(runtime(d)["command"], "brew install herdr");
+    assert_eq!(calls_to(&e, "brew"), ["brew install herdr"]);
 }
 
 #[test]
-fn tmux_without_a_terminal_only_prints_the_command() {
+fn without_a_terminal_only_prints_the_commands() {
     let e = no_tmux();
     let out = e.run(&["setup", "--no-service"], None, &[]);
     assert!(calls_to(&e, "brew").is_empty());
-    assert!(String::from_utf8_lossy(&out.stdout).contains("Install tmux with: brew install tmux"));
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        text.contains("Install Herdr with: brew install herdr"),
+        "{text}"
+    );
+    assert!(text.contains("or tmux with: brew install tmux"), "{text}");
     let (code, v) = e.json(&["setup", "--no-service", "--json"], None, &[]);
     let d = ok_data(code, &v);
     assert_eq!(runtime(d)["action"], "printed");
     assert_eq!(runtime(d)["command"], "brew install tmux");
+    assert_eq!(runtime(d)["herdr"]["command"], "brew install herdr");
     assert!(calls_to(&e, "brew").is_empty());
 }
 
 #[test]
-fn root_package_managers_run_through_sudo() {
+fn tmux_only_offers_herdr_interactively() {
+    let e = Env::isolated();
+    e.remove_runtime(&["herdr"]);
+    // Interactive: offered with the reason; declining changes nothing.
+    let out = e.run(&["setup", "--no-service"], Some("n\nn\n"), TTY);
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("unlocks View as agents in the app"), "{err}");
+    assert!(calls_to(&e, "brew").is_empty());
+    // Accepting installs Herdr.
+    e.run(&["setup", "--no-service"], Some("y\nn\n"), TTY);
+    assert_eq!(calls_to(&e, "brew"), ["brew install herdr"]);
+    // --yes and no terminal never install an optional runtime.
+    let e = Env::isolated();
+    e.remove_runtime(&["herdr"]);
+    let (code, v) = e.json(&["setup", "--yes", "--no-service", "--json"], None, &[]);
+    assert_eq!(runtime(ok_data(code, &v))["runtime"], "tmux");
+    e.run(&["setup", "--no-service"], None, &[]);
+    assert!(calls_to(&e, "brew").is_empty());
+}
+
+#[test]
+fn doctor_points_at_brew_for_herdr_only_when_brew_exists() {
+    let e = Env::isolated();
+    e.remove_runtime(&["herdr"]);
+    let detail = |e: &Env| {
+        let (_, v) = e.json(&["doctor", "--json"], None, &[]);
+        v["data"]["checks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["name"] == "herdr")
+            .unwrap()["detail"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+    assert!(detail(&e).contains("`brew install herdr`"));
+    e.remove_tool("brew");
+    assert_eq!(detail(&e), "not installed");
+}
+
+#[test]
+fn other_package_managers_install_tmux_through_sudo_and_only_mention_herdr() {
     let e = no_tmux();
     e.remove_tool("brew");
     let (code, v) = e.json(&["setup", "--yes", "--no-service", "--json"], None, &[]);
     let d = ok_data(code, &v);
     assert_eq!(runtime(d)["command"], "sudo apt-get install -y tmux");
+    assert_eq!(runtime(d)["alternative"], "https://herdr.dev");
     assert_eq!(calls_to(&e, "sudo"), ["sudo apt-get install -y tmux"]);
     assert!(calls_to(&e, "apt-get").is_empty(), "only sudo is spawned");
 }
@@ -103,6 +170,7 @@ fn nothing_is_installed_when_a_runtime_exists() {
     let (code, v) = e.json(&["setup", "--yes", "--no-service", "--json"], None, &[]);
     let d = ok_data(code, &v);
     assert_eq!(runtime(d)["action"], "already_installed");
+    assert_eq!(runtime(d)["runtime"], "herdr");
     assert!(calls_to(&e, "brew").is_empty());
 }
 
