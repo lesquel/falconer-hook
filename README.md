@@ -20,8 +20,7 @@ checks in `respond`, revoke that ends the phone's live sessions, [`usage`](#usag
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/lesquel/openmosh-hook/main/install.sh | sh
-openmosh-hook setup        # config, service, agent hooks, doctor
-openmosh-hook pair         # scan the QR code with OpenMosh
+openmosh-hook setup        # config, service, agent hooks, missing tmux/SSH, doctor, pairing
 ```
 
 The installer downloads the release binary for your platform (`openmosh-hook-<target>.tar.gz`
@@ -77,7 +76,23 @@ Check that the trusted comment minisign prints is `openmosh-hook <the tag you do
 `openmosh-hook setup [--yes] [--no-service] [--json]` writes the default config if there is
 none, installs the user service, offers the integration of every [detected agent](#agents)
 (asks on a terminal; `--yes` installs them all; with `--json` and no `--yes` it only lists
-them), runs `doctor` and prints the next step (`openmosh-hook pair`). Running it again is safe.
+them), fixes what is missing, runs `doctor` and offers to pair. Running it again is safe.
+
+What `setup` fixes, each time showing the exact command first:
+
+- **No agent runtime** (neither Herdr nor tmux): offers `Install tmux with <cmd>? [y/N]` using
+  the detected package manager (`brew`, or `apt-get`/`dnf`/`pacman`/`zypper`/`apk` through
+  `sudo`). Without Homebrew on macOS it prints how to get it. Herdr is never installed for
+  you (its installer is a `curl | sh`); [herdr.dev](https://herdr.dev) is mentioned instead.
+- **Nothing listening on the SSH port**: `doctor` now fails with the fix, and `setup` offers to
+  run it (macOS `sudo systemsetup -setremotelogin on`, Linux `sudo systemctl enable --now ssh`
+  or `sshd`).
+- **No phone paired** and every check passed: asks `Pair a phone now? [Y/n]` and runs
+  `openmosh-hook pair`.
+
+`--yes` runs the install and SSH commands without asking but never starts pairing (a person
+has to scan the QR code). Without a terminal, or with `--json`, nothing is run: the commands
+are printed (JSON: `prerequisites.agent_runtime`, `prerequisites.ssh` and `pairing`).
 
 `openmosh-hook uninstall [--all] [--dry-run] [--yes] [--json]` removes everything
 openmosh-hook created, and nothing else:
