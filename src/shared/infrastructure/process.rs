@@ -65,6 +65,23 @@ impl CommandRunner for ProcessRunner {
     }
 }
 
+/// Runs `argv` attached to the user's terminal (stdin, stdout and stderr
+/// inherited) so password prompts from `sudo` or `brew` work. Returns the
+/// exit code. Used only for commands the user confirmed or passed `--yes` for.
+pub fn run_inherited(argv: &[String]) -> Result<i32, CommandError> {
+    let (program, args) = argv
+        .split_first()
+        .ok_or_else(|| CommandError::Spawn(String::new()))?;
+    let status = Command::new(program)
+        .args(args)
+        .status()
+        .map_err(|e| match e.kind() {
+            std::io::ErrorKind::NotFound => CommandError::NotFound(program.clone()),
+            _ => CommandError::Spawn(program.clone()),
+        })?;
+    Ok(status.code().unwrap_or(-1))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
