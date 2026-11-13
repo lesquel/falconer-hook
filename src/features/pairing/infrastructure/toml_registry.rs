@@ -86,6 +86,17 @@ impl DeviceRegistry for TomlDeviceRegistry {
         })
     }
 
+    fn mark_webpush_stale(&self, id: &str, endpoint: &str) -> Result<bool, RegistryError> {
+        self.modify(|v| {
+            Ok(v.iter_mut()
+                .find(|d| d.id == id)
+                .and_then(|d| d.webpush.as_mut())
+                .filter(|w| w.endpoint == endpoint)
+                .map(|w| w.stale = true)
+                .is_some())
+        })
+    }
+
     fn update(&self, device: Device) -> Result<(), RegistryError> {
         self.modify(|v| {
             let slot = v
@@ -114,6 +125,7 @@ mod tests {
             endpoint_stale: false,
             ssh_key: Some("ssh-ed25519 AAAA".into()),
             peer_ips: Vec::new(),
+            webpush: None,
         }
     }
 
@@ -153,5 +165,35 @@ mod tests {
         std::fs::set_permissions(&r.path, std::fs::Permissions::from_mode(0o600)).unwrap();
         std::fs::write(&r.path, "not = [valid").unwrap();
         assert_eq!(r.list().unwrap_err().code(), "registry_corrupt");
+    }
+
+    #[test]
+    fn old_files_without_webpush_load_and_webpush_round_trips() {
+        let t = tempfile::tempdir().unwrap();
+        let r = reg(&t);
+        std::fs::write(
+            &r.path,
+            "[[device]]\nid = \"a\"\nname = \"n\"\nppk = \"k\"\nendpoint = \"https://e\"\npaired_at = 1\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&r.path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let d = r.get("a").unwrap();
+        assert!(d.webpush.is_none() && !d.endpoint_stale);
+
+        let v = crate::features::pairing::domain::webpush_fixtures::input("mailto:a@b.c");
+        let wp = crate::features::pairing::domain::WebPushInput::parse(&v.to_string())
+            .unwrap()
+            .validate()
+            .unwrap();
+        let mut d = d;
+        d.webpush = Some(Box::new(wp.clone()));
+        r.update(d).unwrap();
+        assert_eq!(r.get("a").unwrap().webpush.as_deref(), Some(&wp));
+        // Stale only while the subscription endpoint is unchanged.
+        assert!(!r.mark_webpush_stale("a", "https://other").unwrap());
+        assert!(r.mark_webpush_stale("a", &wp.endpoint).unwrap());
+        let d = r.get("a").unwrap();
+        assert!(d.webpush.unwrap().stale);
+        assert!(!d.endpoint_stale, "separate from endpoint_stale");
     }
 }

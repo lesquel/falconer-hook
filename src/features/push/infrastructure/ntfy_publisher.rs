@@ -45,17 +45,37 @@ pub struct HttpPublisher {
     client: reqwest::blocking::Client,
 }
 
+/// The HTTP client every push transport uses (see the module docs).
+pub fn build_client() -> Result<reqwest::blocking::Client, reqwest::Error> {
+    reqwest::blocking::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(Duration::from_secs(10))
+        .connect_timeout(Duration::from_secs(10))
+        .no_proxy()
+        .dns_resolver(Arc::new(PublicResolver))
+        .user_agent("openmosh")
+        .build()
+}
+
+/// Maps a push service answer to an outcome (shared by both transports).
+pub fn outcome_for(res: Result<reqwest::blocking::Response, reqwest::Error>) -> PostOutcome {
+    match res {
+        Ok(r) if r.status().is_success() => PostOutcome::Delivered,
+        Ok(r) if r.status().as_u16() == 404 || r.status().as_u16() == 410 => PostOutcome::Stale,
+        Ok(r) if r.status().is_redirection() => PostOutcome::Failed("redirect_refused"),
+        // ntfy refuses UnifiedPush topics whose phone app is not connected.
+        Ok(r) if r.status().as_u16() == 507 => PostOutcome::Failed("no_active_subscriber"),
+        Ok(_) => PostOutcome::Failed("http_status"),
+        Err(e) if e.is_timeout() => PostOutcome::Failed("timeout"),
+        Err(_) => PostOutcome::Failed("network"),
+    }
+}
+
 impl HttpPublisher {
     pub fn new() -> Result<Self, reqwest::Error> {
-        let client = reqwest::blocking::Client::builder()
-            .redirect(reqwest::redirect::Policy::none())
-            .timeout(Duration::from_secs(10))
-            .connect_timeout(Duration::from_secs(10))
-            .no_proxy()
-            .dns_resolver(Arc::new(PublicResolver))
-            .user_agent("openmosh")
-            .build()?;
-        Ok(Self { client })
+        Ok(Self {
+            client: build_client()?,
+        })
     }
 
     fn send(&self, endpoint: &str, body: &str) -> PostOutcome {
@@ -65,16 +85,7 @@ impl HttpPublisher {
             .header(reqwest::header::CONTENT_TYPE, "application/json")
             .body(body.to_string())
             .send();
-        match res {
-            Ok(r) if r.status().is_success() => PostOutcome::Delivered,
-            Ok(r) if r.status().as_u16() == 404 || r.status().as_u16() == 410 => PostOutcome::Stale,
-            Ok(r) if r.status().is_redirection() => PostOutcome::Failed("redirect_refused"),
-            // ntfy refuses UnifiedPush topics whose phone app is not connected.
-            Ok(r) if r.status().as_u16() == 507 => PostOutcome::Failed("no_active_subscriber"),
-            Ok(_) => PostOutcome::Failed("http_status"),
-            Err(e) if e.is_timeout() => PostOutcome::Failed("timeout"),
-            Err(_) => PostOutcome::Failed("network"),
-        }
+        outcome_for(res)
     }
 }
 

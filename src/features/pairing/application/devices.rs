@@ -1,4 +1,4 @@
-//! `devices list | revoke | set-endpoint`.
+//! `devices list | revoke | set-endpoint | set-webpush | clear-webpush`.
 
 use serde::Serialize;
 
@@ -6,6 +6,7 @@ use std::net::IpAddr;
 
 use crate::features::pairing::domain::{
     authorized_keys_line, AuthorizedKeys, Device, DeviceRegistry, LiveSessions, RegistryError,
+    WebPushError, WebPushInput,
 };
 use crate::features::push::domain::validate_endpoint;
 use crate::shared::domain::ids::is_valid_id;
@@ -19,6 +20,9 @@ pub struct DeviceView {
     pub endpoint: String,
     pub endpoint_stale: bool,
     pub ssh_authorized: bool,
+    /// A Web Push subscription is registered (its keys are never shown).
+    pub webpush: bool,
+    pub webpush_stale: bool,
 }
 
 impl From<Device> for DeviceView {
@@ -30,6 +34,8 @@ impl From<Device> for DeviceView {
             endpoint: d.endpoint,
             endpoint_stale: d.endpoint_stale,
             ssh_authorized: d.ssh_key.is_some(),
+            webpush: d.webpush.is_some(),
+            webpush_stale: d.webpush.as_ref().is_some_and(|w| w.stale),
         }
     }
 }
@@ -81,6 +87,8 @@ pub enum DeviceAdminError {
     #[error("invalid endpoint")]
     BadEndpoint,
     #[error(transparent)]
+    WebPush(#[from] WebPushError),
+    #[error(transparent)]
     Registry(#[from] RegistryError),
 }
 
@@ -89,6 +97,7 @@ impl crate::shared::domain::error::ErrorCode for DeviceAdminError {
         match self {
             DeviceAdminError::BadId => "invalid_input",
             DeviceAdminError::BadEndpoint => "invalid_endpoint",
+            DeviceAdminError::WebPush(e) => e.code(),
             DeviceAdminError::Registry(e) => e.code(),
         }
     }
@@ -156,6 +165,28 @@ impl<R: DeviceRegistry, A: AuthorizedKeys> DeviceAdmin<'_, R, A> {
         self.registry.update(d.clone())?;
         Ok(d.into())
     }
+
+    /// Validates the app's Web Push JSON and stores it, replacing any previous one.
+    pub fn set_webpush(&self, id: &str, json: &str) -> Result<DeviceView, DeviceAdminError> {
+        if !is_valid_id(id) {
+            return Err(DeviceAdminError::BadId);
+        }
+        let webpush = WebPushInput::parse(json)?.validate()?;
+        let mut d = self.registry.get(id)?;
+        d.webpush = Some(Box::new(webpush));
+        self.registry.update(d.clone())?;
+        Ok(d.into())
+    }
+
+    pub fn clear_webpush(&self, id: &str) -> Result<DeviceView, DeviceAdminError> {
+        if !is_valid_id(id) {
+            return Err(DeviceAdminError::BadId);
+        }
+        let mut d = self.registry.get(id)?;
+        d.webpush = None;
+        self.registry.update(d.clone())?;
+        Ok(d.into())
+    }
 }
 
 #[cfg(test)]
@@ -178,6 +209,7 @@ mod tests {
             endpoint_stale: true,
             ssh_key: Some(KEY.into()),
             peer_ips: Vec::new(),
+            webpush: None,
         }]);
         let keys = MemAuthorizedKeys::default();
         keys.lines
@@ -267,5 +299,69 @@ mod tests {
             ("https://ntfy.sh/new", false)
         );
         assert!(admin.list().unwrap()[0].ssh_authorized);
+    }
+
+    #[test]
+    fn set_and_clear_webpush() {
+        use crate::features::pairing::domain::webpush_fixtures::input;
+        let (reg, keys) = setup();
+        let admin = DeviceAdmin {
+            registry: &reg,
+            keys: &keys,
+        };
+        let good = input("mailto:me@example.com").to_string();
+        assert!(!admin.list().unwrap()[0].webpush);
+        let v = admin.set_webpush(ID, &good).unwrap();
+        assert_eq!((v.webpush, v.webpush_stale), (true, false));
+        assert_eq!(reg.get(ID).unwrap().endpoint, "https://a", "ntfy untouched");
+        // The list view never carries the keys.
+        let shown = serde_json::to_string(&admin.list().unwrap()).unwrap();
+        assert!(shown.contains(r#""webpush":true"#));
+        assert!(!shown.contains("vapid") && !shown.contains("p256dh"));
+
+        // A bad input leaves the stored subscription alone.
+        let mut bad = input("mailto:me@example.com");
+        bad["vapid_priv"] = crate::shared::domain::encoding::b64u_encode(&[1u8; 32]).into();
+        let e = admin.set_webpush(ID, &bad.to_string()).unwrap_err();
+        assert_eq!(e.code(), "webpush_invalid");
+        assert!(!e.to_string().contains("AQEB"), "no echo of the input");
+        assert_eq!(
+            admin
+                .set_webpush(ID, "{\"v\":1,\"x\":2}")
+                .unwrap_err()
+                .code(),
+            "webpush_invalid"
+        );
+        assert_eq!(
+            admin
+                .set_webpush(ID, &good.replace("mailto:me@example.com", "ftp://x"))
+                .unwrap_err()
+                .code(),
+            "webpush_invalid"
+        );
+        assert!(reg.get(ID).unwrap().webpush.is_some());
+
+        assert_eq!(
+            admin
+                .set_webpush("BBBBBBBBBBBBBBBBBBBB01", &good)
+                .unwrap_err()
+                .code(),
+            "not_found"
+        );
+        assert_eq!(
+            admin.set_webpush("../x", &good).unwrap_err().code(),
+            "invalid_input"
+        );
+
+        let v = admin.clear_webpush(ID).unwrap();
+        assert!(!v.webpush);
+        assert!(reg.get(ID).unwrap().webpush.is_none());
+        assert_eq!(
+            admin
+                .clear_webpush("BBBBBBBBBBBBBBBBBBBB01")
+                .unwrap_err()
+                .code(),
+            "not_found"
+        );
     }
 }

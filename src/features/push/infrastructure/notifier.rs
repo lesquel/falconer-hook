@@ -4,11 +4,11 @@
 use crate::features::events::domain::{Event, EventNotifier};
 use crate::features::pairing::domain::DeviceRegistry;
 use crate::features::push::application::PublishEvent;
-use crate::features::push::domain::{PushPlaintext, PushPublisher, Sealer};
+use crate::features::push::domain::{PushPlaintext, PushPublisher, Sealer, WebPushSender};
 use crate::shared::infrastructure::log::{log, Field, Level};
 
-pub struct PushNotifier<'a, R, S, P> {
-    pub publish: PublishEvent<'a, R, S, P>,
+pub struct PushNotifier<'a, R, S, P, W> {
+    pub publish: PublishEvent<'a, R, S, P, W>,
     pub host_alias: String,
 }
 
@@ -33,7 +33,9 @@ pub fn plaintext_for(event: &Event, host: &str, resolved: bool) -> PushPlaintext
     )
 }
 
-impl<R: DeviceRegistry, S: Sealer, P: PushPublisher> PushNotifier<'_, R, S, P> {
+impl<R: DeviceRegistry, S: Sealer, P: PushPublisher, W: WebPushSender>
+    PushNotifier<'_, R, S, P, W>
+{
     fn send(&self, pt: &PushPlaintext) -> u32 {
         match self.publish.publish(pt) {
             Ok(r) => r.delivered,
@@ -49,7 +51,9 @@ impl<R: DeviceRegistry, S: Sealer, P: PushPublisher> PushNotifier<'_, R, S, P> {
     }
 }
 
-impl<R: DeviceRegistry, S: Sealer, P: PushPublisher> EventNotifier for PushNotifier<'_, R, S, P> {
+impl<R: DeviceRegistry, S: Sealer, P: PushPublisher, W: WebPushSender> EventNotifier
+    for PushNotifier<'_, R, S, P, W>
+{
     fn notify(&self, event: &Event) -> u32 {
         self.send(&plaintext_for(event, &self.host_alias, false))
     }

@@ -289,6 +289,20 @@ pub enum DevicesCmd {
         #[command(flatten)]
         out: JsonFlag,
     },
+    /// Register a Web Push subscription (one JSON object on stdin).
+    SetWebpush {
+        #[arg(allow_hyphen_values = true)]
+        id: String,
+        #[command(flatten)]
+        out: JsonFlag,
+    },
+    /// Remove a device's Web Push subscription.
+    ClearWebpush {
+        #[arg(allow_hyphen_values = true)]
+        id: String,
+        #[command(flatten)]
+        out: JsonFlag,
+    },
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -390,7 +404,9 @@ impl Command {
             Command::Devices { cmd } => match cmd {
                 DevicesCmd::List { out }
                 | DevicesCmd::Revoke { out, .. }
-                | DevicesCmd::SetEndpoint { out, .. } => out.json,
+                | DevicesCmd::SetEndpoint { out, .. }
+                | DevicesCmd::SetWebpush { out, .. }
+                | DevicesCmd::ClearWebpush { out, .. } => out.json,
             },
             Command::Integration { cmd } => match cmd {
                 IntegrationCmd::Install { out, .. }

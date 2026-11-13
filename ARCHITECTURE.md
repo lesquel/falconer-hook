@@ -48,7 +48,7 @@ data/
 |---|---|---|---|
 | `agents` | Observe agent state, detect transitions, deliver keystrokes | `AgentRuntime` | `HerdrRuntime`, `TmuxRuntime` |
 | `events` | Normalize hook payloads, dedupe, store, expire, resolve | `EventStore`, `EventNotifier` | `SqliteEventStore` |
-| `push` | Encrypt per device and publish | `Sealer`, `PushPublisher` (uses `DeviceRegistry`) | `XChaChaSealer`, `HttpPublisher`, `PushNotifier` (implements `EventNotifier`) |
+| `push` | Encrypt per device and publish (ntfy/UnifiedPush and Web Push) | `Sealer`, `PushPublisher`, `WebPushSender` (uses `DeviceRegistry`) | `XChaChaSealer`, `HttpPublisher`, `WebPushPublisher` (`aes128gcm_sealer`, `vapid`), `PushNotifier` (implements `EventNotifier`) |
 | `pairing` | QR and SSH pairing, device registry, revocation | `DeviceRegistry`, `AuthorizedKeys`, `Tailnet`, `PairCrypto`, `PairSession` | `TomlDeviceRegistry`, `FileAuthorizedKeys`, `TailscaleCli`, `X25519PairCrypto`, TCP listener, QR renderer |
 | `responses` | Resolve an event and execute allow/deny/text | `KeymapSource` (uses `AgentRuntime`, `EventStore`, `EventNotifier`) | `EmbeddedKeymaps` |
 | `service` | Render and apply the user service plan | `ServiceFiles` (uses `CommandRunner`) | `FsServiceFiles` |

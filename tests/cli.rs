@@ -15,6 +15,37 @@ use std::process::{Command, Stdio};
 
 const NOTIFICATION: &str = r#"{"session_id":"s","transcript_path":"/x/t.jsonl","cwd":"/w","hook_event_name":"Notification","message":"Claude needs your permission to use Bash"}"#;
 
+/// A deterministic P-256 scalar (b64u) derived from a label: `sha256("openmosh-test:" + label)`.
+fn seeded_scalar(label: &str) -> String {
+    use base64::engine::general_purpose::URL_SAFE_NO_PAD as B64U;
+    use base64::Engine;
+    use sha2::{Digest, Sha256};
+    B64U.encode(Sha256::digest(format!("openmosh-test:{label}")))
+}
+
+/// The `devices set-webpush` stdin JSON, with every key generated from seeds.
+fn webpush_input(endpoint: &str) -> String {
+    use base64::engine::general_purpose::URL_SAFE_NO_PAD as B64U;
+    use base64::Engine;
+    use p256::elliptic_curve::sec1::ToSec1Point;
+    use p256::SecretKey;
+    let public = |label: &str| {
+        let scalar = B64U.decode(seeded_scalar(label)).unwrap();
+        let sk = SecretKey::from_slice(&scalar).unwrap();
+        B64U.encode(sk.public_key().to_sec1_point(false).as_bytes())
+    };
+    json!({
+        "v": 1,
+        "endpoint": endpoint,
+        "p256dh": public("subscription"),
+        "auth": B64U.encode(&B64U.decode(seeded_scalar("auth")).unwrap()[..16]),
+        "vapid_pub": public("vapid"),
+        "vapid_priv": seeded_scalar("vapid"),
+        "sub": "mailto:me@example.com",
+    })
+    .to_string()
+}
+
 #[test]
 fn version_envelope() {
     let e = Env::new();
@@ -343,6 +374,35 @@ fn pair_ssh_then_devices_lifecycle() {
         ok_data(code, &v)["device"]["endpoint"],
         "http://100.101.1.2:2586/up"
     );
+
+    // Web Push: key material derived at runtime from fixed labels, so no key is committed.
+    let wp = webpush_input("https://web.push.apple.com/QGxx");
+    let wp = wp.as_str();
+    let vapid_priv = seeded_scalar("vapid");
+    let (code, v) = e.json(&["devices", "set-webpush", &id, "--json"], Some(wp), &[]);
+    ok_data(code, &v);
+    let (code, v) = e.json(&["devices", "list", "--json"], None, &[]);
+    let list = &ok_data(code, &v)["devices"];
+    assert_eq!(list[0]["webpush"], true);
+    assert_eq!(list[0]["webpush_stale"], false);
+    assert!(!v.to_string().contains("vapid_priv"), "secret never listed");
+    assert!(!v.to_string().contains(&vapid_priv), "secret never listed");
+    let bad = wp.replace("\"v\":1", "\"v\":2");
+    assert_ne!(bad, wp);
+    let (code, v) = e.json(&["devices", "set-webpush", &id, "--json"], Some(&bad), &[]);
+    assert_eq!(err_code(code, &v), "webpush_invalid");
+    let insecure = wp.replace("https://web.push.apple.com", "http://web.push.apple.com");
+    assert_ne!(insecure, wp);
+    let (code, v) = e.json(
+        &["devices", "set-webpush", &id, "--json"],
+        Some(&insecure),
+        &[],
+    );
+    assert_eq!(err_code(code, &v), "webpush_invalid");
+    let (code, v) = e.json(&["devices", "clear-webpush", &id, "--json"], None, &[]);
+    ok_data(code, &v);
+    let (code, v) = e.json(&["devices", "list", "--json"], None, &[]);
+    assert_eq!(ok_data(code, &v)["devices"][0]["webpush"], false);
 
     let (code, v) = e.json(&["devices", "revoke", &id, "--json"], None, &[]);
     let d = ok_data(code, &v);

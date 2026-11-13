@@ -211,15 +211,26 @@ pub fn devices_list(ctx: &Ctx) -> Result<Reply, CliError> {
     for d in &devices {
         let _ = writeln!(
             human,
-            "{} {}{}",
+            "{} {}{}{}",
             d.id,
             d.name,
             if d.endpoint.is_empty() {
-                " (no notifications)"
+                if d.webpush {
+                    ""
+                } else {
+                    " (no notifications)"
+                }
             } else if d.endpoint_stale {
                 " (endpoint stale)"
             } else {
                 ""
+            },
+            if !d.webpush {
+                ""
+            } else if d.webpush_stale {
+                " [webpush stale]"
+            } else {
+                " [webpush]"
             }
         );
     }
@@ -260,6 +271,28 @@ pub fn devices_set_endpoint(ctx: &Ctx, id: &str, url: &str) -> Result<Reply, Cli
         &json!({"device": d}),
         format!("Updated {}", d.name),
     ))
+}
+
+/// Reads one `set-webpush` JSON object from stdin and stores it.
+pub fn devices_set_webpush(ctx: &Ctx, id: &str) -> Result<Reply, CliError> {
+    let input = read_stdin(16 * 1024)?;
+    let st = open_state(ctx)?;
+    DeviceAdmin {
+        registry: &st.registry,
+        keys: &st.keys,
+    }
+    .set_webpush(id, &input)?;
+    Ok(Reply::new(&json!({}), "Web Push registered"))
+}
+
+pub fn devices_clear_webpush(ctx: &Ctx, id: &str) -> Result<Reply, CliError> {
+    let st = open_state(ctx)?;
+    DeviceAdmin {
+        registry: &st.registry,
+        keys: &st.keys,
+    }
+    .clear_webpush(id)?;
+    Ok(Reply::new(&json!({}), "Web Push removed"))
 }
 
 pub fn doctor(ctx: &Ctx) -> Result<Reply, CliError> {
