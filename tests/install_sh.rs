@@ -508,3 +508,57 @@ fn a_tampered_download_is_refused_even_with_a_valid_signature() {
     assert!(String::from_utf8_lossy(&out.stderr).contains("checksum mismatch"));
     assert!(!r.installed());
 }
+
+#[test]
+fn an_old_openmosh_binary_becomes_a_compatibility_symlink() {
+    let r = Release::new("v9.9.9", "falconer-hook v9.9.9");
+    let bin = r.t.path().join("home/.local/bin");
+    fs::create_dir_all(&bin).unwrap();
+    fs::write(bin.join("openmosh-hook"), "#!/bin/sh\necho old\n").unwrap();
+    fs::set_permissions(bin.join("openmosh-hook"), fs::Permissions::from_mode(0o755)).unwrap();
+    let old_cfg = r.t.path().join("home/.config/openmosh/config.toml");
+    fs::create_dir_all(old_cfg.parent().unwrap()).unwrap();
+    fs::write(&old_cfg, "# old\n").unwrap();
+
+    let out = r.install(&[]);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        out.status.success(),
+        "{stdout}\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(r.installed());
+    let link = bin.join("openmosh-hook");
+    assert!(
+        fs::symlink_metadata(&link)
+            .unwrap()
+            .file_type()
+            .is_symlink(),
+        "the old binary is replaced by a symlink"
+    );
+    assert_eq!(
+        fs::read_link(&link).unwrap(),
+        Path::new("falconer-hook"),
+        "relative link to the new binary in the same directory"
+    );
+    assert!(fs::read_to_string(&link).unwrap().contains("fake-hook"));
+    assert_eq!(fs::read_to_string(&old_cfg).unwrap(), "# old\n");
+    assert!(
+        !r.t.path().join("home/.config/falconer").exists(),
+        "no fresh config next to the OpenMosh one: falconer-hook moves it"
+    );
+
+    // A second run keeps the link and does not loop.
+    let out = r.install(&[]);
+    assert!(out.status.success());
+    assert_eq!(fs::read_link(&link).unwrap(), Path::new("falconer-hook"));
+}
+
+#[test]
+fn no_compatibility_symlink_without_an_old_binary() {
+    let r = Release::new("v9.9.9", "falconer-hook v9.9.9");
+    let out = r.install(&[]);
+    assert!(out.status.success());
+    assert!(r.installed());
+    assert!(fs::symlink_metadata(r.t.path().join("home/.local/bin/openmosh-hook")).is_err());
+}

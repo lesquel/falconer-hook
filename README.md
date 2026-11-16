@@ -113,6 +113,28 @@ to remove and removing it turns password logins back on, so it is kept and liste
 Without `--yes` it prints the plan and asks on a terminal; without a terminal (or with `--json`)
 it refuses with `confirmation_required`. `--dry-run` prints the plan and changes nothing.
 
+### Upgrading from OpenMosh
+
+falconer-hook was called `openmosh-hook`. On a machine that still has the old install:
+
+- Every `falconer-hook` command first renames `$XDG_CONFIG_HOME/openmosh` and
+  `$XDG_STATE_HOME/openmosh` to their `falconer` names when the `falconer` directory does not
+  exist yet, so paired phones, the host key and the inbox are kept. An existing `falconer`
+  directory is never touched and nothing is deleted.
+- `install.sh` replaces an `openmosh-hook` binary in the install directory with a symlink
+  `openmosh-hook -> falconer-hook`, so apps and hooks that still call the old name keep working.
+- `service install` (also run by `install.sh` and `setup`) stops, disables and removes
+  `openmosh-hook.service` (macOS: `dev.openmosh.hook.plist`) before installing the new service.
+- `setup` rewrites agent hooks that call `openmosh-hook` to call `falconer-hook` in place (no
+  second copy; other hooks stay) and replaces the `openmosh.json`/`openmosh.js` files it created
+  for Copilot, Kiro and OpenCode with their `falconer` names (JSON: `legacy`).
+- `doctor` warns (`legacy`) about anything left: the old service, hooks that still call
+  `openmosh-hook`, or an `openmosh` directory kept because a `falconer` one already exists.
+
+The wire labels (`openmosh/pair/v1`, `openmosh/push/v1`, `openmosh://pair`, `openmosh:///inbox`)
+and the `openmosh:` tag on paired-phone `authorized_keys` lines keep their names, so phones
+paired before the rename keep working.
+
 ## TUI
 
 `falconer-hook` with no command on a terminal (or `falconer-hook tui`) opens a terminal UI over

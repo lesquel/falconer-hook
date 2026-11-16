@@ -34,7 +34,17 @@ pub struct Paths {
     pub xdg_config_home: PathBuf,
     pub config_dir: PathBuf,
     pub state_dir: PathBuf,
+    /// Where OpenMosh (the previous name) kept the config; moved on upgrade.
+    pub legacy_config_dir: PathBuf,
+    /// Where OpenMosh kept the state (devices, host key, inbox).
+    pub legacy_state_dir: PathBuf,
 }
+
+/// Directory and service names used before the rename to Falconer. Only the
+/// upgrade path and `doctor` read them.
+pub const LEGACY_DIR_NAME: &str = "openmosh";
+pub const LEGACY_SYSTEMD_UNIT: &str = "openmosh-hook.service";
+pub const LEGACY_LAUNCHD_PLIST: &str = "dev.openmosh.hook.plist";
 
 impl Paths {
     pub fn from_env(get: impl Fn(&str) -> Option<String>) -> Result<Self, ConfigError> {
@@ -49,6 +59,8 @@ impl Paths {
         Ok(Self {
             config_dir: xdg_config_home.join("falconer"),
             state_dir: xdg_state_home.join("falconer"),
+            legacy_config_dir: xdg_config_home.join(LEGACY_DIR_NAME),
+            legacy_state_dir: xdg_state_home.join(LEGACY_DIR_NAME),
             xdg_config_home,
             home,
         })
@@ -76,6 +88,46 @@ impl Paths {
     pub fn launchd_plist(&self) -> PathBuf {
         self.home
             .join("Library/LaunchAgents/dev.falconer.hook.plist")
+    }
+    pub fn legacy_systemd_unit(&self) -> PathBuf {
+        self.xdg_config_home
+            .join("systemd/user")
+            .join(LEGACY_SYSTEMD_UNIT)
+    }
+    pub fn legacy_launchd_plist(&self) -> PathBuf {
+        self.home
+            .join("Library/LaunchAgents")
+            .join(LEGACY_LAUNCHD_PLIST)
+    }
+
+    /// Moves each OpenMosh directory to its Falconer name when only the old
+    /// one exists. A rename keeps every file (pairing keys, inbox) as is;
+    /// nothing is deleted, and an existing Falconer directory is never
+    /// touched. Returns the directories moved.
+    pub fn migrate_legacy_dirs(&self) -> Vec<(PathBuf, PathBuf)> {
+        let mut moved = Vec::new();
+        for (old, new) in [
+            (&self.legacy_config_dir, &self.config_dir),
+            (&self.legacy_state_dir, &self.state_dir),
+        ] {
+            let is_dir = std::fs::symlink_metadata(old).is_ok_and(|m| m.is_dir());
+            if is_dir
+                && std::fs::symlink_metadata(new).is_err()
+                && std::fs::rename(old, new).is_ok()
+            {
+                moved.push((old.clone(), new.clone()));
+            }
+        }
+        moved
+    }
+
+    /// OpenMosh directories still present (both names exist).
+    pub fn legacy_dirs_left(&self) -> Vec<&Path> {
+        [&self.legacy_config_dir, &self.legacy_state_dir]
+            .into_iter()
+            .filter(|p| p.exists())
+            .map(PathBuf::as_path)
+            .collect()
     }
 }
 

@@ -13,6 +13,10 @@ pub enum OwnedKind {
     Opencode,
 }
 
+/// First line of the OpenCode plugin before the rename to Falconer.
+const LEGACY_JS_HEADER: &str =
+    "// openmosh-hook integration: managed by `openmosh-hook integration install opencode`.";
+
 /// First line of the OpenCode plugin; identifies the file as ours.
 const JS_HEADER: &str =
     "// falconer-hook integration: managed by `falconer-hook integration install opencode`.";
@@ -97,9 +101,9 @@ export const FalconerPlugin = async () => ({{
 /// Whether `text` is a file we wrote.
 pub fn is_ours(kind: OwnedKind, text: &str) -> bool {
     match kind {
-        OwnedKind::Opencode => text.starts_with(JS_HEADER),
+        OwnedKind::Opencode => text.starts_with(JS_HEADER) || text.starts_with(LEGACY_JS_HEADER),
         _ => {
-            text.contains("falconer-hook")
+            (text.contains("falconer-hook") || text.contains(super::LEGACY_EXE_NAME))
                 && text.contains(&format!(" emit --source {}", agent(kind)))
         }
     }

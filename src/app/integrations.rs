@@ -7,8 +7,10 @@ use std::path::PathBuf;
 use super::Ctx;
 use crate::cli::output::{CliError, Reply};
 use crate::cli::AgentArg;
+use crate::features::integration::application::SettingsFile;
 use crate::features::integration::application::{Integration, IntegrationResult};
-use crate::features::integration::domain::{AgentId, AgentSpec, Base, CATALOG};
+use crate::features::integration::domain::owned;
+use crate::features::integration::domain::{AgentId, AgentSpec, Base, Format, CATALOG};
 use crate::features::integration::infrastructure::JsonSettingsFile;
 use crate::shared::infrastructure::system::on_path;
 
@@ -61,6 +63,7 @@ pub fn apply(
     install: bool,
 ) -> Result<IntegrationResult, CliError> {
     let spec = id.spec();
+    let default = settings.is_none();
     let file = JsonSettingsFile {
         path: settings.unwrap_or_else(|| default_file(ctx, spec)),
     };
@@ -69,11 +72,66 @@ pub fn apply(
         spec,
         exe: exe(ctx)?,
     };
-    Ok(if install {
+    let mut r = if install {
         uc.install()?
     } else {
         uc.uninstall()?
+    };
+    if let (true, Some(legacy)) = (default, legacy_file(ctx, spec)) {
+        r.changed |= uc.remove_legacy_file(&legacy)?;
+    }
+    Ok(r)
+}
+
+/// The file an OpenMosh install created for this agent under its old name.
+fn legacy_file(ctx: &Ctx, spec: &AgentSpec) -> Option<JsonSettingsFile> {
+    spec.legacy_rel.map(|rel| JsonSettingsFile {
+        path: base(ctx, spec.base).join(rel),
     })
+}
+
+/// Agents whose hooks still call `openmosh-hook` (or whose OpenMosh-named
+/// file is still there): left over from before the rename.
+pub fn legacy_agents(ctx: &Ctx) -> Vec<&'static AgentSpec> {
+    let Ok(exe) = exe(ctx) else {
+        return Vec::new();
+    };
+    CATALOG
+        .iter()
+        .filter(|spec| {
+            let file = JsonSettingsFile {
+                path: default_file(ctx, spec),
+            };
+            let uc = Integration {
+                file: &file,
+                spec,
+                exe: exe.clone(),
+            };
+            uc.has_legacy().unwrap_or(false)
+                || legacy_file(ctx, spec).is_some_and(|l| {
+                    let Format::Owned(kind) = spec.format else {
+                        return false;
+                    };
+                    l.load()
+                        .ok()
+                        .flatten()
+                        .is_some_and(|t| owned::is_ours(kind, &t))
+                })
+        })
+        .collect()
+}
+
+/// Rewrites every agent's OpenMosh hooks to call this executable: old
+/// entries are replaced in place (never duplicated), OpenMosh-named files
+/// are swapped for the Falconer ones, everything else is left alone.
+pub fn migrate_legacy(ctx: &Ctx) -> Vec<serde_json::Value> {
+    legacy_agents(ctx)
+        .into_iter()
+        .map(|spec| match apply(ctx, spec.id, None, true) {
+            Ok(r) => serde_json::json!({"agent": r.agent, "settings": r.settings, "action": "migrated"}),
+            Err(e) => serde_json::json!({"agent": spec.id.as_str(), "action": "failed", "error": e.message}),
+        })
+        .collect()
 }
 
 pub fn describe(r: &IntegrationResult, install: bool) -> String {

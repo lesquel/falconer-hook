@@ -15,6 +15,10 @@ use super::{agent_command, IntegrationError};
 
 const BEGIN: &str = "# >>> falconer-hook";
 const END: &str = "# <<< falconer-hook";
+/// Markers written before the rename to Falconer; the block they enclose is
+/// still ours and is replaced on install.
+const LEGACY_BEGIN: &str = "# >>> openmosh-hook";
+const LEGACY_END: &str = "# <<< openmosh-hook";
 
 fn yaml_single_quoted(s: &str) -> String {
     format!("'{}'", s.replace('\'', "''"))
@@ -34,12 +38,12 @@ fn split(text: &str) -> Result<Option<(usize, usize)>, IntegrationError> {
     let mut offset = 0;
     for line in text.split_inclusive('\n') {
         let l = line.trim_end();
-        if l.starts_with(BEGIN) {
+        if l.starts_with(BEGIN) || l.starts_with(LEGACY_BEGIN) {
             if start.is_some() {
                 return Err(IntegrationError::BadHooks);
             }
             start = Some(offset);
-        } else if l == END {
+        } else if l == END || l == LEGACY_END {
             let s = start.ok_or(IntegrationError::BadHooks)?;
             return Ok(Some((s, offset + line.len())));
         }

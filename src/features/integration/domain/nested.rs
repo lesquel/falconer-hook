@@ -46,17 +46,45 @@ pub fn install(
             .as_array_mut()
             .ok_or(IntegrationError::BadHooks)?;
         let mut present = false;
+        let mut emptied = false;
         for g in groups.iter_mut() {
             let Some(hs) = g.get_mut("hooks").and_then(Value::as_array_mut) else {
                 continue;
             };
-            for h in hs.iter_mut().filter(|h| is_ours(h, agent)) {
+            let before = hs.len();
+            // Keep the first of ours, repointed; drop any later copy (an
+            // upgrade can leave the old and the new command side by side).
+            hs.retain_mut(|h| {
+                if !is_ours(h, agent) {
+                    return true;
+                }
+                if present {
+                    return false;
+                }
                 present = true;
                 if h.get("command").and_then(Value::as_str) != Some(w.command.as_str()) {
                     h["command"] = Value::String(w.command.clone());
                     changed = true;
                 }
+                if let Some(n) = name {
+                    if h.get("name").is_some_and(|v| v.as_str() != Some(n)) {
+                        h["name"] = json!(n);
+                        changed = true;
+                    }
+                }
+                true
+            });
+            if hs.len() != before {
+                changed = true;
+                emptied |= hs.is_empty();
             }
+        }
+        if emptied {
+            groups.retain(|g| {
+                g.get("hooks")
+                    .and_then(Value::as_array)
+                    .is_none_or(|hs| !hs.is_empty())
+            });
         }
         if !present {
             let mut hook = Map::new();
@@ -257,6 +285,23 @@ mod tests {
             s["hooks"]["AfterAgent"][0],
             json!({"matcher": "*", "hooks": [{"name": "falconer", "type": "command", "command": cmd}]})
         );
+    }
+
+    #[test]
+    fn install_renames_an_openmosh_hook_in_place() {
+        let cmd = "'/b/falconer-hook' emit --source gemini --kind done";
+        let old = "'/b/openmosh-hook' emit --source gemini --kind done";
+        let mut s = json!({"hooks": {"AfterAgent": [{"matcher": "*", "hooks": [{"name": "openmosh", "type": "command", "command": old}]}]}});
+        let h = [Hook {
+            event: "AfterAgent",
+            command: cmd.into(),
+        }];
+        assert!(install(&mut s, "gemini", &h, Some("*"), Some("falconer")).unwrap());
+        assert_eq!(
+            s["hooks"]["AfterAgent"],
+            json!([{"matcher": "*", "hooks": [{"name": "falconer", "type": "command", "command": cmd}]}])
+        );
+        assert!(!install(&mut s, "gemini", &h, Some("*"), Some("falconer")).unwrap());
     }
 
     #[test]

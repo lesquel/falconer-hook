@@ -19,6 +19,8 @@ REPO="lesquel/falconer-hook"
 PUBKEY="RWTiZ1vxHn/jWfqAEjobeqloI9cL9pOA0/in+ayyCgPqT0gYDRKR1Ox5"
 BIN_DIR="${FALCONER_BIN_DIR:-$HOME/.local/bin}"
 CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/falconer"
+# Before the rename to Falconer: `falconer-hook` moves this directory itself.
+LEGACY_CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/openmosh"
 DRY_RUN=0
 MODE=release
 BINARY=""
@@ -334,6 +336,19 @@ install_binary() {
 	run install -m 0755 "$BINARY" "$BIN_DIR/falconer-hook"
 }
 
+# Upgrading from OpenMosh: replace its `openmosh-hook` binary with a link to
+# `falconer-hook`, so phones and agent hooks that still call the old name
+# keep working until they are updated.
+link_legacy() {
+	old="$BIN_DIR/openmosh-hook"
+	if [ -L "$old" ] || [ ! -e "$old" ]; then
+		return
+	fi
+	say "Replacing the OpenMosh binary $old with a link to falconer-hook"
+	run rm -f "$old"
+	run ln -s falconer-hook "$old"
+}
+
 check_sshd() {
 	if have sshd || [ -x /usr/sbin/sshd ] || [ -x /usr/bin/sshd ]; then
 		say "ok: sshd found"
@@ -384,6 +399,10 @@ write_config() {
 		say "ok: keeping existing $file"
 		return
 	fi
+	if [ -e "$LEGACY_CONFIG_DIR" ] && [ ! -e "$CONFIG_DIR" ]; then
+		say "ok: falconer-hook moves your OpenMosh config ($LEGACY_CONFIG_DIR) to $CONFIG_DIR"
+		return
+	fi
 	say "Writing $file (mode 0600)"
 	if [ "$DRY_RUN" -eq 1 ]; then
 		say "+ mkdir -p $CONFIG_DIR && chmod 700 $CONFIG_DIR"
@@ -421,6 +440,7 @@ release) install_release ;;
 source) install_source ;;
 binary) install_binary ;;
 esac
+link_legacy
 
 check_sshd
 check_runtime

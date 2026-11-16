@@ -8,6 +8,8 @@ use crate::shared::domain::error::ErrorCode;
 
 pub const SYSTEMD_UNIT_NAME: &str = "falconer-hook.service";
 pub const LAUNCHD_LABEL: &str = "dev.falconer.hook";
+/// The unit OpenMosh installed before the rename.
+pub const LEGACY_SYSTEMD_UNIT_NAME: &str = crate::shared::config::LEGACY_SYSTEMD_UNIT;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -163,13 +165,40 @@ pub fn uninstall_plan(
     systemctl: &str,
     launchctl: &str,
 ) -> Result<ServicePlan, ServiceError> {
+    uninstall_named(platform, unit_path, SYSTEMD_UNIT_NAME, systemctl, launchctl)
+}
+
+/// Stops and removes the service OpenMosh (the previous name) registered,
+/// so the Falconer one does not run next to it.
+pub fn legacy_uninstall_plan(
+    platform: Platform,
+    unit_path: &Path,
+    systemctl: &str,
+    launchctl: &str,
+) -> Result<ServicePlan, ServiceError> {
+    uninstall_named(
+        platform,
+        unit_path,
+        LEGACY_SYSTEMD_UNIT_NAME,
+        systemctl,
+        launchctl,
+    )
+}
+
+fn uninstall_named(
+    platform: Platform,
+    unit_path: &Path,
+    unit_name: &str,
+    systemctl: &str,
+    launchctl: &str,
+) -> Result<ServicePlan, ServiceError> {
     Ok(match platform {
         Platform::Systemd => ServicePlan {
             platform,
             write: vec![],
             remove: vec![unit_path.to_path_buf()],
             commands: vec![
-                argv(&[systemctl, "--user", "disable", "--now", SYSTEMD_UNIT_NAME]),
+                argv(&[systemctl, "--user", "disable", "--now", unit_name]),
                 argv(&[systemctl, "--user", "daemon-reload"]),
             ],
         },
@@ -286,6 +315,23 @@ mod tests {
                 "-w",
                 "/h/Library/LaunchAgents/dev.falconer.hook.plist"
             ])]
+        );
+    }
+
+    #[test]
+    fn legacy_plan_stops_the_openmosh_unit() {
+        let unit = Path::new("/h/.config/systemd/user/openmosh-hook.service");
+        let p = legacy_uninstall_plan(Platform::Systemd, unit, "systemctl", "launchctl").unwrap();
+        assert_eq!(p.remove, vec![unit.to_path_buf()]);
+        assert_eq!(
+            p.commands[0],
+            argv(&[
+                "systemctl",
+                "--user",
+                "disable",
+                "--now",
+                "openmosh-hook.service"
+            ])
         );
     }
 }

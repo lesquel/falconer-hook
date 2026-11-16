@@ -75,6 +75,28 @@ pub fn setup(ctx: &Ctx, yes: bool, no_service: bool, json: bool) -> Result<Reply
         config_file.display()
     );
 
+    // Upgrading from OpenMosh: the directories were moved at startup; its
+    // agent hooks are rewritten here and its service replaced below.
+    for (old, new) in &ctx.migrated_dirs {
+        let _ = writeln!(human, "Moved {} to {}", old.display(), new.display());
+    }
+    let migrated = integrations::migrate_legacy(ctx);
+    for m in &migrated {
+        let _ = writeln!(
+            human,
+            "Moved the {} hooks from openmosh-hook to falconer-hook{}",
+            m["agent"].as_str().unwrap_or_default(),
+            m["error"]
+                .as_str()
+                .map(|e| format!(" (failed: {e})"))
+                .unwrap_or_default()
+        );
+    }
+    let legacy = json!({
+        "moved_dirs": ctx.migrated_dirs.iter().map(|(o, n)| json!({"from": o, "to": n})).collect::<Vec<_>>(),
+        "integrations": migrated,
+    });
+
     let service = if no_service {
         json!({"skipped": true})
     } else {
@@ -199,6 +221,7 @@ pub fn setup(ctx: &Ctx, yes: bool, no_service: bool, json: bool) -> Result<Reply
         "prerequisites": {"agent_runtime": runtime, "ssh": ssh},
         "doctor": doctor.data,
         "pairing": pairing,
+        "legacy": legacy,
         "next": "falconer-hook pair",
     });
     Ok(Reply::new(&data, human))

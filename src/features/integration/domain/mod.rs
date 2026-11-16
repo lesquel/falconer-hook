@@ -4,7 +4,9 @@
 //! Every edit preserves unrelated content, is idempotent, repoints our
 //! commands when the executable moved, and refuses unexpected shapes
 //! instead of guessing. A command is "ours" when it names `falconer-hook`
-//! and contains ` emit --source <agent>`.
+//! (or `openmosh-hook`, the name before the rename, so an upgrade rewrites
+//! those entries instead of adding a second hook) and contains
+//! ` emit --source <agent>`.
 
 pub mod aider;
 pub mod catalog;
@@ -59,10 +61,13 @@ pub fn agent_command(exe: &str, agent: &str, kind: Option<&str>) -> String {
     c
 }
 
+/// Executable name before the rename to Falconer.
+pub const LEGACY_EXE_NAME: &str = "openmosh-hook";
+
 /// Whether `command` is one of our hook commands for `agent`.
 pub fn is_our_command(command: &str, agent: &str) -> bool {
     let m = marker(agent);
-    command.contains("falconer-hook")
+    (command.contains("falconer-hook") || command.contains(LEGACY_EXE_NAME))
         && (command.ends_with(&m) || command.contains(&format!("{m} ")))
 }
 

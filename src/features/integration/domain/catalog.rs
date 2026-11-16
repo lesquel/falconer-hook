@@ -76,6 +76,9 @@ pub struct AgentSpec {
     /// Default file edited by `integration install`.
     pub base: Base,
     pub rel: &'static str,
+    /// File (same base) an OpenMosh install created for this agent before
+    /// the rename; removed when ours, on install and uninstall.
+    pub legacy_rel: Option<&'static str>,
     /// Executables whose presence on `PATH` means the agent is installed.
     pub bins: &'static [&'static str],
     /// Paths whose existence means the agent is installed.
@@ -92,6 +95,7 @@ pub const CATALOG: &[AgentSpec] = &[
         name: "Claude Code",
         base: Base::Home,
         rel: ".claude/settings.json",
+        legacy_rel: None,
         bins: &["claude"],
         detect: &[(Base::Home, ".claude")],
         format: Format::Nested {
@@ -107,6 +111,7 @@ pub const CATALOG: &[AgentSpec] = &[
         name: "OpenAI Codex CLI",
         base: Base::Home,
         rel: ".codex/hooks.json",
+        legacy_rel: None,
         bins: &["codex"],
         detect: &[(Base::Home, ".codex")],
         format: Format::Nested {
@@ -125,6 +130,7 @@ pub const CATALOG: &[AgentSpec] = &[
         name: "Gemini CLI",
         base: Base::Home,
         rel: ".gemini/settings.json",
+        legacy_rel: None,
         bins: &["gemini"],
         detect: &[(Base::Home, ".gemini")],
         format: Format::Nested {
@@ -143,6 +149,7 @@ pub const CATALOG: &[AgentSpec] = &[
         name: "Cursor",
         base: Base::Home,
         rel: ".cursor/hooks.json",
+        legacy_rel: None,
         bins: &["cursor-agent", "cursor"],
         detect: &[(Base::Home, ".cursor")],
         format: Format::Flat {
@@ -156,6 +163,7 @@ pub const CATALOG: &[AgentSpec] = &[
         name: "GitHub Copilot CLI",
         base: Base::Home,
         rel: ".copilot/hooks/falconer.json",
+        legacy_rel: Some(".copilot/hooks/openmosh.json"),
         bins: &["copilot"],
         detect: &[(Base::Home, ".copilot")],
         format: Format::Owned(OwnedKind::Copilot),
@@ -167,6 +175,7 @@ pub const CATALOG: &[AgentSpec] = &[
         name: "Kiro CLI",
         base: Base::Home,
         rel: ".kiro/hooks/falconer.json",
+        legacy_rel: Some(".kiro/hooks/openmosh.json"),
         bins: &["kiro-cli"],
         detect: &[(Base::Home, ".kiro")],
         format: Format::Owned(OwnedKind::Kiro),
@@ -178,6 +187,7 @@ pub const CATALOG: &[AgentSpec] = &[
         name: "OpenCode",
         base: Base::XdgConfig,
         rel: "opencode/plugins/falconer.js",
+        legacy_rel: Some("opencode/plugins/openmosh.js"),
         bins: &["opencode"],
         detect: &[(Base::XdgConfig, "opencode")],
         format: Format::Owned(OwnedKind::Opencode),
@@ -189,6 +199,7 @@ pub const CATALOG: &[AgentSpec] = &[
         name: "Aider",
         base: Base::Home,
         rel: ".aider.conf.yml",
+        legacy_rel: None,
         bins: &["aider"],
         detect: &[(Base::Home, ".aider.conf.yml")],
         format: Format::AiderBlock,
