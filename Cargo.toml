@@ -4,6 +4,7 @@ version = "0.2.0"
 edition = "2021"
 rust-version = "1.89"
 description = "Host-side daemon and CLI for Falconer: agent events, encrypted push, approvals over SSH"
+homepage = "https://falconer-web.vercel.app/"
 repository = "https://github.com/lesquel/falconer-hook"
 license = "Apache-2.0"
 authors = ["lesquel"]
@@ -20,12 +21,14 @@ chacha20poly1305 = "0.10"
 clap = { version = "4", features = ["derive"] }
 ctrlc = { version = "3", features = ["termination"] }
 hkdf = "0.12"
-p256 = { version = "0.14", features = ["ecdh", "ecdsa", "getrandom"] }
+# PEM/PKCS#8 encoding is never used: keys travel as raw SEC1/b64u.
+p256 = { version = "0.14", default-features = false, features = ["ecdh", "ecdsa", "getrandom", "precomputed-tables", "std"] }
 qrcode = { version = "0.14", default-features = false }
 rand_core = { version = "0.6", features = ["getrandom"] }
 ratatui = { version = "0.30", default-features = false, features = ["crossterm"] }
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
-rusqlite = { version = "0.41", features = ["bundled"] }
+# No `cache`: statements are prepared once per call, never `prepare_cached`.
+rusqlite = { version = "0.41", default-features = false, features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 sha2 = "0.10"
@@ -40,6 +43,10 @@ zeroize = { version = "1", features = ["derive"] }
 tempfile = "3"
 
 [profile.release]
+# `s`: 31% smaller binary and lower peak RSS than `3` with one-shot latency
+# within noise (measured on `version`, `inbox list`, `herdr snapshot`); the
+# hot work is process start-up and I/O, not computation. `z` was slower.
+opt-level = "s"
 lto = true
 codegen-units = 1
 strip = true
