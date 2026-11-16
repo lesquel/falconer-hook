@@ -45,13 +45,23 @@ pub fn install(
             .as_array_mut()
             .ok_or(IntegrationError::BadHooks)?;
         let mut present = false;
-        for e in entries.iter_mut().filter(|e| is_ours(e, agent)) {
+        let before = entries.len();
+        // Keep the first of ours, repointed; drop any later copy.
+        entries.retain_mut(|e| {
+            if !is_ours(e, agent) {
+                return true;
+            }
+            if present {
+                return false;
+            }
             present = true;
             if e.get("command").and_then(Value::as_str) != Some(w.command.as_str()) {
                 e["command"] = Value::String(w.command.clone());
                 changed = true;
             }
-        }
+            true
+        });
+        changed |= entries.len() != before;
         if !present {
             entries.push(json!({"command": w.command}));
             changed = true;
@@ -109,13 +119,24 @@ pub fn installed(settings: &Value, agent: &str) -> Result<bool, IntegrationError
 mod tests {
     use super::*;
 
-    const CMD: &str = "'/b/openmosh-hook' emit --source cursor --kind done";
+    const CMD: &str = "'/b/falconer-hook' emit --source cursor --kind done";
 
     fn stop() -> Vec<Hook<'static>> {
         vec![Hook {
             event: "stop",
             command: CMD.into(),
         }]
+    }
+
+    #[test]
+    fn install_replaces_openmosh_entries_and_drops_copies() {
+        let old = "'/b/openmosh-hook' emit --source cursor --kind done";
+        let mut s = json!({"version": 1, "hooks": {"stop": [{"command": old}, {"command": "say done"}, {"command": CMD}]}});
+        assert!(install(&mut s, "cursor", &stop()).unwrap());
+        assert_eq!(
+            s["hooks"]["stop"],
+            json!([{"command": CMD}, {"command": "say done"}])
+        );
     }
 
     #[test]

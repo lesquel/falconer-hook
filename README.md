@@ -1,11 +1,11 @@
-# openmosh-hook
+# falconer-hook
 
-Host-side daemon and CLI for [OpenMosh](https://github.com/lesquel/OpenMosh). It watches your AI
+Host-side daemon and CLI for [Falconer](https://github.com/lesquel/falconer). It watches your AI
 agents (through Herdr or tmux), keeps an inbox of events, sends **end-to-end encrypted** push
 notifications through ntfy/UnifiedPush, and executes approvals sent from your phone over SSH.
 
 It opens **no permanent network port**. The only listener is the one-shot pairing listener of
-`openmosh-hook pair`, bound to the Tailscale address for at most 5 minutes.
+`falconer-hook pair`, bound to the Tailscale address for at most 5 minutes.
 
 > Status: v0.2.0. Linux (x86_64, aarch64) and macOS (Intel, Apple Silicon).
 
@@ -19,37 +19,37 @@ checks in `respond`, revoke that ends the phone's live sessions, [`usage`](#usag
 ## Install
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/lesquel/openmosh-hook/main/install.sh | sh
-openmosh-hook setup        # config, service, agent hooks, missing tmux/SSH, doctor, pairing
+curl -fsSL https://raw.githubusercontent.com/lesquel/falconer-hook/main/install.sh | sh
+falconer-hook setup        # config, service, agent hooks, missing tmux/SSH, doctor, pairing
 ```
 
-The installer downloads the release binary for your platform (`openmosh-hook-<target>.tar.gz`
+The installer downloads the release binary for your platform (`falconer-hook-<target>.tar.gz`
 for `x86_64`/`aarch64` Linux (static musl) and macOS) and checks it against the release's
 `SHA256SUMS`, after verifying `SHA256SUMS.minisig` with the pinned release key. The signature
 is required: install [minisign](https://jedisct1.github.io/minisign/) (`apt`/`dnf`/`pacman`/
 `brew install minisign`) or `rsign` (`cargo install rsign2 --locked`) first; without either the
 installer stops before downloading and says how to get one (`--insecure-no-signature` checks the
 checksums only, not recommended). The signature's trusted comment must be exactly
-`openmosh-hook <tag>` for the release being installed (`latest` is resolved to its tag first),
+`falconer-hook <tag>` for the release being installed (`latest` is resolved to its tag first),
 so an older or different release cannot be served in its place. **While the repository is private**, anonymous downloads fail: install the
 [GitHub CLI](https://cli.github.com), run `gh auth login`, and the installer uses
-`gh release download` instead (set `OPENMOSH_NO_GH=1` to never use it). From a clone you can
+`gh release download` instead (set `FALCONER_NO_GH=1` to never use it). From a clone you can
 also run `sh install.sh --from-source` or `--binary <path>`.
 
 | Option | Effect |
 |---|---|
 | `--dry-run` | Print every step, change nothing |
-| `--from-source` | `cargo install --git https://github.com/lesquel/openmosh-hook --locked`, with `--tag <tag>` when `--version` is given (else the default branch); the repository is private for now, so this uses your git credentials |
+| `--from-source` | `cargo install --git https://github.com/lesquel/falconer-hook --locked`, with `--tag <tag>` when `--version` is given (else the default branch); the repository is private for now, so this uses your git credentials |
 | `--binary <path>` | Install a binary you already built |
 | `--version <tag>` | Release to download, `vX.Y.Z` or a pre-release `vX.Y.Z-rc.N` (default: the latest stable release), with `gh` or curl/wget |
 | `--yes` | Accept the offers to install Herdr / Tailscale with their official installers |
-| `--no-service` | Skip `openmosh-hook service install` |
+| `--no-service` | Skip `falconer-hook service install` |
 | `--insecure-no-signature` | Skip the signature check (checksums only); prints a warning. Not recommended |
 | `--require-signature` | Accepted for compatibility: the signature is always required |
 
 The installer puts the binary in `~/.local/bin`, checks `sshd`, Herdr or tmux and Tailscale,
-writes `~/.config/openmosh/config.toml` (`0600`), registers the user service and runs
-`openmosh-hook doctor`. It prints each command before running it and never calls `sudo` itself.
+writes `~/.config/falconer/config.toml` (`0600`), registers the user service and runs
+`falconer-hook doctor`. It prints each command before running it and never calls `sudo` itself.
 
 ### Verifying a release by hand
 
@@ -60,7 +60,7 @@ Releases are signed with minisign. The public key is [`minisign.pub`](./minisign
 RWTiZ1vxHn/jWfqAEjobeqloI9cL9pOA0/in+ayyCgPqT0gYDRKR1Ox5
 ```
 
-Download `openmosh-hook-<target>.tar.gz`, `SHA256SUMS` and `SHA256SUMS.minisig` from the
+Download `falconer-hook-<target>.tar.gz`, `SHA256SUMS` and `SHA256SUMS.minisig` from the
 release, then:
 
 ```sh
@@ -69,11 +69,11 @@ minisign -Vm SHA256SUMS -P RWTiZ1vxHn/jWfqAEjobeqloI9cL9pOA0/in+ayyCgPqT0gYDRKR1
 sha256sum --ignore-missing -c SHA256SUMS     # macOS: shasum -a 256 --ignore-missing -c SHA256SUMS
 ```
 
-Check that the trusted comment minisign prints is `openmosh-hook <the tag you downloaded>`.
+Check that the trusted comment minisign prints is `falconer-hook <the tag you downloaded>`.
 
 ### Setup and uninstall
 
-`openmosh-hook setup [--yes] [--no-service] [--json]` writes the default config if there is
+`falconer-hook setup [--yes] [--no-service] [--json]` writes the default config if there is
 none, installs the user service, offers the integration of every [detected agent](#agents)
 (asks on a terminal; `--yes` installs them all; with `--json` and no `--yes` it only lists
 them), fixes what is missing, runs `doctor` and offers to pair. Running it again is safe.
@@ -91,31 +91,53 @@ What `setup` fixes, each time showing the exact command first:
   run it (macOS `sudo systemsetup -setremotelogin on`, Linux `sudo systemctl enable --now ssh`
   or `sshd`).
 - **No phone paired** and every check passed: asks `Pair a phone now? [Y/n]` and runs
-  `openmosh-hook pair`.
+  `falconer-hook pair`.
 
 `--yes` runs the install and SSH commands without asking but never starts pairing (a person
 has to scan the QR code). Without a terminal, or with `--json`, nothing is run: the commands
 are printed (JSON: `prerequisites.agent_runtime` with the `runtime` installed, `prerequisites.ssh` and `pairing`).
 
-`openmosh-hook uninstall [--all] [--dry-run] [--yes] [--json]` removes everything
-openmosh-hook created, and nothing else:
+`falconer-hook uninstall [--all] [--dry-run] [--yes] [--json]` removes everything
+falconer-hook created, and nothing else:
 
 1. the user service (stopped and disabled first),
 2. every agent integration it installed (only its own hooks; your other hooks stay),
 3. the `authorized_keys` lines tagged `openmosh:` (paired phones; your own keys stay),
-4. `$XDG_CONFIG_HOME/openmosh` and `$XDG_STATE_HOME/openmosh` (config, devices, events, host key),
-5. with `--all`, the `openmosh-hook` binary that is running.
+4. `$XDG_CONFIG_HOME/falconer` and `$XDG_STATE_HOME/falconer` (config, devices, events, host key),
+5. with `--all`, the `falconer-hook` binary that is running.
 
-The sshd drop-in written by `harden-ssh` (`/etc/ssh/sshd_config.d/10-openmosh.conf`) needs root
+The sshd drop-in written by `harden-ssh` (`/etc/ssh/sshd_config.d/10-falconer.conf`) needs root
 to remove and removing it turns password logins back on, so it is kept and listed in the plan
 (`kept` in `--json`) with the command to remove it yourself.
 
 Without `--yes` it prints the plan and asks on a terminal; without a terminal (or with `--json`)
 it refuses with `confirmation_required`. `--dry-run` prints the plan and changes nothing.
 
+### Upgrading from OpenMosh
+
+falconer-hook was called `openmosh-hook`. On a machine that still has the old install:
+
+- Every `falconer-hook` command first renames `$XDG_CONFIG_HOME/openmosh` and
+  `$XDG_STATE_HOME/openmosh` to their `falconer` names when the `falconer` directory does not
+  exist yet, so paired phones, the host key and the inbox are kept. An existing `falconer`
+  directory is never touched and nothing is deleted.
+- `install.sh` replaces an `openmosh-hook` binary in the install directory with a symlink
+  `openmosh-hook -> falconer-hook`, so apps and hooks that still call the old name keep working.
+- `service install` (also run by `install.sh` and `setup`) stops, disables and removes
+  `openmosh-hook.service` (macOS: `dev.openmosh.hook.plist`) before installing the new service.
+- `setup` rewrites agent hooks that call `openmosh-hook` to call `falconer-hook` in place (no
+  second copy; other hooks stay) and replaces the `openmosh.json`/`openmosh.js` files it created
+  for Copilot, Kiro and OpenCode with their `falconer` names (JSON: `legacy`).
+- `doctor` warns (`legacy`) about anything left: the old service, hooks that still call
+  `openmosh-hook`, or an `openmosh` directory kept because a `falconer` one already exists.
+
+The wire labels (`openmosh/pair/v1`, `openmosh/push/v1`, `openmosh://pair`, `openmosh:///inbox`)
+and the `openmosh:` tag on paired-phone `authorized_keys` lines keep their names, so phones
+paired before the rename keep working.
+
 ## TUI
 
-`openmosh-hook` with no command on a terminal (or `openmosh-hook tui`) opens a terminal UI over
+`falconer-hook` with no command on a terminal (or `falconer-hook tui`) opens a terminal UI over
 the same commands as the CLI. Without a terminal, no command prints the help as before.
 
 | Screen | What it does |
@@ -123,7 +145,7 @@ the same commands as the CLI. Without a terminal, no command prints the help as 
 | 1 Status | `doctor` (config, Tailscale, Herdr/tmux, permissions, sshd, devices, service) and the version; `r` refreshes |
 | 2 Agents & inbox | Agents with their state and the inbox, newest first; `a` allow, `d` deny, `t` reply with text to the selected pending event, each after a `y` confirmation |
 | 3 Devices | Paired devices, `(endpoint stale)` / `(no notifications)` marks; `x` revokes after confirmation |
-| 4 Pair | `Enter` suspends the TUI and runs `openmosh-hook pair` in the terminal (`i` toggles `--invert`); Enter returns |
+| 4 Pair | `Enter` suspends the TUI and runs `falconer-hook pair` in the terminal (`i` toggles `--invert`); Enter returns |
 | 5 Integrations | Every supported agent, detected or not, installed or not; `i` installs, `u` uninstalls after confirmation |
 | 6 Setup | `s` runs `setup`, `a` runs `setup --yes` (also installs every detected agent's integration), after confirmation |
 | 7 Uninstall | Shows the `uninstall --dry-run` plan; `a` toggles `--all`; `Enter` asks you to type `uninstall` before anything is removed |
@@ -136,33 +158,33 @@ else (it would recreate state); quit with `q`.
 
 | Command | Purpose |
 |---|---|
-| `openmosh-hook serve` | Daemon (systemd user service / launchd agent): poll Herdr every second while an agent works or waits (every 5 s when all are idle), record `blocked` → `approval_required` and `done` → `done`, publish encrypted pushes |
-| `openmosh-hook emit --source <name> [--kind <kind>] [--json]` | Record an event from an agent hook; the hook JSON comes on stdin. The pane is taken from `$HERDR_PANE_ID` (when `$HERDR_ENV=1`) or `$TMUX_PANE`. `--kind approval_required\|question\|done\|notification` fixes the kind for agents whose payload does not say it; the payload is then optional (only its message is kept, and a terminal on stdin is not read). `notification` becomes `approval_required` when the payload is about a permission, else `question` |
-| `openmosh-hook pair [--alias <name>] [--timeout <secs>] [--invert] [--uri] [--yes]` | QR pairing (see below). Asks `Pair "<name>" from <node> (<ip>)? [y/N]` before authorizing the phone; `--yes` skips that (required without a terminal). `--invert` renders dark-on-light; `--uri` also prints the pairing URI, which carries the one-time token |
-| `openmosh-hook pair-ssh --json` | Pairing over an existing SSH session; request `{"name","ppk","endpoint"}` on stdin, returns `{"device_id","alias","hpk"}` |
-| `openmosh-hook sessions list --json` | Herdr and tmux sessions |
-| `openmosh-hook agents list --json` | Agents with their state |
-| `openmosh-hook inbox list --json [--since <seq>] [--limit <n>]` | Events with `seq > since` (default limit 100, max 500) |
-| `openmosh-hook respond <event-id> --action allow\|deny\|text [--text <msg>] --json` | Deliver the answer into the agent's pane and push `resolved` to every device. Text answers are sent as one line (newlines become spaces, control characters are removed), then Enter |
-| `openmosh-hook devices list --json` | Paired devices |
-| `openmosh-hook devices revoke <id> [--json]` | Remove the device's `authorized_keys` line and its record, end its live SSH sessions (this user's sessions whose `SSH_CONNECTION` peer is one of the phone's pinned addresses, found in `/proc`; never the session running the command; devices paired before addresses were pinned cannot be told apart and get `sessions_ended: null`), and print a lost-phone checklist (`checklist` in `--json`) |
-| `openmosh-hook devices set-endpoint <id> <url> [--json]` | Rotate the push endpoint (clears `endpoint_stale`); also turns notifications on for a device paired without one |
-| `openmosh-hook devices set-webpush <id> [--json]` | Register a [Web Push](#web-push-ios-and-android-browsers) subscription: one JSON object on stdin (the PWA's output, forwarded by the app) |
-| `openmosh-hook devices clear-webpush <id> [--json]` | Remove the device's Web Push subscription |
-| `openmosh-hook integration install\|uninstall <agent> [--settings <path>] [--json]` | Add/remove the [agent's hooks](#agents) calling `emit --source <agent>`; `--settings` overrides the default file |
-| `openmosh-hook integration list [--json]` | Every supported agent: detected on this machine (binary on `PATH` or config dir present), integration installed, file, docs link |
-| `openmosh-hook setup [--yes] [--no-service] [--json]` | First-time [setup](#setup-and-uninstall) |
-| `openmosh-hook uninstall [--all] [--dry-run] [--yes] [--json]` | Remove everything openmosh-hook created ([details](#setup-and-uninstall)) |
-| `openmosh-hook usage [--days <n>] [--json]` | Token [usage](#usage) per agent, project and model over the last `n` calendar days (1-31, default 7), from the agents' own local logs |
-| `openmosh-hook doctor [--json]` | Check Tailscale, Herdr/tmux, permissions, sshd host key, sshd password logins (`sshd -G -C user=$USER,host=localhost,addr=127.0.0.1`, so `Match` blocks count; warns when password or keyboard-interactive login is on), that sshd's `AuthorizedKeysFile` includes `~/.ssh/authorized_keys`, that no untagged key was added below the first paired phone, devices, keymaps, service |
-| `openmosh-hook harden-ssh [--dry-run] [--yes] [--json]` | Make sshd accept SSH keys only: pipes a fixed drop-in into `/usr/bin/sudo /usr/bin/tee /etc/ssh/sshd_config.d/10-openmosh.conf` (absolute paths, no staged file), sets it `0644`, validates it with `sshd -t` (removed again on failure) and reloads sshd. Asks before changing anything; also `s` on the TUI Status screen |
-| `openmosh-hook service install\|uninstall [--dry-run] [--json]` | Register/remove the user service. The systemd unit runs with `UMask=0077`, `NoNewPrivileges`, `SystemCallFilter=@system-service`, `RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6`, `RestrictNamespaces`, `RestrictRealtime`, `RestrictSUIDSGID` and `LockPersonality`. Mount sandboxing (`ProtectSystem=`, `PrivateTmp=`) is not used: user services need unprivileged user namespaces for it and would not start where those are off |
-| `openmosh-hook attach herdr [--session <name>]` | Run the Herdr client (`herdr` or `herdr session attach <name>`, from `[bins] herdr`) with [focus mirroring](#mirroring); exits with Herdr's status code. Session names are `[A-Za-z0-9._-]`, not starting with `-`; the mirror only uses a Herdr socket owned by the owner of `$HOME` |
-| `openmosh-hook herdr snapshot [--session <name>] [--since <rev>] [--wait-ms <n>] --json` | [Navigator](#herdr-navigator) snapshot: `{"rev","unchanged":false,"workspaces":[{"id","label","focused"}],"tabs":[{"id","workspace_id","label","number","agent_status","pane_count","focused"}],"panes":[{"id","tab_id","workspace_id","agent","agent_status","focused"}]}`; with `--since` equal to the current `rev` it waits up to `--wait-ms` (max 20000) for a change and answers `{"rev","unchanged":true}` when none came |
-| `openmosh-hook herdr read --pane <id> [--session <name>] [--since <rev>] [--wait-ms <n>] [--lines <n>] --json` | The pane's own text, last `--lines` lines (default 200, max 2000), escape sequences and control characters removed: `{"rev","unchanged","agent","agent_status","lines":[…]}`; long-polls like `snapshot` |
-| `openmosh-hook herdr action [--session <name>] --json` | Run one allowlisted [navigator action](#herdr-navigator); the request `{"op":…}` comes on stdin, the answer is `{"op","id"?}` |
-| `openmosh-hook tui` | The [terminal UI](#tui) (also `openmosh-hook` alone on a terminal) |
-| `openmosh-hook version [--json]` | Version and wire protocol versions (`protocol.herdr` is the navigator's) |
+| `falconer-hook serve` | Daemon (systemd user service / launchd agent): poll Herdr every second while an agent works or waits (every 5 s when all are idle), record `blocked` → `approval_required` and `done` → `done`, publish encrypted pushes |
+| `falconer-hook emit --source <name> [--kind <kind>] [--json]` | Record an event from an agent hook; the hook JSON comes on stdin. The pane is taken from `$HERDR_PANE_ID` (when `$HERDR_ENV=1`) or `$TMUX_PANE`. `--kind approval_required\|question\|done\|notification` fixes the kind for agents whose payload does not say it; the payload is then optional (only its message is kept, and a terminal on stdin is not read). `notification` becomes `approval_required` when the payload is about a permission, else `question` |
+| `falconer-hook pair [--alias <name>] [--timeout <secs>] [--invert] [--uri] [--yes]` | QR pairing (see below). Asks `Pair "<name>" from <node> (<ip>)? [y/N]` before authorizing the phone; `--yes` skips that (required without a terminal). `--invert` renders dark-on-light; `--uri` also prints the pairing URI, which carries the one-time token |
+| `falconer-hook pair-ssh --json` | Pairing over an existing SSH session; request `{"name","ppk","endpoint"}` on stdin, returns `{"device_id","alias","hpk"}` |
+| `falconer-hook sessions list --json` | Herdr and tmux sessions |
+| `falconer-hook agents list --json` | Agents with their state |
+| `falconer-hook inbox list --json [--since <seq>] [--limit <n>]` | Events with `seq > since` (default limit 100, max 500) |
+| `falconer-hook respond <event-id> --action allow\|deny\|text [--text <msg>] --json` | Deliver the answer into the agent's pane and push `resolved` to every device. Text answers are sent as one line (newlines become spaces, control characters are removed), then Enter |
+| `falconer-hook devices list --json` | Paired devices |
+| `falconer-hook devices revoke <id> [--json]` | Remove the device's `authorized_keys` line and its record, end its live SSH sessions (this user's sessions whose `SSH_CONNECTION` peer is one of the phone's pinned addresses, found in `/proc`; never the session running the command; devices paired before addresses were pinned cannot be told apart and get `sessions_ended: null`), and print a lost-phone checklist (`checklist` in `--json`) |
+| `falconer-hook devices set-endpoint <id> <url> [--json]` | Rotate the push endpoint (clears `endpoint_stale`); also turns notifications on for a device paired without one |
+| `falconer-hook devices set-webpush <id> [--json]` | Register a [Web Push](#web-push-ios-and-android-browsers) subscription: one JSON object on stdin (the PWA's output, forwarded by the app) |
+| `falconer-hook devices clear-webpush <id> [--json]` | Remove the device's Web Push subscription |
+| `falconer-hook integration install\|uninstall <agent> [--settings <path>] [--json]` | Add/remove the [agent's hooks](#agents) calling `emit --source <agent>`; `--settings` overrides the default file |
+| `falconer-hook integration list [--json]` | Every supported agent: detected on this machine (binary on `PATH` or config dir present), integration installed, file, docs link |
+| `falconer-hook setup [--yes] [--no-service] [--json]` | First-time [setup](#setup-and-uninstall) |
+| `falconer-hook uninstall [--all] [--dry-run] [--yes] [--json]` | Remove everything falconer-hook created ([details](#setup-and-uninstall)) |
+| `falconer-hook usage [--days <n>] [--json]` | Token [usage](#usage) per agent, project and model over the last `n` calendar days (1-31, default 7), from the agents' own local logs |
+| `falconer-hook doctor [--json]` | Check Tailscale, Herdr/tmux, permissions, sshd host key, sshd password logins (`sshd -G -C user=$USER,host=localhost,addr=127.0.0.1`, so `Match` blocks count; warns when password or keyboard-interactive login is on), that sshd's `AuthorizedKeysFile` includes `~/.ssh/authorized_keys`, that no untagged key was added below the first paired phone, devices, keymaps, service |
+| `falconer-hook harden-ssh [--dry-run] [--yes] [--json]` | Make sshd accept SSH keys only: pipes a fixed drop-in into `/usr/bin/sudo /usr/bin/tee /etc/ssh/sshd_config.d/10-falconer.conf` (absolute paths, no staged file), sets it `0644`, validates it with `sshd -t` (removed again on failure) and reloads sshd. Asks before changing anything; also `s` on the TUI Status screen |
+| `falconer-hook service install\|uninstall [--dry-run] [--json]` | Register/remove the user service. The systemd unit runs with `UMask=0077`, `NoNewPrivileges`, `SystemCallFilter=@system-service`, `RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6`, `RestrictNamespaces`, `RestrictRealtime`, `RestrictSUIDSGID` and `LockPersonality`. Mount sandboxing (`ProtectSystem=`, `PrivateTmp=`) is not used: user services need unprivileged user namespaces for it and would not start where those are off |
+| `falconer-hook attach herdr [--session <name>]` | Run the Herdr client (`herdr` or `herdr session attach <name>`, from `[bins] herdr`) with [focus mirroring](#mirroring); exits with Herdr's status code. Session names are `[A-Za-z0-9._-]`, not starting with `-`; the mirror only uses a Herdr socket owned by the owner of `$HOME` |
+| `falconer-hook herdr snapshot [--session <name>] [--since <rev>] [--wait-ms <n>] --json` | [Navigator](#herdr-navigator) snapshot: `{"rev","unchanged":false,"workspaces":[{"id","label","focused"}],"tabs":[{"id","workspace_id","label","number","agent_status","pane_count","focused"}],"panes":[{"id","tab_id","workspace_id","agent","agent_status","focused"}]}`; with `--since` equal to the current `rev` it waits up to `--wait-ms` (max 20000) for a change and answers `{"rev","unchanged":true}` when none came |
+| `falconer-hook herdr read --pane <id> [--session <name>] [--since <rev>] [--wait-ms <n>] [--lines <n>] --json` | The pane's own text, last `--lines` lines (default 200, max 2000), escape sequences and control characters removed: `{"rev","unchanged","agent","agent_status","lines":[…]}`; long-polls like `snapshot` |
+| `falconer-hook herdr action [--session <name>] --json` | Run one allowlisted [navigator action](#herdr-navigator); the request `{"op":…}` comes on stdin, the answer is `{"op","id"?}` |
+| `falconer-hook tui` | The [terminal UI](#tui) (also `falconer-hook` alone on a terminal) |
+| `falconer-hook version [--json]` | Version and wire protocol versions (`protocol.herdr` is the navigator's) |
 
 Ids are b64url and may start with `-`; positional id arguments accept that.
 
@@ -184,7 +206,7 @@ Exit code is `0` on success and `1` on error. Messages never contain secrets. Er
 
 ## Usage
 
-`openmosh-hook usage` reads only what the agents already wrote on this machine; it never calls a
+`falconer-hook usage` reads only what the agents already wrote on this machine; it never calls a
 provider API and never reads credentials.
 
 | Agent | Source | Plan limits |
@@ -210,7 +232,7 @@ printed.
 
 ## Pairing
 
-**QR (primary).** `openmosh-hook pair` refuses to run unless Tailscale is up and this host is a
+**QR (primary).** `falconer-hook pair` refuses to run unless Tailscale is up and this host is a
 node owned by your user (a tagged node is refused with `tailscale_tagged`). It binds a listener
 to the host's Tailscale IPv4 on an ephemeral port and shows a small QR (`openmosh://pair?v=3&i=…&k=…&p=…&t=…`)
 with the host's Tailscale IPv4, the listener port, its X25519 public key and a 16-byte one-time
@@ -257,7 +279,7 @@ private (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, `fc00::/7`), link-loca
 (`100.64.0.0/10`, `fd7a:115c:a1e0::/48`) are allowed. Names are resolved by the push client
 itself and every forbidden address it returns is dropped, so a name cannot be re-pointed at the
 LAN or the host (DNS rebinding); a name with no allowed address is not contacted. Pushes ignore
-proxy environment variables, send `User-Agent: openmosh`, never follow redirects, and `404`/`410`
+proxy environment variables, send `User-Agent: falconer`, never follow redirects, and `404`/`410`
 mark the device `endpoint_stale` (only while its endpoint is still the one that failed: one set
 meanwhile with `devices set-endpoint` stays active). Push plaintexts are padded with spaces to
 512, 1024 or 2048 bytes before encryption, so the ciphertext size says little about the content
@@ -291,11 +313,11 @@ A device can receive pushes over two independent transports, and may use both: t
 [RFC 8291](https://www.rfc-editor.org/rfc/rfc8291) `aes128gcm`,
 [RFC 8292](https://www.rfc-editor.org/rfc/rfc8292) VAPID), sent straight to the browser's push
 service (Apple, Google or Mozilla). The PWA that creates the subscription lives in
-[openmosh-web](https://github.com/lesquel/openmosh-web); the app forwards what it produces:
+[falconer-web](https://github.com/lesquel/falconer-web); the app forwards what it produces:
 
 ```sh
-openmosh-hook devices set-webpush <id> --json < subscription.json
-openmosh-hook devices clear-webpush <id> --json
+falconer-hook devices set-webpush <id> --json < subscription.json
+falconer-hook devices clear-webpush <id> --json
 ```
 
 `subscription.json` is one object, unknown fields refused:
@@ -306,8 +328,8 @@ is stored in `devices.toml` (`0600`) and never printed or logged; `devices list`
 
 The notification is displayed by the browser on the lock screen, so its payload is generic and
 carries no host, agent, command, summary or pane: only a title by kind ("An agent needs
-approval", "An agent has a question", "An agent finished", otherwise "OpenMosh") and "Open
-OpenMosh to respond.". The message uses `TTL: 900` (an approval is stale after 15 minutes) and
+approval", "An agent has a question", "An agent finished", otherwise "Falconer") and "Open
+Falconer to respond.". The message uses `TTL: 900` (an approval is stale after 15 minutes) and
 `Urgency: high`, is padded to 256 or 512 bytes, and is signed with a 12-hour VAPID token. A
 `404`/`410` marks only the subscription stale (`webpush_stale`), separately from
 `endpoint_stale`; run `set-webpush` again to renew it. A device with no ntfy endpoint still
@@ -316,7 +338,7 @@ receives Web Push. Delivery is not retried, like the other transport.
 ## Mirroring
 
 Herdr keeps a separate view per attached client, so navigating on the phone does not move the
-computer. `openmosh-hook attach herdr` runs the real Herdr client on the inherited terminal and,
+computer. `falconer-hook attach herdr` runs the real Herdr client on the inherited terminal and,
 next to it, subscribes to Herdr's `workspace.focused`, `tab.focused` and `pane.focused` events on
 the local socket. When any client focuses a new target, the mirror sends `workspace.focus`,
 `tab.focus` or `pane.focus`, which Herdr applies to every attached client. Herdr 0.9 does not
@@ -370,8 +392,8 @@ when the owner of `$HOME` owns it) inside the phone's paired SSH session.
 
 | Path | Mode | Content |
 |---|---|---|
-| `$XDG_CONFIG_HOME/openmosh/config.toml` | `0600` | `host_alias`, `retention_days` (7), `poll_interval_ms` (1000, while an agent works or waits; every 5 s when all are idle), `sources`, `ssh_port`, `ssh_host_key_pub`, `[push] server`, `[bins]` |
-| `$XDG_STATE_HOME/openmosh/` | `0700` | state directory |
+| `$XDG_CONFIG_HOME/falconer/config.toml` | `0600` | `host_alias`, `retention_days` (7), `poll_interval_ms` (1000, while an agent works or waits; every 5 s when all are idle), `sources`, `ssh_port`, `ssh_host_key_pub`, `[push] server`, `[bins]` |
+| `$XDG_STATE_HOME/falconer/` | `0700` | state directory |
 | `…/events.db` | `0600` | SQLite inbox |
 | `…/devices.toml` | `0600` | paired devices |
 | `…/host.key` | `0600` | host X25519 private key |
@@ -392,13 +414,13 @@ refuses to touch a file it cannot parse (or, for files it owns, one it did not w
 | `codex` OpenAI Codex CLI | `~/.codex/hooks.json` | `PermissionRequest` → approval, `Stop` → done | [hooks](https://learn.chatgpt.com/docs/hooks) |
 | `gemini` Gemini CLI | `~/.gemini/settings.json` | `Notification` → notification, `AfterAgent` → done | [hooks](https://geminicli.com/docs/hooks/) |
 | `cursor` Cursor | `~/.cursor/hooks.json` | `stop` → done | [hooks](https://cursor.com/docs/agent/hooks) |
-| `copilot` GitHub Copilot CLI | `~/.copilot/hooks/openmosh.json` (own file) | `notification` → notification, `agentStop` → done | [hooks](https://docs.github.com/en/copilot/reference/hooks-reference) |
-| `kiro` Kiro CLI | `~/.kiro/hooks/openmosh.json` (own file) | `Stop` → done | [hooks](https://kiro.dev/docs/hooks/) |
-| `opencode` OpenCode | `$XDG_CONFIG_HOME/opencode/plugins/openmosh.js` (own plugin) | `permission.asked` → approval, `question.asked` → question, `session.idle` → done | [plugins](https://opencode.ai/docs/plugins/) |
+| `copilot` GitHub Copilot CLI | `~/.copilot/hooks/falconer.json` (own file) | `notification` → notification, `agentStop` → done | [hooks](https://docs.github.com/en/copilot/reference/hooks-reference) |
+| `kiro` Kiro CLI | `~/.kiro/hooks/falconer.json` (own file) | `Stop` → done | [hooks](https://kiro.dev/docs/hooks/) |
+| `opencode` OpenCode | `$XDG_CONFIG_HOME/opencode/plugins/falconer.js` (own plugin) | `permission.asked` → approval, `question.asked` → question, `session.idle` → done | [plugins](https://opencode.ai/docs/plugins/) |
 | `aider` Aider | `~/.aider.conf.yml` (marked block) | `notifications_command` → done | [notifications](https://aider.chat/docs/usage/notifications.html) |
 
 Notes: Codex asks you to review and trust new hooks on its next start; Copilot CLI, Kiro CLI and
-OpenCode load hooks/plugins when they start. The OpenCode plugin runs `openmosh-hook` with an
+OpenCode load hooks/plugins when they start. The OpenCode plugin runs `falconer-hook` with an
 argv (no shell). The Aider block refuses to install when you already set `notifications` or
 `notifications_command` yourself. `CODEX_HOME` and `COPILOT_HOME` are not followed: pass
 `--settings` when you use them. **Amp** documents no hook or notification command (only
@@ -418,7 +440,7 @@ Keystrokes per agent live in [`data/keymaps/`](./data/keymaps) and are embedded 
 "connecting". If Tailscale SSH is enabled on the host (`RunSSH: true`), tailscaled intercepts
 port 22 on the tailnet address, so the phone never reaches OpenSSH: its key in
 `~/.ssh/authorized_keys` is not consulted, the pinned host key is not tailscaled's, and in
-Tailscale SSH "check" mode the login waits for a browser approval. `openmosh-hook doctor` reports
+Tailscale SSH "check" mode the login waits for a browser approval. `falconer-hook doctor` reports
 this as the failing `tailscale_ssh` check, and `pair` / `pair-ssh` print a warning on stderr
 (skipped when `ssh_port` is not 22). Detection reads `RunSSH` from `tailscale debug prefs`; if
 that is unavailable the check passes as "not detected". Fix:
@@ -442,7 +464,7 @@ b64url without padding; string fields are the exact UTF-8 sent on the wire.
 Regenerate (only when the wire format version changes):
 
 ```sh
-OPENMOSH_WRITE_VECTORS=1 cargo test regenerate_vectors -- --ignored
+FALCONER_WRITE_VECTORS=1 cargo test regenerate_vectors -- --ignored
 ```
 
 ## Architecture
@@ -468,8 +490,8 @@ checksum mismatch).
 Pushing a `v*` tag runs [`.github/workflows/release.yml`](./.github/workflows/release.yml): it
 builds `x86_64-unknown-linux-musl`, `aarch64-unknown-linux-musl` (with `cross`),
 `x86_64-apple-darwin` and `aarch64-apple-darwin`, and publishes
-`openmosh-hook-<target>.tar.gz` plus one `SHA256SUMS` and its minisign signature
-`SHA256SUMS.minisig` (trusted comment `openmosh-hook <tag>`) to the GitHub release. Build,
+`falconer-hook-<target>.tar.gz` plus one `SHA256SUMS` and its minisign signature
+`SHA256SUMS.minisig` (trusted comment `falconer-hook <tag>`) to the GitHub release. Build,
 checksum, signing and publishing are separate jobs. The signing key is the repository secret
 `MINISIGN_SECRET_KEY` (an unencrypted minisign secret key file), visible only to the `sign` job,
 which downloads nothing but `SHA256SUMS`, runs no third-party action, installs `rsign2` from a

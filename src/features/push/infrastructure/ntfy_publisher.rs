@@ -1,6 +1,6 @@
 //! UnifiedPush / ntfy publisher: one HTTPS POST of the encrypted body.
 //! No redirects are followed, environment proxies are ignored, 10 s timeout,
-//! generic `User-Agent: openmosh` (no version); `404`/`410` mean the endpoint is stale.
+//! generic `User-Agent: falconer` (no version); `404`/`410` mean the endpoint is stale.
 //! Names are resolved by [`PublicResolver`], which drops every forbidden
 //! address, so the connection goes to an address that passed the endpoint
 //! rules (no DNS rebinding to the LAN or the host itself).
@@ -53,7 +53,7 @@ pub fn build_client() -> Result<reqwest::blocking::Client, reqwest::Error> {
         .connect_timeout(Duration::from_secs(10))
         .no_proxy()
         .dns_resolver(Arc::new(PublicResolver))
-        .user_agent("openmosh")
+        .user_agent("falconer")
         .build()
 }
 
@@ -174,7 +174,7 @@ mod tests {
         let (url, rx) = serve_once("200 OK", "");
         assert_eq!(p.send(&url, "{}"), PostOutcome::Delivered);
         let req = rx.recv().unwrap().to_ascii_lowercase();
-        assert!(req.contains("\r\nuser-agent: openmosh\r\n"), "{req}");
+        assert!(req.contains("\r\nuser-agent: falconer\r\n"), "{req}");
     }
 
     #[test]

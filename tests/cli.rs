@@ -15,12 +15,12 @@ use std::process::{Command, Stdio};
 
 const NOTIFICATION: &str = r#"{"session_id":"s","transcript_path":"/x/t.jsonl","cwd":"/w","hook_event_name":"Notification","message":"Claude needs your permission to use Bash"}"#;
 
-/// A deterministic P-256 scalar (b64u) derived from a label: `sha256("openmosh-test:" + label)`.
+/// A deterministic P-256 scalar (b64u) derived from a label: `sha256("falconer-test:" + label)`.
 fn seeded_scalar(label: &str) -> String {
     use base64::engine::general_purpose::URL_SAFE_NO_PAD as B64U;
     use base64::Engine;
     use sha2::{Digest, Sha256};
-    B64U.encode(Sha256::digest(format!("openmosh-test:{label}")))
+    B64U.encode(Sha256::digest(format!("falconer-test:{label}")))
 }
 
 /// The `devices set-webpush` stdin JSON, with every key generated from seeds.
@@ -474,7 +474,7 @@ fn claude_integration_round_trip() {
             .as_str()
             .unwrap();
         assert!(
-            cmd.ends_with("openmosh-hook' emit --source claude"),
+            cmd.ends_with("falconer-hook' emit --source claude"),
             "{cmd}"
         );
     }
@@ -597,7 +597,7 @@ fn integration_install_repoints_a_stale_hook_path() {
     let settings = e.root.join("settings.json");
     fs::write(
         &settings,
-        r#"{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"'/old/openmosh-hook' emit --source claude"}]}]}}"#,
+        r#"{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"'/old/falconer-hook' emit --source claude"}]}]}}"#,
     )
     .unwrap();
     let s = settings.to_str().unwrap();
@@ -911,7 +911,7 @@ fn no_command_without_a_terminal_prints_help() {
     let out = e.run(&[], None, &[]);
     assert_eq!(out.status.code(), Some(2));
     let err = String::from_utf8(out.stderr).unwrap();
-    assert!(err.contains("Usage: openmosh-hook"), "{err}");
+    assert!(err.contains("Usage: falconer-hook"), "{err}");
     assert!(err.contains("tui"), "the TUI is listed: {err}");
     assert!(out.stdout.is_empty());
 }

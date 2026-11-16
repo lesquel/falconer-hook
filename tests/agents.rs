@@ -36,7 +36,7 @@ fn list_shows_every_agent_with_detection_and_install_state() {
     assert_eq!(
         agent(&d, "opencode")["settings"],
         e.root
-            .join("config/opencode/plugins/openmosh.js")
+            .join("config/opencode/plugins/falconer.js")
             .display()
             .to_string(),
         "OpenCode follows XDG_CONFIG_HOME"
@@ -73,7 +73,7 @@ fn every_agent_installs_idempotently_and_uninstalls_cleanly() {
         let (code, v) = e.json(&["integration", "uninstall", id, "--json"], None, &[]);
         assert_eq!(ok_data(code, &v)["changed"], true, "{id}");
         let left = fs::read_to_string(&path).unwrap_or_default();
-        assert!(!left.contains("openmosh-hook"), "{id}: {left}");
+        assert!(!left.contains("falconer-hook"), "{id}: {left}");
     }
 }
 
@@ -89,7 +89,7 @@ fn malformed_and_foreign_files_are_refused_untouched() {
         fs::read_to_string(&gemini).unwrap(),
         "{ // comment\n \"a\": 1 }"
     );
-    let kiro = e.home().join(".kiro/hooks/openmosh.json");
+    let kiro = e.home().join(".kiro/hooks/falconer.json");
     fs::create_dir_all(kiro.parent().unwrap()).unwrap();
     fs::write(&kiro, "{\"version\":\"v1\",\"hooks\":[]}").unwrap();
     let (code, v) = e.json(&["integration", "install", "kiro", "--json"], None, &[]);

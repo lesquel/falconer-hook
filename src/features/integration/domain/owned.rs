@@ -1,4 +1,4 @@
-//! Whole files created and removed by openmosh-hook: a Copilot CLI hook
+//! Whole files created and removed by falconer-hook: a Copilot CLI hook
 //! file, a Kiro CLI global hook file and an OpenCode plugin. A file that
 //! exists without our marker is never overwritten or deleted.
 
@@ -13,9 +13,13 @@ pub enum OwnedKind {
     Opencode,
 }
 
+/// First line of the OpenCode plugin before the rename to Falconer.
+const LEGACY_JS_HEADER: &str =
+    "// openmosh-hook integration: managed by `openmosh-hook integration install opencode`.";
+
 /// First line of the OpenCode plugin; identifies the file as ours.
 const JS_HEADER: &str =
-    "// openmosh-hook integration: managed by `openmosh-hook integration install opencode`.";
+    "// falconer-hook integration: managed by `falconer-hook integration install opencode`.";
 
 fn agent(kind: OwnedKind) -> &'static str {
     match kind {
@@ -48,7 +52,7 @@ pub fn render(kind: OwnedKind, exe: &str) -> String {
         OwnedKind::Kiro => pretty(&json!({
             "version": "v1",
             "hooks": [{
-                "name": "openmosh: notify the phone when the agent stops",
+                "name": "falconer: notify the phone when the agent stops",
                 "trigger": "Stop",
                 "action": {"type": "command", "command": agent_command(exe, a, Some("done"))},
                 "timeout": 10,
@@ -59,8 +63,8 @@ pub fn render(kind: OwnedKind, exe: &str) -> String {
             let exe = serde_json::to_string(exe).unwrap_or_default();
             format!(
                 r#"{JS_HEADER}
-// Remove it with `openmosh-hook integration uninstall opencode`; edits here are overwritten.
-// Runs `openmosh-hook emit` (argv only, no shell) when OpenCode needs you or finishes.
+// Remove it with `falconer-hook integration uninstall opencode`; edits here are overwritten.
+// Runs `falconer-hook emit` (argv only, no shell) when OpenCode needs you or finishes.
 import {{ spawn }} from "node:child_process";
 
 const EXE = {exe};
@@ -82,7 +86,7 @@ function emit(kind, event) {{
   }} catch {{}}
 }}
 
-export const OpenMoshPlugin = async () => ({{
+export const FalconerPlugin = async () => ({{
   event: async ({{ event }}) => {{
     const kind = KINDS[event?.type];
     if (kind) emit(kind, event);
@@ -97,9 +101,9 @@ export const OpenMoshPlugin = async () => ({{
 /// Whether `text` is a file we wrote.
 pub fn is_ours(kind: OwnedKind, text: &str) -> bool {
     match kind {
-        OwnedKind::Opencode => text.starts_with(JS_HEADER),
+        OwnedKind::Opencode => text.starts_with(JS_HEADER) || text.starts_with(LEGACY_JS_HEADER),
         _ => {
-            text.contains("openmosh-hook")
+            (text.contains("falconer-hook") || text.contains(super::LEGACY_EXE_NAME))
                 && text.contains(&format!(" emit --source {}", agent(kind)))
         }
     }
@@ -124,7 +128,7 @@ pub fn plan_install(
 mod tests {
     use super::*;
 
-    const EXE: &str = "/home/u/.local/bin/openmosh-hook";
+    const EXE: &str = "/home/u/.local/bin/falconer-hook";
 
     #[test]
     fn rendered_files_are_ours_and_valid() {
@@ -138,12 +142,12 @@ mod tests {
         let c: serde_json::Value = serde_json::from_str(&render(OwnedKind::Copilot, EXE)).unwrap();
         assert_eq!(
             c["hooks"]["agentStop"][0]["bash"],
-            "'/home/u/.local/bin/openmosh-hook' emit --source copilot --kind done"
+            "'/home/u/.local/bin/falconer-hook' emit --source copilot --kind done"
         );
         let k: serde_json::Value = serde_json::from_str(&render(OwnedKind::Kiro, EXE)).unwrap();
         assert_eq!(k["hooks"][0]["trigger"], "Stop");
-        let js = render(OwnedKind::Opencode, "/opt/a\"b/openmosh-hook");
-        assert!(js.contains(r#"const EXE = "/opt/a\"b/openmosh-hook";"#));
+        let js = render(OwnedKind::Opencode, "/opt/a\"b/falconer-hook");
+        assert!(js.contains(r#"const EXE = "/opt/a\"b/falconer-hook";"#));
     }
 
     #[test]
@@ -153,10 +157,10 @@ mod tests {
             plan_install(OwnedKind::Kiro, Some(&first), EXE).unwrap(),
             None
         );
-        let moved = plan_install(OwnedKind::Kiro, Some(&first), "/new/openmosh-hook")
+        let moved = plan_install(OwnedKind::Kiro, Some(&first), "/new/falconer-hook")
             .unwrap()
             .unwrap();
-        assert!(moved.contains("/new/openmosh-hook"));
+        assert!(moved.contains("/new/falconer-hook"));
         assert_eq!(
             plan_install(
                 OwnedKind::Kiro,

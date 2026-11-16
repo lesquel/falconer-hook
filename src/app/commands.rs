@@ -24,7 +24,9 @@ use crate::features::responses::application::RespondToEvent;
 use crate::features::responses::domain::Action;
 use crate::features::responses::infrastructure::EmbeddedKeymaps;
 use crate::features::service::application::ApplyPlan;
-use crate::features::service::domain::{install_plan, uninstall_plan, Platform};
+use crate::features::service::domain::{
+    install_plan, legacy_uninstall_plan, uninstall_plan, Platform,
+};
 use crate::features::service::infrastructure::FsServiceFiles;
 use crate::shared::config::Config;
 use crate::shared::domain::clock::Clock;
@@ -345,6 +347,9 @@ pub fn doctor(ctx: &Ctx) -> Result<Reply, CliError> {
             .as_deref(),
     ));
     checks.push(check_devices(&ctx.registry()));
+    if let Some(c) = legacy_check(ctx) {
+        checks.push(c);
+    }
     checks.push(check_keymaps(EmbeddedKeymaps::load().all()));
     checks.push(if cfg!(target_os = "macos") {
         check_launchd_service(&p.launchd_plist())
@@ -362,9 +367,9 @@ pub fn doctor(ctx: &Ctx) -> Result<Reply, CliError> {
         let _ = writeln!(human, "[{mark}] {:<13} {}", c.name, c.detail);
     }
     human.push_str(if report.healthy {
-        "\nNext: open OpenMosh on your phone and add this host (openmosh-hook pair)."
+        "\nNext: open Falconer on your phone and add this host (falconer-hook pair)."
     } else {
-        "\nFix the FAIL items above, then run `openmosh-hook doctor` again."
+        "\nFix the FAIL items above, then run `falconer-hook doctor` again."
     });
     Ok(Reply::new(&report, human))
 }
@@ -389,6 +394,30 @@ pub fn service(ctx: &Ctx, install: bool, dry_run: bool) -> Result<Reply, CliErro
         uninstall_plan(platform, &unit, &cfg.bins.systemctl, &cfg.bins.launchctl)?
     };
     let mut human = String::new();
+    // Upgrading from OpenMosh: stop and remove its service before ours starts.
+    let legacy_unit = if cfg!(target_os = "macos") {
+        ctx.paths.legacy_launchd_plist()
+    } else {
+        ctx.paths.legacy_systemd_unit()
+    };
+    let legacy = if install && legacy_unit.exists() {
+        Some(legacy_uninstall_plan(
+            platform,
+            &legacy_unit,
+            &cfg.bins.systemctl,
+            &cfg.bins.launchctl,
+        )?)
+    } else {
+        None
+    };
+    if let Some(l) = &legacy {
+        for p in &l.remove {
+            let _ = writeln!(human, "remove {} (OpenMosh)", p.display());
+        }
+        for c in &l.commands {
+            let _ = writeln!(human, "run    {}", c.join(" "));
+        }
+    }
     for (p, _) in &plan.write {
         let _ = writeln!(human, "write  {}", p.display());
     }
@@ -399,25 +428,72 @@ pub fn service(ctx: &Ctx, install: bool, dry_run: bool) -> Result<Reply, CliErro
         let _ = writeln!(human, "run    {}", c.join(" "));
     }
     if !dry_run {
-        ApplyPlan {
+        let apply = ApplyPlan {
             files: &FsServiceFiles,
             runner: &ctx.runner,
+        };
+        if let Some(l) = &legacy {
+            apply.apply(l)?;
         }
-        .apply(&plan)?;
+        apply.apply(&plan)?;
     }
-    let data = json!({
+    let mut data = json!({
         "platform": plan.platform,
         "dry_run": dry_run,
         "unit": unit,
         "contents": plan.write.first().map(|(_, c)| c.clone()),
         "commands": plan.commands,
     });
+    if let Some(l) = legacy {
+        data["replaced_legacy"] = json!({"unit": legacy_unit, "commands": l.commands});
+    }
     Ok(Reply::new(&data, human.trim_end()))
+}
+
+/// What an OpenMosh install (the name before Falconer) left behind; `None`
+/// when nothing. Read-only.
+fn legacy_check(ctx: &Ctx) -> Option<Check> {
+    let p = &ctx.paths;
+    let mut left: Vec<String> = Vec::new();
+    for unit in [p.legacy_systemd_unit(), p.legacy_launchd_plist()] {
+        if unit.exists() {
+            left.push(format!("service {}", unit.display()));
+        }
+    }
+    let agents: Vec<&str> = super::integrations::legacy_agents(ctx)
+        .iter()
+        .map(|s| s.id.as_str())
+        .collect();
+    if !agents.is_empty() {
+        left.push(format!(
+            "hooks calling openmosh-hook ({})",
+            agents.join(", ")
+        ));
+    }
+    let mut detail = String::new();
+    if !left.is_empty() {
+        detail = format!("{}; run `falconer-hook setup`", left.join(", "));
+    }
+    let dirs = p.legacy_dirs_left();
+    if !dirs.is_empty() {
+        if !detail.is_empty() {
+            detail.push_str("; ");
+        }
+        let _ = write!(
+            detail,
+            "{} kept because the Falconer directory already exists: merge or remove it by hand",
+            dirs.iter()
+                .map(|d| d.display().to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+    }
+    (!detail.is_empty()).then(|| Check::warn("legacy", format!("OpenMosh leftovers: {detail}")))
 }
 
 pub fn version() -> Reply {
     Reply::new(
         &json!({"version": env!("CARGO_PKG_VERSION"), "protocol": {"pair": 1, "push": 1, "herdr": 1}}),
-        format!("openmosh-hook {}", env!("CARGO_PKG_VERSION")),
+        format!("falconer-hook {}", env!("CARGO_PKG_VERSION")),
     )
 }

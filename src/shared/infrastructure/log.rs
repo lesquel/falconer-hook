@@ -52,7 +52,7 @@ fn render(level: Level, msg: &'static str, fields: &[(&'static str, Field<'_>)])
         Level::Warn => "warn",
         Level::Error => "error",
     };
-    let mut line = format!("openmosh-hook {lvl}: {msg}");
+    let mut line = format!("falconer-hook {lvl}: {msg}");
     for (k, v) in fields {
         let _ = match v {
             Field::Code(c) => write!(line, " {k}={c}"),
@@ -92,7 +92,7 @@ mod tests {
         );
         assert_eq!(
             line,
-            "openmosh-hook warn: push failed reason=timeout devices=2 err=\"x[31m [redacted]\""
+            "falconer-hook warn: push failed reason=timeout devices=2 err=\"x[31m [redacted]\""
         );
     }
 }

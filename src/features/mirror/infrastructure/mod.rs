@@ -191,7 +191,7 @@ impl HerdrSocket {
 
     fn id(&mut self, prefix: &str) -> String {
         self.next_id += 1;
-        format!("openmosh-{prefix}-{}", self.next_id)
+        format!("falconer-{prefix}-{}", self.next_id)
     }
 
     /// Sends one request on a fresh connection and returns its `result`.

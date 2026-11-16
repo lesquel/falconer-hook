@@ -84,10 +84,10 @@ mod tests {
 
     #[test]
     fn project_is_the_last_folder_without_spoofing_characters() {
-        assert_eq!(project_of("/w/OpenMosh/").as_deref(), Some("OpenMosh"));
+        assert_eq!(project_of("/w/Falconer/").as_deref(), Some("Falconer"));
         assert_eq!(
-            project_of("/w/Open\u{202E}Mosh\u{200B}\n").as_deref(),
-            Some("OpenMosh")
+            project_of("/w/Fal\u{202E}coner\u{200B}\n").as_deref(),
+            Some("Falconer")
         );
         assert_eq!(project_of("/"), None);
         assert_eq!(

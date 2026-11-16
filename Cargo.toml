@@ -1,16 +1,16 @@
 [package]
-name = "openmosh-hook"
+name = "falconer-hook"
 version = "0.2.0"
 edition = "2021"
 rust-version = "1.89"
-description = "Host-side daemon and CLI for OpenMosh: agent events, encrypted push, approvals over SSH"
-repository = "https://github.com/lesquel/openmosh-hook"
+description = "Host-side daemon and CLI for Falconer: agent events, encrypted push, approvals over SSH"
+repository = "https://github.com/lesquel/falconer-hook"
 license = "Apache-2.0"
 authors = ["lesquel"]
 publish = false
 
 [[bin]]
-name = "openmosh-hook"
+name = "falconer-hook"
 path = "src/main.rs"
 
 [dependencies]

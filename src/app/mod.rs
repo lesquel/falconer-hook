@@ -45,16 +45,22 @@ pub struct Ctx {
     /// `$PATH`, used only to detect installed agents.
     pub path_env: Option<String>,
     pub stop: Arc<AtomicBool>,
+    /// OpenMosh directories renamed to their Falconer names at startup.
+    pub migrated_dirs: Vec<(PathBuf, PathBuf)>,
 }
 
 impl Ctx {
     pub fn from_env() -> Result<Self, CliError> {
         let get = |k: &str| std::env::var(k).ok();
         let paths = Paths::from_env(get)?;
+        // Before anything opens the config or the inbox, so an upgraded host
+        // (or an old service running through the `openmosh-hook` symlink)
+        // keeps its pairing keys and events instead of starting empty.
+        let migrated_dirs = paths.migrate_legacy_dirs();
         let pane = pane_from_env(get);
         let exe = std::env::current_exe()
             .and_then(|p| p.canonicalize())
-            .unwrap_or_else(|_| PathBuf::from("openmosh-hook"));
+            .unwrap_or_else(|_| PathBuf::from("falconer-hook"));
         Ok(Self {
             paths,
             runner: ProcessRunner::default(),
@@ -67,6 +73,7 @@ impl Ctx {
             exe,
             path_env: get("PATH"),
             stop: Arc::new(AtomicBool::new(false)),
+            migrated_dirs,
         })
     }
 

@@ -100,7 +100,7 @@ mod tests {
     fn missing_program_is_not_found() {
         let r = ProcessRunner::default();
         assert!(matches!(
-            r.run("openmosh-definitely-missing-binary", &[]),
+            r.run("falconer-definitely-missing-binary", &[]),
             Err(CommandError::NotFound(_))
         ));
     }

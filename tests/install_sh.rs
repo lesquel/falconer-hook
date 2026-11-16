@@ -7,7 +7,7 @@ use std::path::Path;
 use std::process::{Command, Output};
 
 fn dry_run(args: &[&str]) -> (tempfile::TempDir, String) {
-    dry_run_with(args, &[("OPENMOSH_NO_GH", "1")], &[])
+    dry_run_with(args, &[("FALCONER_NO_GH", "1")], &[])
 }
 
 /// Fake `uname` reporting `os`/`arch`.
@@ -101,33 +101,33 @@ fn release_dry_run_prints_every_step() {
     let (_t, out) = dry_run(&[]);
     assert!(out.contains("(dry run: nothing will be changed)"));
     assert!(out.contains("(dry run: would resolve the latest release to its tag)"));
-    assert!(out.contains("releases/download/<latest>/openmosh-hook-"));
+    assert!(out.contains("releases/download/<latest>/falconer-hook-"));
     assert!(out.contains("releases/download/<latest>/SHA256SUMS"));
-    assert!(out.contains("would verify openmosh-hook-"));
-    assert!(out.contains("openmosh-hook service install"));
-    assert!(out.contains("openmosh-hook doctor"));
+    assert!(out.contains("would verify falconer-hook-"));
+    assert!(out.contains("falconer-hook service install"));
+    assert!(out.contains("falconer-hook doctor"));
     assert!(out.contains("config.toml (mode 0600)"));
-    assert!(out.contains("Next: open OpenMosh on your phone"));
+    assert!(out.contains("Next: open Falconer on your phone"));
 }
 
 #[test]
 fn from_source_and_binary_modes() {
     let (_t, out) = dry_run(&["--from-source", "--no-service"]);
     assert!(out.contains(
-        "+ cargo install --git https://github.com/lesquel/openmosh-hook --locked --root"
+        "+ cargo install --git https://github.com/lesquel/falconer-hook --locked --root"
     ));
     assert!(!out.contains("service install"));
     let (_t, out) = dry_run(&["--from-source", "--version", "v0.2.0", "--no-service"]);
     assert!(
         out.contains(
-            "+ cargo install --git https://github.com/lesquel/openmosh-hook --tag v0.2.0 --locked --root"
+            "+ cargo install --git https://github.com/lesquel/falconer-hook --tag v0.2.0 --locked --root"
         ),
         "{out}"
     );
-    let (_t, out) = dry_run(&["--binary", env!("CARGO_BIN_EXE_openmosh-hook")]);
+    let (_t, out) = dry_run(&["--binary", env!("CARGO_BIN_EXE_falconer-hook")]);
     assert!(out.contains(&format!(
         "+ install -m 0755 {}",
-        env!("CARGO_BIN_EXE_openmosh-hook")
+        env!("CARGO_BIN_EXE_falconer-hook")
     )));
 }
 
@@ -147,12 +147,12 @@ fn release_asset_matches_the_platform() {
     ] {
         let (_t, out) = dry_run_with(
             &["--no-service"],
-            &[("OPENMOSH_NO_GH", "1")],
+            &[("FALCONER_NO_GH", "1")],
             &[uname(os, arch)],
         );
         assert!(
             out.contains(&format!(
-                "releases/download/<latest>/openmosh-hook-{target}.tar.gz"
+                "releases/download/<latest>/falconer-hook-{target}.tar.gz"
             )),
             "{os}/{arch}: {out}"
         );
@@ -163,10 +163,10 @@ fn release_asset_matches_the_platform() {
 fn version_tag_selects_the_release() {
     let (_t, out) = dry_run_with(
         &["--version", "v0.1.0", "--no-service"],
-        &[("OPENMOSH_NO_GH", "1")],
+        &[("FALCONER_NO_GH", "1")],
         &[uname("Linux", "x86_64")],
     );
-    assert!(out.contains("releases/download/v0.1.0/openmosh-hook-x86_64-unknown-linux-musl.tar.gz"));
+    assert!(out.contains("releases/download/v0.1.0/falconer-hook-x86_64-unknown-linux-musl.tar.gz"));
     assert!(out.contains("releases/download/v0.1.0/SHA256SUMS"));
 }
 
@@ -179,7 +179,7 @@ fn logged_in_gh_downloads_the_private_release() {
     );
     assert!(out.contains("Using the GitHub CLI"), "{out}");
     assert!(out.contains(
-        "+ gh release download <latest> --repo lesquel/openmosh-hook --pattern openmosh-hook-aarch64-apple-darwin.tar.gz --pattern SHA256SUMS --pattern SHA256SUMS.minisig --dir <tmpdir>"
+        "+ gh release download <latest> --repo lesquel/falconer-hook --pattern falconer-hook-aarch64-apple-darwin.tar.gz --pattern SHA256SUMS --pattern SHA256SUMS.minisig --dir <tmpdir>"
     ), "{out}");
     assert!(!out.contains("curl"));
     let (_t, out) = dry_run_with(
@@ -187,15 +187,15 @@ fn logged_in_gh_downloads_the_private_release() {
         &[],
         &[uname("Linux", "x86_64"), gh_logged_in()],
     );
-    assert!(out.contains("+ gh release download v0.2.0 --repo lesquel/openmosh-hook"));
+    assert!(out.contains("+ gh release download v0.2.0 --repo lesquel/falconer-hook"));
     let (_t, out) = dry_run_with(
         &["--no-service"],
-        &[("OPENMOSH_NO_GH", "1")],
+        &[("FALCONER_NO_GH", "1")],
         &[uname("Linux", "x86_64"), gh_logged_in()],
     );
     assert!(
         !out.contains("gh release download"),
-        "OPENMOSH_NO_GH opts out"
+        "FALCONER_NO_GH opts out"
     );
 }
 
@@ -242,7 +242,7 @@ fn without_a_verifier_it_refuses_with_install_instructions() {
         args.extend_from_slice(extra);
         let (_t, out) = dry_run_output_bare(
             &args,
-            &[("OPENMOSH_NO_GH", "1")],
+            &[("FALCONER_NO_GH", "1")],
             &[uname("Linux", "x86_64")],
         );
         assert_eq!(out.status.code(), Some(1));
@@ -270,7 +270,7 @@ fn insecure_no_signature_checks_checksums_only_and_says_so() {
     }
     let (_t, out) = dry_run_output_bare(
         &["--insecure-no-signature", "--no-service"],
-        &[("OPENMOSH_NO_GH", "1")],
+        &[("FALCONER_NO_GH", "1")],
         &[uname("Linux", "x86_64")],
     );
     assert!(out.status.success());
@@ -284,7 +284,7 @@ fn insecure_no_signature_checks_checksums_only_and_says_so() {
     );
     assert!(!stdout.contains("SHA256SUMS.minisig"), "{stdout}");
     assert!(stdout.contains(
-        "would verify openmosh-hook-x86_64-unknown-linux-musl.tar.gz against SHA256SUMS"
+        "would verify falconer-hook-x86_64-unknown-linux-musl.tar.gz against SHA256SUMS"
     ));
 }
 
@@ -296,7 +296,7 @@ fn a_verifier_checks_the_signature_with_the_pinned_key() {
             args.extend_from_slice(extra);
             let (_t, out) = dry_run_output_bare(
                 &args,
-                &[("OPENMOSH_NO_GH", "1")],
+                &[("FALCONER_NO_GH", "1")],
                 &[uname("Linux", "x86_64"), verifier(tool)],
             );
             let stdout = String::from_utf8(out.stdout).unwrap();
@@ -305,7 +305,7 @@ fn a_verifier_checks_the_signature_with_the_pinned_key() {
             if !system_verifier() || tool == "minisign" {
                 assert!(
                     stdout.contains(&format!(
-                        "(dry run: would verify SHA256SUMS.minisig with {tool} and key {PUBKEY}, trusted comment \"openmosh-hook <latest>\")"
+                        "(dry run: would verify SHA256SUMS.minisig with {tool} and key {PUBKEY}, trusted comment \"falconer-hook <latest>\")"
                     )),
                     "{tool}: {stdout}"
                 );
@@ -342,7 +342,7 @@ fn version_must_be_a_plain_release_tag() {
         "latest",
         "v1/../x",
     ] {
-        let (_t, out) = dry_run_output(&["--version", bad], &[("OPENMOSH_NO_GH", "1")], &[]);
+        let (_t, out) = dry_run_output(&["--version", bad], &[("FALCONER_NO_GH", "1")], &[]);
         assert!(!out.status.success(), "{bad} was accepted");
         assert!(
             String::from_utf8_lossy(&out.stderr).contains("release tag"),
@@ -351,7 +351,7 @@ fn version_must_be_a_plain_release_tag() {
         );
     }
     // gh is turned off: on CI runners its auth check writes a config file into HOME.
-    let (_t, out) = dry_run_output(&["--version", "v0.1.0"], &[("OPENMOSH_NO_GH", "1")], &[]);
+    let (_t, out) = dry_run_output(&["--version", "v0.1.0"], &[("FALCONER_NO_GH", "1")], &[]);
     assert!(
         out.status.success(),
         "{}",
@@ -376,16 +376,16 @@ impl Release {
         for d in [&fix, &pkg, &bin, &t.path().join("home")] {
             fs::create_dir_all(d).unwrap();
         }
-        let exe = pkg.join("openmosh-hook");
+        let exe = pkg.join("falconer-hook");
         fs::write(&exe, "#!/bin/sh\necho fake-hook \"$@\"\n").unwrap();
         fs::set_permissions(&exe, fs::Permissions::from_mode(0o755)).unwrap();
-        let asset = "openmosh-hook-x86_64-unknown-linux-musl.tar.gz";
+        let asset = "falconer-hook-x86_64-unknown-linux-musl.tar.gz";
         assert!(Command::new("tar")
             .args(["-czf"])
             .arg(fix.join(asset))
             .arg("-C")
             .arg(&pkg)
-            .arg("openmosh-hook")
+            .arg("falconer-hook")
             .status()
             .unwrap()
             .success());
@@ -407,7 +407,7 @@ impl Release {
                 format!(
                     "#!/bin/sh\nout=''; w=''; for a in \"$@\"; do case \"$prev\" in -o) out=$a ;; -w) w=$a ;; esac; prev=$a; url=$a; done\n\
                      echo \"$url\" >> \"{log}\"\n\
-                     if [ -n \"$w\" ]; then printf 'https://github.com/lesquel/openmosh-hook/releases/tag/{served_tag}'; exit 0; fi\n\
+                     if [ -n \"$w\" ]; then printf 'https://github.com/lesquel/falconer-hook/releases/tag/{served_tag}'; exit 0; fi\n\
                      case \"$url\" in */download/{served_tag}/*) cp \"{fix}/${{url##*/}}\" \"$out\" ;; *) exit 22 ;; esac\n",
                     log = t.path().join("curl.log").display(),
                     fix = fix.display(),
@@ -433,7 +433,7 @@ impl Release {
             .arg("--no-service")
             .env_clear()
             .env("HOME", self.t.path().join("home"))
-            .env("OPENMOSH_NO_GH", "1")
+            .env("FALCONER_NO_GH", "1")
             .env(
                 "PATH",
                 format!("{}:/usr/bin:/bin", self.t.path().join("bin").display()),
@@ -443,7 +443,7 @@ impl Release {
     }
 
     fn installed(&self) -> bool {
-        self.t.path().join("home/.local/bin/openmosh-hook").exists()
+        self.t.path().join("home/.local/bin/falconer-hook").exists()
     }
 
     fn fetched(&self) -> String {
@@ -453,7 +453,7 @@ impl Release {
 
 #[test]
 fn a_signed_release_installs_and_latest_is_resolved_to_its_tag() {
-    let r = Release::new("v9.9.9", "openmosh-hook v9.9.9");
+    let r = Release::new("v9.9.9", "falconer-hook v9.9.9");
     let out = r.install(&[]);
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(
@@ -467,7 +467,7 @@ fn a_signed_release_installs_and_latest_is_resolved_to_its_tag() {
     );
     assert!(r.installed());
     let fetched = r.fetched();
-    assert!(fetched.contains("https://github.com/lesquel/openmosh-hook/releases/latest\n"));
+    assert!(fetched.contains("https://github.com/lesquel/falconer-hook/releases/latest\n"));
     assert!(
         fetched.contains("/releases/download/v9.9.9/SHA256SUMS.minisig"),
         "downloads use the resolved tag: {fetched}"
@@ -478,13 +478,13 @@ fn a_signed_release_installs_and_latest_is_resolved_to_its_tag() {
 #[test]
 fn a_signature_for_another_release_is_refused() {
     // The server answers for v9.9.9 with files (validly) signed for v0.1.0.
-    let r = Release::new("v9.9.9", "openmosh-hook v0.1.0");
+    let r = Release::new("v9.9.9", "falconer-hook v0.1.0");
     let out = r.install(&["--version", "v9.9.9"]);
     assert_eq!(out.status.code(), Some(1));
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
         stderr.contains(
-            "the signature is for \"openmosh-hook v0.1.0\", not \"openmosh-hook v9.9.9\""
+            "the signature is for \"falconer-hook v0.1.0\", not \"falconer-hook v9.9.9\""
         ),
         "{stderr}"
     );
@@ -496,10 +496,10 @@ fn a_signature_for_another_release_is_refused() {
 
 #[test]
 fn a_tampered_download_is_refused_even_with_a_valid_signature() {
-    let r = Release::new("v9.9.9", "openmosh-hook v9.9.9");
+    let r = Release::new("v9.9.9", "falconer-hook v9.9.9");
     fs::write(
         r.t.path()
-            .join("fix/openmosh-hook-x86_64-unknown-linux-musl.tar.gz"),
+            .join("fix/falconer-hook-x86_64-unknown-linux-musl.tar.gz"),
         b"evil",
     )
     .unwrap();
@@ -507,4 +507,58 @@ fn a_tampered_download_is_refused_even_with_a_valid_signature() {
     assert_eq!(out.status.code(), Some(1));
     assert!(String::from_utf8_lossy(&out.stderr).contains("checksum mismatch"));
     assert!(!r.installed());
+}
+
+#[test]
+fn an_old_openmosh_binary_becomes_a_compatibility_symlink() {
+    let r = Release::new("v9.9.9", "falconer-hook v9.9.9");
+    let bin = r.t.path().join("home/.local/bin");
+    fs::create_dir_all(&bin).unwrap();
+    fs::write(bin.join("openmosh-hook"), "#!/bin/sh\necho old\n").unwrap();
+    fs::set_permissions(bin.join("openmosh-hook"), fs::Permissions::from_mode(0o755)).unwrap();
+    let old_cfg = r.t.path().join("home/.config/openmosh/config.toml");
+    fs::create_dir_all(old_cfg.parent().unwrap()).unwrap();
+    fs::write(&old_cfg, "# old\n").unwrap();
+
+    let out = r.install(&[]);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        out.status.success(),
+        "{stdout}\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(r.installed());
+    let link = bin.join("openmosh-hook");
+    assert!(
+        fs::symlink_metadata(&link)
+            .unwrap()
+            .file_type()
+            .is_symlink(),
+        "the old binary is replaced by a symlink"
+    );
+    assert_eq!(
+        fs::read_link(&link).unwrap(),
+        Path::new("falconer-hook"),
+        "relative link to the new binary in the same directory"
+    );
+    assert!(fs::read_to_string(&link).unwrap().contains("fake-hook"));
+    assert_eq!(fs::read_to_string(&old_cfg).unwrap(), "# old\n");
+    assert!(
+        !r.t.path().join("home/.config/falconer").exists(),
+        "no fresh config next to the OpenMosh one: falconer-hook moves it"
+    );
+
+    // A second run keeps the link and does not loop.
+    let out = r.install(&[]);
+    assert!(out.status.success());
+    assert_eq!(fs::read_link(&link).unwrap(), Path::new("falconer-hook"));
+}
+
+#[test]
+fn no_compatibility_symlink_without_an_old_binary() {
+    let r = Release::new("v9.9.9", "falconer-hook v9.9.9");
+    let out = r.install(&[]);
+    assert!(out.status.success());
+    assert!(r.installed());
+    assert!(fs::symlink_metadata(r.t.path().join("home/.local/bin/openmosh-hook")).is_err());
 }

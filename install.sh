@@ -1,24 +1,26 @@
 #!/bin/sh
-# openmosh-hook installer.
+# falconer-hook installer.
 #
-#   curl -fsSL https://raw.githubusercontent.com/lesquel/openmosh-hook/main/install.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/lesquel/falconer-hook/main/install.sh | sh
 #
 # While the repository is private, anonymous downloads fail: install and
 # log in to the GitHub CLI (`gh auth login`) and the installer downloads the
 # release with `gh release download` instead (or run it from a clone).
 #
-# Installs openmosh-hook to ~/.local/bin, checks sshd, Herdr/tmux and
+# Installs falconer-hook to ~/.local/bin, checks sshd, Herdr/tmux and
 # Tailscale, writes a default config, registers the user service and runs
-# `openmosh-hook doctor`. It prints every command before running it and
+# `falconer-hook doctor`. It prints every command before running it and
 # never uses sudo itself; only the official Herdr/Tailscale installers it
 # offers may ask for root.
 set -eu
 
-REPO="lesquel/openmosh-hook"
+REPO="lesquel/falconer-hook"
 # Release signing key (minisign, key id 59E37F1EF15B67E2); also in minisign.pub.
 PUBKEY="RWTiZ1vxHn/jWfqAEjobeqloI9cL9pOA0/in+ayyCgPqT0gYDRKR1Ox5"
-BIN_DIR="${OPENMOSH_BIN_DIR:-$HOME/.local/bin}"
-CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/openmosh"
+BIN_DIR="${FALCONER_BIN_DIR:-$HOME/.local/bin}"
+CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/falconer"
+# Before the rename to Falconer: `falconer-hook` moves this directory itself.
+LEGACY_CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/openmosh"
 DRY_RUN=0
 MODE=release
 BINARY=""
@@ -35,7 +37,7 @@ Usage: install.sh [options]
   --dry-run          Print what would be done; change nothing.
   --from-source      Build with `cargo install --git` (needs Rust and, while the
                      repository is private, git access to it).
-  --binary <path>    Install an already-built openmosh-hook binary.
+  --binary <path>    Install an already-built falconer-hook binary.
   --version <tag>    Release tag to download, or to build with --from-source
                      (default: the latest release; --from-source: main).
                      Downloads use `gh release download` when the GitHub CLI
@@ -44,7 +46,7 @@ Usage: install.sh [options]
                      tag first. Every download is checked against the
                      release's SHA256SUMS, SHA256SUMS against its minisign
                      signature (needs minisign or rsign), and the signature's
-                     trusted comment must be "openmosh-hook <tag>", so an
+                     trusted comment must be "falconer-hook <tag>", so an
                      older release cannot be passed off as the requested one.
   --insecure-no-signature
                      Install without verifying the signature (checksums
@@ -53,11 +55,11 @@ Usage: install.sh [options]
                      Accepted for compatibility; the signature is always
                      required unless --insecure-no-signature.
   --yes              Accept offers to install missing Herdr/Tailscale.
-  --no-service       Do not run `openmosh-hook service install`.
+  --no-service       Do not run `falconer-hook service install`.
   -h, --help         Show this help.
 
-Environment: OPENMOSH_BIN_DIR (default ~/.local/bin),
-             OPENMOSH_NO_GH=1 (never use the GitHub CLI).
+Environment: FALCONER_BIN_DIR (default ~/.local/bin),
+             FALCONER_NO_GH=1 (never use the GitHub CLI).
 EOF
 }
 
@@ -200,8 +202,8 @@ verify_signature() {
 	*) die "minisign or rsign is required to verify the signature" ;;
 	esac
 	comment=$(sed -n 's/^trusted comment: //p' "$2" | head -n 1)
-	[ "$comment" = "openmosh-hook $3" ] ||
-		die "the signature is for \"$comment\", not \"openmosh-hook $3\": refusing (a different or older release was served)"
+	[ "$comment" = "falconer-hook $3" ] ||
+		die "the signature is for \"$comment\", not \"falconer-hook $3\": refusing (a different or older release was served)"
 	say "ok: SHA256SUMS signature verified (key 59E37F1EF15B67E2, release $3)"
 }
 
@@ -263,12 +265,12 @@ resolve_tag() {
 
 # The GitHub CLI is used when installed and logged in (private repository).
 use_gh() {
-	[ "${OPENMOSH_NO_GH:-0}" != 1 ] && have gh && gh auth status >/dev/null 2>&1
+	[ "${FALCONER_NO_GH:-0}" != 1 ] && have gh && gh auth status >/dev/null 2>&1
 }
 
 install_release() {
 	detect_target
-	asset="openmosh-hook-$TARGET.tar.gz"
+	asset="falconer-hook-$TARGET.tar.gz"
 	signature_policy
 	if [ "$VERSION" = latest ]; then
 		if [ "$DRY_RUN" -eq 1 ]; then
@@ -276,7 +278,7 @@ install_release() {
 		fi
 	fi
 	tag=$(resolve_tag) || exit 1
-	say "Installing openmosh-hook ($TARGET) from GitHub Releases ($tag)"
+	say "Installing falconer-hook ($TARGET) from GitHub Releases ($tag)"
 	if [ "$DRY_RUN" -eq 1 ]; then
 		tmp="<tmpdir>"
 	else
@@ -305,33 +307,46 @@ install_release() {
 		verify_sha256 "$tmp/$asset" "$tmp/SHA256SUMS"
 	else
 		if [ "$REQUIRE_SIG" -eq 1 ]; then
-			say "(dry run: would verify SHA256SUMS.minisig with $(sig_tool) and key $PUBKEY, trusted comment \"openmosh-hook $tag\")"
+			say "(dry run: would verify SHA256SUMS.minisig with $(sig_tool) and key $PUBKEY, trusted comment \"falconer-hook $tag\")"
 		fi
 		say "(dry run: would verify $asset against SHA256SUMS)"
 	fi
 	run mkdir -p "$BIN_DIR"
 	run tar -xzf "$tmp/$asset" -C "$tmp"
-	run install -m 0755 "$tmp/openmosh-hook" "$BIN_DIR/openmosh-hook"
+	run install -m 0755 "$tmp/falconer-hook" "$BIN_DIR/falconer-hook"
 }
 
 install_source() {
 	have cargo || die "cargo not found; install Rust from https://rustup.rs first"
-	say "Building openmosh-hook from source (the repository is private: your git credentials are used)"
+	say "Building falconer-hook from source (the repository is private: your git credentials are used)"
 	# cargo installs into <root>/bin, i.e. ~/.local/bin by default.
 	root=$(dirname "$BIN_DIR")
 	CARGO_NET_GIT_FETCH_WITH_CLI=true
 	export CARGO_NET_GIT_FETCH_WITH_CLI
 	if [ "$VERSION" = latest ]; then
-		run cargo install --git "https://github.com/$REPO" --locked --root "$root" openmosh-hook
+		run cargo install --git "https://github.com/$REPO" --locked --root "$root" falconer-hook
 	else
-		run cargo install --git "https://github.com/$REPO" --tag "$VERSION" --locked --root "$root" openmosh-hook
+		run cargo install --git "https://github.com/$REPO" --tag "$VERSION" --locked --root "$root" falconer-hook
 	fi
 }
 
 install_binary() {
 	[ -f "$BINARY" ] || die "binary not found: $BINARY"
 	run mkdir -p "$BIN_DIR"
-	run install -m 0755 "$BINARY" "$BIN_DIR/openmosh-hook"
+	run install -m 0755 "$BINARY" "$BIN_DIR/falconer-hook"
+}
+
+# Upgrading from OpenMosh: replace its `openmosh-hook` binary with a link to
+# `falconer-hook`, so phones and agent hooks that still call the old name
+# keep working until they are updated.
+link_legacy() {
+	old="$BIN_DIR/openmosh-hook"
+	if [ -L "$old" ] || [ ! -e "$old" ]; then
+		return
+	fi
+	say "Replacing the OpenMosh binary $old with a link to falconer-hook"
+	run rm -f "$old"
+	run ln -s falconer-hook "$old"
 }
 
 check_sshd() {
@@ -354,7 +369,7 @@ check_runtime() {
 			say "+ curl -fsSL https://herdr.dev/install.sh | sh"
 			curl -fsSL https://herdr.dev/install.sh | sh
 		else
-			say "Install Herdr (https://herdr.dev) or tmux, then run: openmosh-hook doctor"
+			say "Install Herdr (https://herdr.dev) or tmux, then run: falconer-hook doctor"
 		fi
 	fi
 }
@@ -384,6 +399,10 @@ write_config() {
 		say "ok: keeping existing $file"
 		return
 	fi
+	if [ -e "$LEGACY_CONFIG_DIR" ] && [ ! -e "$CONFIG_DIR" ]; then
+		say "ok: falconer-hook moves your OpenMosh config ($LEGACY_CONFIG_DIR) to $CONFIG_DIR"
+		return
+	fi
 	say "Writing $file (mode 0600)"
 	if [ "$DRY_RUN" -eq 1 ]; then
 		say "+ mkdir -p $CONFIG_DIR && chmod 700 $CONFIG_DIR"
@@ -395,7 +414,7 @@ write_config() {
 		mkdir -p "$CONFIG_DIR"
 		chmod 700 "$CONFIG_DIR"
 		cat >"$file" <<'EOF'
-# openmosh-hook configuration. Keep this file mode 0600.
+# falconer-hook configuration. Keep this file mode 0600.
 # host_alias = "my-laptop"   # name shown on the phone (default: hostname)
 retention_days = 7
 poll_interval_ms = 1000
@@ -412,22 +431,23 @@ EOF
 }
 
 if [ "$DRY_RUN" -eq 1 ]; then
-	say "openmosh-hook installer (dry run: nothing will be changed)"
+	say "falconer-hook installer (dry run: nothing will be changed)"
 else
-	say "openmosh-hook installer"
+	say "falconer-hook installer"
 fi
 case "$MODE" in
 release) install_release ;;
 source) install_source ;;
 binary) install_binary ;;
 esac
+link_legacy
 
 check_sshd
 check_runtime
 check_tailscale
 write_config
 
-HOOK="$BIN_DIR/openmosh-hook"
+HOOK="$BIN_DIR/falconer-hook"
 if [ "$NO_SERVICE" -eq 0 ]; then
 	run "$HOOK" service install
 fi
@@ -445,4 +465,4 @@ esac
 say ""
 say "Wire your AI agents' hooks (Claude Code, Codex, Gemini, Cursor, Copilot, Kiro, OpenCode, Aider):"
 say "  $HOOK integration list && $HOOK setup"
-say "Next: open OpenMosh on your phone and add this host, then run: openmosh-hook pair"
+say "Next: open Falconer on your phone and add this host, then run: falconer-hook pair"

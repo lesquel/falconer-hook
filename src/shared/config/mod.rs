@@ -34,7 +34,17 @@ pub struct Paths {
     pub xdg_config_home: PathBuf,
     pub config_dir: PathBuf,
     pub state_dir: PathBuf,
+    /// Where OpenMosh (the previous name) kept the config; moved on upgrade.
+    pub legacy_config_dir: PathBuf,
+    /// Where OpenMosh kept the state (devices, host key, inbox).
+    pub legacy_state_dir: PathBuf,
 }
+
+/// Directory and service names used before the rename to Falconer. Only the
+/// upgrade path and `doctor` read them.
+pub const LEGACY_DIR_NAME: &str = "openmosh";
+pub const LEGACY_SYSTEMD_UNIT: &str = "openmosh-hook.service";
+pub const LEGACY_LAUNCHD_PLIST: &str = "dev.openmosh.hook.plist";
 
 impl Paths {
     pub fn from_env(get: impl Fn(&str) -> Option<String>) -> Result<Self, ConfigError> {
@@ -47,8 +57,10 @@ impl Paths {
         let xdg_state_home =
             abs(get("XDG_STATE_HOME")).unwrap_or_else(|| home.join(".local/state"));
         Ok(Self {
-            config_dir: xdg_config_home.join("openmosh"),
-            state_dir: xdg_state_home.join("openmosh"),
+            config_dir: xdg_config_home.join("falconer"),
+            state_dir: xdg_state_home.join("falconer"),
+            legacy_config_dir: xdg_config_home.join(LEGACY_DIR_NAME),
+            legacy_state_dir: xdg_state_home.join(LEGACY_DIR_NAME),
             xdg_config_home,
             home,
         })
@@ -71,16 +83,56 @@ impl Paths {
     }
     pub fn systemd_unit(&self) -> PathBuf {
         self.xdg_config_home
-            .join("systemd/user/openmosh-hook.service")
+            .join("systemd/user/falconer-hook.service")
     }
     pub fn launchd_plist(&self) -> PathBuf {
         self.home
-            .join("Library/LaunchAgents/dev.openmosh.hook.plist")
+            .join("Library/LaunchAgents/dev.falconer.hook.plist")
+    }
+    pub fn legacy_systemd_unit(&self) -> PathBuf {
+        self.xdg_config_home
+            .join("systemd/user")
+            .join(LEGACY_SYSTEMD_UNIT)
+    }
+    pub fn legacy_launchd_plist(&self) -> PathBuf {
+        self.home
+            .join("Library/LaunchAgents")
+            .join(LEGACY_LAUNCHD_PLIST)
+    }
+
+    /// Moves each OpenMosh directory to its Falconer name when only the old
+    /// one exists. A rename keeps every file (pairing keys, inbox) as is;
+    /// nothing is deleted, and an existing Falconer directory is never
+    /// touched. Returns the directories moved.
+    pub fn migrate_legacy_dirs(&self) -> Vec<(PathBuf, PathBuf)> {
+        let mut moved = Vec::new();
+        for (old, new) in [
+            (&self.legacy_config_dir, &self.config_dir),
+            (&self.legacy_state_dir, &self.state_dir),
+        ] {
+            let is_dir = std::fs::symlink_metadata(old).is_ok_and(|m| m.is_dir());
+            if is_dir
+                && std::fs::symlink_metadata(new).is_err()
+                && std::fs::rename(old, new).is_ok()
+            {
+                moved.push((old.clone(), new.clone()));
+            }
+        }
+        moved
+    }
+
+    /// OpenMosh directories still present (both names exist).
+    pub fn legacy_dirs_left(&self) -> Vec<&Path> {
+        [&self.legacy_config_dir, &self.legacy_state_dir]
+            .into_iter()
+            .filter(|p| p.exists())
+            .map(PathBuf::as_path)
+            .collect()
     }
 }
 
 /// `config.toml` written by `setup` (and `install.sh`) when none exists.
-pub const DEFAULT_CONFIG: &str = r#"# openmosh-hook configuration. Keep this file mode 0600.
+pub const DEFAULT_CONFIG: &str = r#"# falconer-hook configuration. Keep this file mode 0600.
 # host_alias = "my-laptop"   # name shown on the phone (default: hostname)
 retention_days = 7
 poll_interval_ms = 1000
@@ -207,8 +259,8 @@ mod tests {
             _ => None,
         })
         .unwrap();
-        assert_eq!(p.state_dir, PathBuf::from("/s/openmosh"));
-        assert_eq!(p.config_dir, PathBuf::from("/h/.config/openmosh"));
+        assert_eq!(p.state_dir, PathBuf::from("/s/falconer"));
+        assert_eq!(p.config_dir, PathBuf::from("/h/.config/falconer"));
         assert_eq!(
             p.authorized_keys(),
             PathBuf::from("/h/.ssh/authorized_keys")

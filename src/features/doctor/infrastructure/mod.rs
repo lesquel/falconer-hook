@@ -77,7 +77,7 @@ pub fn check_ssh_listening(port: u16, listening: bool, fix: &str) -> Check {
 }
 
 /// Read-only: `sshd -G` effective settings. Password or keyboard-interactive
-/// logins bypass every key restriction OpenMosh adds, so they are a warning.
+/// logins bypass every key restriction Falconer adds, so they are a warning.
 pub fn check_sshd_auth(effective: Option<&str>) -> Check {
     match effective {
         Some(effective) => sshd_auth_check(effective),
@@ -123,7 +123,7 @@ pub fn authorized_keys_files(effective: &str, home: &Path, user: &str) -> Option
     Some(out)
 }
 
-/// Read-only: sshd reads the file OpenMosh writes, and no unexpected key was
+/// Read-only: sshd reads the file Falconer writes, and no unexpected key was
 /// added after the first phone was paired (keys without an `openmosh:` tag
 /// below the first tagged line).
 pub fn check_authorized_keys(
@@ -140,7 +140,7 @@ pub fn check_authorized_keys(
             return Check::warn(
                 "authorized keys",
                 format!(
-                    "sshd reads {} but OpenMosh writes {}: paired phones cannot log in",
+                    "sshd reads {} but Falconer writes {}: paired phones cannot log in",
                     if list.is_empty() {
                         "no key file".to_string()
                     } else {
@@ -221,7 +221,7 @@ pub fn sshd_auth_check(effective: &str) -> Check {
             "sshd auth",
             format!(
                 "{} enabled: anyone who reaches port 22 can guess passwords. Fix: \
-                 `openmosh-hook harden-ssh` (or `s` on the TUI Status screen)",
+                 `falconer-hook harden-ssh` (or `s` on the TUI Status screen)",
                 open.join(", ")
             ),
         )
@@ -233,13 +233,13 @@ pub fn check_systemd_service(unit: &Path, runner: &dyn CommandRunner, systemctl:
     if !unit.exists() {
         return Check::warn(
             "service",
-            "not installed; run `openmosh-hook service install`",
+            "not installed; run `falconer-hook service install`",
         );
     }
     let args = vec![
         "--user".to_string(),
         "is-active".into(),
-        "openmosh-hook.service".into(),
+        "falconer-hook.service".into(),
     ];
     match runner.run(systemctl, &args) {
         Ok(o) if o.success() => Check::ok("service", "active"),
@@ -254,7 +254,7 @@ pub fn check_launchd_service(plist: &Path) -> Check {
     } else {
         Check::warn(
             "service",
-            "not installed; run `openmosh-hook service install`",
+            "not installed; run `falconer-hook service install`",
         )
     }
 }
@@ -323,7 +323,7 @@ mod tests {
                 "systemctl",
                 "--user",
                 "is-active",
-                "openmosh-hook.service"
+                "falconer-hook.service"
             ]]
         );
     }

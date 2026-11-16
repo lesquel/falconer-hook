@@ -1,4 +1,4 @@
-# openmosh-hook — Architecture
+# falconer-hook — Architecture
 
 Clean Architecture organized by feature. Global rules: dependencies point inward (`domain` imports no framework or I/O), features never import another feature's adapters, and wiring happens only in the composition root.
 
@@ -54,7 +54,7 @@ data/
 | `service` | Render and apply the user service plan | `ServiceFiles` (uses `CommandRunner`) | `FsServiceFiles` |
 | `doctor` | Diagnose dependencies, permissions and connectivity | uses other ports read-only | filesystem and service checks |
 | `integration` | Agent catalog (Claude Code, Codex, Gemini, Cursor, Copilot, Kiro, OpenCode, Aider) and pure edits of each agent's hook file calling `emit` | `SettingsFile` | `JsonSettingsFile` |
-| `setup` | Uninstall plan (only what openmosh-hook created) and its step-by-step execution | `UninstallPorts` (implemented in `app/lifecycle.rs` over `service`, `integration`, `pairing`) | — |
+| `setup` | Uninstall plan (only what falconer-hook created) and its step-by-step execution | `UninstallPorts` (implemented in `app/lifecycle.rs` over `service`, `integration`, `pairing`) | — |
 | `mirror` | Run the Herdr client and mirror focus to every attached client | `FocusSocket`, `Launcher`, `MonoClock` | `HerdrSocket` (Unix socket, NDJSON), `TtyLauncher`, `SystemMonoClock` |
 
 Cross-feature calls go through another feature's `domain` ports (for example `push` reads

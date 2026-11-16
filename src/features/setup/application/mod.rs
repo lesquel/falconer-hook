@@ -91,14 +91,14 @@ mod tests {
                     lines: 1,
                 },
                 Step::RemoveDir {
-                    path: "/s/openmosh".into(),
+                    path: "/s/falconer".into(),
                 },
                 Step::RemoveBinary { path: "/b".into() },
             ],
         );
         assert_eq!(
             *log.0.borrow(),
-            ["service", "gemini", "keys", "/s/openmosh", "binary"]
+            ["service", "gemini", "keys", "/s/falconer", "binary"]
         );
         assert!(!out[1].ok);
         assert_eq!(out[1].error.as_deref(), Some("bad file"));

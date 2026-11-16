@@ -4,7 +4,7 @@ use serde::Serialize;
 
 use crate::features::integration::domain::nested::Hook;
 use crate::features::integration::domain::{
-    agent_command, aider, flat, nested, owned, AgentSpec, Format, IntegrationError,
+    agent_command, aider, flat, nested, owned, AgentSpec, Format, IntegrationError, LEGACY_EXE_NAME,
 };
 
 /// A configuration file on disk.
@@ -29,7 +29,7 @@ pub struct IntegrationResult {
 pub struct Integration<'a, F> {
     pub file: &'a F,
     pub spec: &'static AgentSpec,
-    /// Absolute path of the `openmosh-hook` executable the hooks call.
+    /// Absolute path of the `falconer-hook` executable the hooks call.
     pub exe: String,
 }
 
@@ -157,6 +157,31 @@ impl<F: SettingsFile> Integration<'_, F> {
         Ok(self.result(changed, false))
     }
 
+    /// Whether hooks written before the rename (calling `openmosh-hook`)
+    /// are still there; `install` rewrites them (read-only).
+    pub fn has_legacy(&self) -> Result<bool, IntegrationError> {
+        Ok(self
+            .file
+            .load()?
+            .is_some_and(|t| t.contains(LEGACY_EXE_NAME))
+            && self.installed()?)
+    }
+
+    /// Deletes `legacy`, the file OpenMosh created for an owned-file agent,
+    /// when it is ours. Returns whether it was removed.
+    pub fn remove_legacy_file(&self, legacy: &F) -> Result<bool, IntegrationError> {
+        let Format::Owned(kind) = self.spec.format else {
+            return Ok(false);
+        };
+        match legacy.load()? {
+            Some(t) if owned::is_ours(kind, &t) => {
+                legacy.remove()?;
+                Ok(true)
+            }
+            _ => Ok(false),
+        }
+    }
+
     /// Whether our hooks are present (read-only).
     pub fn installed(&self) -> Result<bool, IntegrationError> {
         let agent = self.agent();
@@ -219,7 +244,7 @@ mod tests {
         Integration {
             file: f,
             spec: id.spec(),
-            exe: "/x/openmosh-hook".into(),
+            exe: "/x/falconer-hook".into(),
         }
     }
 

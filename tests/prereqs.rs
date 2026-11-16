@@ -20,8 +20,8 @@ fn runtime(d: &Value) -> &Value {
     &d["prerequisites"]["agent_runtime"]
 }
 
-/// Interactive answers are piped; `OPENMOSH_ASSUME_TTY` makes stdin count as a terminal.
-const TTY: &[(&str, &str)] = &[("OPENMOSH_ASSUME_TTY", "1")];
+/// Interactive answers are piped; `FALCONER_ASSUME_TTY` makes stdin count as a terminal.
+const TTY: &[(&str, &str)] = &[("FALCONER_ASSUME_TTY", "1")];
 
 fn no_tmux() -> Env {
     let e = Env::isolated();
@@ -235,12 +235,12 @@ fn setup_asks_to_pair_only_when_a_person_can_scan() {
     // Without a terminal: next step only.
     let out = e.run(&["setup", "--no-service"], None, &[]);
     let text = String::from_utf8_lossy(&out.stdout);
-    assert!(text.contains("Next: run `openmosh-hook pair`"));
+    assert!(text.contains("Next: run `falconer-hook pair`"));
     assert!(!String::from_utf8_lossy(&out.stderr).contains("Pair a phone now?"));
     // Interactive: asked, and "n" leaves it for later.
     let out = e.run(&["setup", "--no-service"], Some("n\n"), TTY);
     assert!(String::from_utf8_lossy(&out.stderr).contains("Pair a phone now? [Y/n]"));
-    assert!(String::from_utf8_lossy(&out.stdout).contains("Next: run `openmosh-hook pair`"));
+    assert!(String::from_utf8_lossy(&out.stdout).contains("Next: run `falconer-hook pair`"));
 }
 
 #[test]

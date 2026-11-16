@@ -150,7 +150,7 @@ pub trait EventStore {
 }
 
 /// Appends the project (last folder of the agent's working directory) to an
-/// event title: `claude finished · OpenMosh`. Home and root add nothing.
+/// event title: `claude finished · Falconer`. Home and root add nothing.
 pub fn titled_with_project(title: String, cwd: Option<&str>) -> String {
     let project = cwd.and_then(crate::shared::domain::text::project_of);
     let home = std::env::var("HOME").ok();

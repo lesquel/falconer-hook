@@ -11,7 +11,7 @@ body:
   - type: input
     attributes:
       label: Versions
-      description: "`openmosh-hook version`, app version (Settings), OS and phone model"
+      description: "`falconer-hook version`, app version (Settings), OS and phone model"
     validations:
       required: true
   - type: textarea

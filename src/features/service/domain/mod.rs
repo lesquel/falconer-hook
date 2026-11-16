@@ -6,8 +6,10 @@ use thiserror::Error;
 
 use crate::shared::domain::error::ErrorCode;
 
-pub const SYSTEMD_UNIT_NAME: &str = "openmosh-hook.service";
-pub const LAUNCHD_LABEL: &str = "dev.openmosh.hook";
+pub const SYSTEMD_UNIT_NAME: &str = "falconer-hook.service";
+pub const LAUNCHD_LABEL: &str = "dev.falconer.hook";
+/// The unit OpenMosh installed before the rename.
+pub const LEGACY_SYSTEMD_UNIT_NAME: &str = crate::shared::config::LEGACY_SYSTEMD_UNIT;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -63,14 +65,14 @@ fn safe_path(p: &Path) -> Result<&str, ServiceError> {
 /// purpose: in a user service it needs unprivileged user namespaces, and where
 /// those are off or blocked (e.g. AppArmor on Ubuntu 24.04) the service would
 /// not start at all; `serve` also runs the Herdr CLI, whose own state lives
-/// outside the OpenMosh directories. (`PrivateTmp=` alone would not affect
+/// outside the Falconer directories. (`PrivateTmp=` alone would not affect
 /// tmux, which `serve` never calls: tmux answers go through `respond`.)
 pub fn systemd_unit(exe: &Path) -> Result<String, ServiceError> {
     // `%` is a systemd specifier prefix and must be doubled.
     let exe = safe_path(exe)?.replace('%', "%%");
     Ok(format!(
         "[Unit]\n\
-Description=OpenMosh hook: agent events and encrypted push\n\
+Description=Falconer hook: agent events and encrypted push\n\
 \n\
 [Service]\n\
 Type=simple\n\
@@ -163,13 +165,40 @@ pub fn uninstall_plan(
     systemctl: &str,
     launchctl: &str,
 ) -> Result<ServicePlan, ServiceError> {
+    uninstall_named(platform, unit_path, SYSTEMD_UNIT_NAME, systemctl, launchctl)
+}
+
+/// Stops and removes the service OpenMosh (the previous name) registered,
+/// so the Falconer one does not run next to it.
+pub fn legacy_uninstall_plan(
+    platform: Platform,
+    unit_path: &Path,
+    systemctl: &str,
+    launchctl: &str,
+) -> Result<ServicePlan, ServiceError> {
+    uninstall_named(
+        platform,
+        unit_path,
+        LEGACY_SYSTEMD_UNIT_NAME,
+        systemctl,
+        launchctl,
+    )
+}
+
+fn uninstall_named(
+    platform: Platform,
+    unit_path: &Path,
+    unit_name: &str,
+    systemctl: &str,
+    launchctl: &str,
+) -> Result<ServicePlan, ServiceError> {
     Ok(match platform {
         Platform::Systemd => ServicePlan {
             platform,
             write: vec![],
             remove: vec![unit_path.to_path_buf()],
             commands: vec![
-                argv(&[systemctl, "--user", "disable", "--now", SYSTEMD_UNIT_NAME]),
+                argv(&[systemctl, "--user", "disable", "--now", unit_name]),
                 argv(&[systemctl, "--user", "daemon-reload"]),
             ],
         },
@@ -188,8 +217,8 @@ mod tests {
 
     #[test]
     fn systemd_unit_runs_serve_with_hardening() {
-        let u = systemd_unit(Path::new("/home/u/.local/bin/openmosh-hook")).unwrap();
-        assert!(u.contains("ExecStart=\"/home/u/.local/bin/openmosh-hook\" serve\n"));
+        let u = systemd_unit(Path::new("/home/u/.local/bin/falconer-hook")).unwrap();
+        assert!(u.contains("ExecStart=\"/home/u/.local/bin/falconer-hook\" serve\n"));
         assert!(u.contains("UMask=0077\n"));
         assert!(u.contains("NoNewPrivileges=yes\n"));
         assert!(u.contains("WantedBy=default.target\n"));
@@ -222,19 +251,19 @@ mod tests {
     #[test]
     fn plist_escapes_and_lists_arguments() {
         let p = launchd_plist(
-            Path::new("/Users/a&b/bin/openmosh-hook"),
+            Path::new("/Users/a&b/bin/falconer-hook"),
             Path::new("/Users/a&b"),
         )
         .unwrap();
         assert!(
-            p.contains("<string>/Users/a&amp;b/bin/openmosh-hook</string><string>serve</string>")
+            p.contains("<string>/Users/a&amp;b/bin/falconer-hook</string><string>serve</string>")
         );
-        assert!(p.contains("<key>Label</key><string>dev.openmosh.hook</string>"));
+        assert!(p.contains("<key>Label</key><string>dev.falconer.hook</string>"));
     }
 
     #[test]
     fn plans_have_exact_commands() {
-        let unit = Path::new("/h/.config/systemd/user/openmosh-hook.service");
+        let unit = Path::new("/h/.config/systemd/user/falconer-hook.service");
         let i = install_plan(
             Platform::Systemd,
             Path::new("/h/bin/x"),
@@ -253,7 +282,7 @@ mod tests {
                     "--user",
                     "enable",
                     "--now",
-                    "openmosh-hook.service"
+                    "falconer-hook.service"
                 ]),
             ]
         );
@@ -266,14 +295,14 @@ mod tests {
                 "--user",
                 "disable",
                 "--now",
-                "openmosh-hook.service"
+                "falconer-hook.service"
             ])
         );
         let l = install_plan(
             Platform::Launchd,
             Path::new("/h/bin/x"),
             Path::new("/h"),
-            Path::new("/h/Library/LaunchAgents/dev.openmosh.hook.plist"),
+            Path::new("/h/Library/LaunchAgents/dev.falconer.hook.plist"),
             "systemctl",
             "launchctl",
         )
@@ -284,8 +313,25 @@ mod tests {
                 "launchctl",
                 "load",
                 "-w",
-                "/h/Library/LaunchAgents/dev.openmosh.hook.plist"
+                "/h/Library/LaunchAgents/dev.falconer.hook.plist"
             ])]
+        );
+    }
+
+    #[test]
+    fn legacy_plan_stops_the_openmosh_unit() {
+        let unit = Path::new("/h/.config/systemd/user/openmosh-hook.service");
+        let p = legacy_uninstall_plan(Platform::Systemd, unit, "systemctl", "launchctl").unwrap();
+        assert_eq!(p.remove, vec![unit.to_path_buf()]);
+        assert_eq!(
+            p.commands[0],
+            argv(&[
+                "systemctl",
+                "--user",
+                "disable",
+                "--now",
+                "openmosh-hook.service"
+            ])
         );
     }
 }

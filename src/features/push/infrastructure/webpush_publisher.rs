@@ -172,7 +172,7 @@ mod tests {
         assert!(head.contains("\r\nttl: 900\r\n"));
         assert!(head.contains("\r\nurgency: high\r\n"));
         assert!(head.contains("\r\nauthorization: vapid t="));
-        assert!(head.contains("\r\nuser-agent: openmosh\r\n"));
+        assert!(head.contains("\r\nuser-agent: falconer\r\n"));
         // header (86) + 256-byte bucket + tag (16)
         assert_eq!(got.len(), 86 + 256 + 16);
     }

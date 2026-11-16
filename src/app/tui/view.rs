@@ -29,7 +29,7 @@ pub fn draw(f: &mut Frame, app: &App) {
             .block(
                 Block::default()
                     .borders(Borders::ALL)
-                    .title(" openmosh-hook "),
+                    .title(" falconer-hook "),
             )
             .highlight_style(Style::default().add_modifier(Modifier::BOLD | Modifier::REVERSED)),
         tabs,

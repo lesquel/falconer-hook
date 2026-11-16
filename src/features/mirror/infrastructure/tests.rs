@@ -223,7 +223,7 @@ fn launcher_returns_the_child_exit_code_and_signal() {
         .unwrap();
     assert_eq!(k.wait().unwrap(), 137);
     assert!(matches!(
-        TtyLauncher.spawn("openmosh-definitely-missing-binary", &[]),
+        TtyLauncher.spawn("falconer-definitely-missing-binary", &[]),
         Err(MirrorError::Launch(_))
     ));
 }

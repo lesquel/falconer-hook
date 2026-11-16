@@ -18,10 +18,10 @@ use crate::features::doctor::domain::Status;
 use crate::features::doctor::infrastructure::{sshd_auth_check, sshd_password_logins};
 use crate::shared::domain::command::{CommandError, CommandOutput, CommandRunner};
 
-pub const DROP_IN: &str = "/etc/ssh/sshd_config.d/10-openmosh.conf";
+pub const DROP_IN: &str = "/etc/ssh/sshd_config.d/10-falconer.conf";
 const MAIN_CONFIG: &str = "/etc/ssh/sshd_config";
 
-pub const DROP_IN_CONTENT: &str = "# Written by openmosh-hook harden-ssh: public keys only.\n\
+pub const DROP_IN_CONTENT: &str = "# Written by falconer-hook harden-ssh: public keys only.\n\
 PasswordAuthentication no\n\
 KbdInteractiveAuthentication no\n\
 AuthenticationMethods publickey\n";
@@ -226,7 +226,7 @@ pub fn harden_ssh(ctx: &Ctx, dry_run: bool, yes: bool, json: bool) -> Result<Rep
             "unsupported",
             format!(
                 "{MAIN_CONFIG} does not include /etc/ssh/sshd_config.d/*.conf; add the three \
-                 lines of `openmosh-hook harden-ssh --dry-run` to it by hand"
+                 lines of `falconer-hook harden-ssh --dry-run` to it by hand"
             ),
         ));
     }
@@ -234,7 +234,7 @@ pub fn harden_ssh(ctx: &Ctx, dry_run: bool, yes: bool, json: bool) -> Result<Rep
     if dry_run {
         return Ok(Reply::new(
             &json!({"dry_run": true, "file": DROP_IN, "content": DROP_IN_CONTENT}),
-            format!("openmosh-hook harden-ssh would:\n{plan}"),
+            format!("falconer-hook harden-ssh would:\n{plan}"),
         ));
     }
     if !yes {
@@ -244,7 +244,7 @@ pub fn harden_ssh(ctx: &Ctx, dry_run: bool, yes: bool, json: bool) -> Result<Rep
                 "harden-ssh needs confirmation: pass --yes, or --dry-run to see the plan",
             ));
         }
-        eprintln!("openmosh-hook harden-ssh will:\n{plan}");
+        eprintln!("falconer-hook harden-ssh will:\n{plan}");
         if !ask("Proceed?") {
             return Err(CliError::new(
                 "cancelled",
