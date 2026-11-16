@@ -3,12 +3,12 @@ name: release
 # On a `v*` tag: build static/standalone binaries for every supported
 # platform, then publish them with one SHA256SUMS file, signed with minisign
 # (SHA256SUMS.minisig, key in minisign.pub), to the GitHub release.
-# Asset names: openmosh-hook-<target>.tar.gz (install.sh relies on them).
+# Asset names: falconer-hook-<target>.tar.gz (install.sh relies on them).
 #
 # Supply chain: every action is pinned to a full commit SHA, only `actions/*`
 # actions are used, nothing is cached, and the signing key is only visible to
 # the `sign` job, which runs no third-party action and only sees SHA256SUMS.
-# Its trusted comment is `openmosh-hook <tag>` (install.sh checks it).
+# Its trusted comment is `falconer-hook <tag>` (install.sh checks it).
 
 on:
   push:
@@ -67,12 +67,12 @@ jobs:
         shell: bash
         run: |
           mkdir -p dist pkg
-          cp target/${{ matrix.target }}/release/openmosh-hook pkg/
-          tar -czf dist/openmosh-hook-${{ matrix.target }}.tar.gz -C pkg openmosh-hook
+          cp target/${{ matrix.target }}/release/falconer-hook pkg/
+          tar -czf dist/falconer-hook-${{ matrix.target }}.tar.gz -C pkg falconer-hook
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: openmosh-hook-${{ matrix.target }}
-          path: dist/openmosh-hook-${{ matrix.target }}.tar.gz
+          name: falconer-hook-${{ matrix.target }}
+          path: dist/falconer-hook-${{ matrix.target }}.tar.gz
           if-no-files-found: error
 
   checksums:
@@ -81,13 +81,13 @@ jobs:
     steps:
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          pattern: openmosh-hook-*
+          pattern: falconer-hook-*
           path: dist
           merge-multiple: true
       - name: Checksums
         working-directory: dist
         run: |
-          sha256sum openmosh-hook-*.tar.gz > SHA256SUMS
+          sha256sum falconer-hook-*.tar.gz > SHA256SUMS
           cat SHA256SUMS
           test "$(wc -l < SHA256SUMS)" -eq 4
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -130,7 +130,7 @@ jobs:
           trap 'rm -f "$key"' EXIT
           (umask 077 && printf '%s\n' "$MINISIGN_SECRET_KEY" > "$key")
           # Unencrypted key: no password prompt (stdin closed so it never waits).
-          rsign sign -W -s "$key" -t "openmosh-hook $GITHUB_REF_NAME" SHA256SUMS < /dev/null
+          rsign sign -W -s "$key" -t "falconer-hook $GITHUB_REF_NAME" SHA256SUMS < /dev/null
           rm -f "$key"
           # The secret must match the public key committed in the repository.
           rsign verify -q -p ../src/minisign.pub SHA256SUMS
@@ -158,7 +158,7 @@ jobs:
           TAG: ${{ github.ref_name }}
         run: |
           ls -l
-          test "$(ls openmosh-hook-*.tar.gz | wc -l)" -eq 4
+          test "$(ls falconer-hook-*.tar.gz | wc -l)" -eq 4
           test -s SHA256SUMS && test -s SHA256SUMS.minisig
           sha256sum -c SHA256SUMS
           # v1.2.0-rc.1 and similar test builds are pre-releases: the
@@ -169,4 +169,4 @@ jobs:
           esac
           # shellcheck disable=SC2086
           gh release create "$TAG" --verify-tag --title "$TAG" --notes "" $flags \
-            openmosh-hook-*.tar.gz SHA256SUMS SHA256SUMS.minisig
+            falconer-hook-*.tar.gz SHA256SUMS SHA256SUMS.minisig
