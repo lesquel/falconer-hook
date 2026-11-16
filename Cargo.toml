@@ -4,6 +4,7 @@ version = "0.2.0"
 edition = "2021"
 rust-version = "1.89"
 description = "Host-side daemon and CLI for Falconer: agent events, encrypted push, approvals over SSH"
+homepage = "https://falconer-web.vercel.app/"
 repository = "https://github.com/lesquel/falconer-hook"
 license = "Apache-2.0"
 authors = ["lesquel"]

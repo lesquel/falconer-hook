@@ -3,6 +3,7 @@
 Host-side daemon and CLI for [Falconer](https://github.com/lesquel/falconer). It watches your AI
 agents (through Herdr or tmux), keeps an inbox of events, sends **end-to-end encrypted** push
 notifications through ntfy/UnifiedPush, and executes approvals sent from your phone over SSH.
+Website: <https://falconer-web.vercel.app/>.
 
 It opens **no permanent network port**. The only listener is the one-shot pairing listener of
 `falconer-hook pair`, bound to the Tailscale address for at most 5 minutes.
