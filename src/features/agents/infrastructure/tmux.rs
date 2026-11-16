@@ -1,5 +1,5 @@
 //! tmux adapter. tmux has no agent model: agents managed only by tmux report
-//! through their own hooks (`openmosh-hook emit`), so `list_agents` is empty.
+//! through their own hooks (`falconer-hook emit`), so `list_agents` is empty.
 //!
 //! - sessions: `tmux list-sessions -F '#{session_name}\t#{session_attached}'`
 //! - keys: `tmux send-keys -t <pane> <Key>...` (names mapped to tmux names)

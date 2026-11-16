@@ -259,9 +259,9 @@ mod tests {
 
     #[test]
     fn titles_name_the_project_folder() {
-        let raw = r#"{"hook_event_name":"Stop","cwd":"/home/u/code/OpenMosh"}"#;
+        let raw = r#"{"hook_event_name":"Stop","cwd":"/home/u/code/Falconer"}"#;
         let e = parse_hook_payload("claude", raw, pane(), 7).unwrap();
-        assert_eq!(e.title, "claude finished · OpenMosh");
+        assert_eq!(e.title, "claude finished · Falconer");
         let e = parse_with_kind(
             "codex",
             EmitKind::Fixed(EventKind::Done),

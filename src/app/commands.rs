@@ -362,9 +362,9 @@ pub fn doctor(ctx: &Ctx) -> Result<Reply, CliError> {
         let _ = writeln!(human, "[{mark}] {:<13} {}", c.name, c.detail);
     }
     human.push_str(if report.healthy {
-        "\nNext: open OpenMosh on your phone and add this host (openmosh-hook pair)."
+        "\nNext: open Falconer on your phone and add this host (falconer-hook pair)."
     } else {
-        "\nFix the FAIL items above, then run `openmosh-hook doctor` again."
+        "\nFix the FAIL items above, then run `falconer-hook doctor` again."
     });
     Ok(Reply::new(&report, human))
 }
@@ -418,6 +418,6 @@ pub fn service(ctx: &Ctx, install: bool, dry_run: bool) -> Result<Reply, CliErro
 pub fn version() -> Reply {
     Reply::new(
         &json!({"version": env!("CARGO_PKG_VERSION"), "protocol": {"pair": 1, "push": 1, "herdr": 1}}),
-        format!("openmosh-hook {}", env!("CARGO_PKG_VERSION")),
+        format!("falconer-hook {}", env!("CARGO_PKG_VERSION")),
     )
 }

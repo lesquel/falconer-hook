@@ -142,7 +142,7 @@ pub fn installed(settings: &Value, agent: &str) -> Result<bool, IntegrationError
 mod tests {
     use super::*;
 
-    const CMD: &str = "'/home/u/.local/bin/openmosh-hook' emit --source claude";
+    const CMD: &str = "'/home/u/.local/bin/falconer-hook' emit --source claude";
 
     fn claude(cmd: &str) -> Vec<Hook<'static>> {
         ["Notification", "Stop"]
@@ -182,7 +182,7 @@ mod tests {
 
     #[test]
     fn install_repoints_a_stale_executable_path() {
-        let old = "'/old/place/openmosh-hook' emit --source claude";
+        let old = "'/old/place/falconer-hook' emit --source claude";
         let mut s = json!({"hooks": {
             "Stop": [{"hooks": [{"type": "command", "command": "notify-send done"}, {"type": "command", "command": old}]}],
             "Notification": [{"hooks": [{"type": "command", "command": CMD}]}]
@@ -219,7 +219,7 @@ mod tests {
     fn other_agents_hooks_survive_uninstall() {
         let mut s = json!({});
         install(&mut s, "claude", &claude(CMD), None, None).unwrap();
-        let codex = "'/b/openmosh-hook' emit --source codex --kind done";
+        let codex = "'/b/falconer-hook' emit --source codex --kind done";
         install(
             &mut s,
             "codex",
@@ -241,7 +241,7 @@ mod tests {
     #[test]
     fn matcher_and_name_are_written() {
         let mut s = json!({"general": {"vimMode": true}});
-        let cmd = "'/b/openmosh-hook' emit --source gemini --kind done";
+        let cmd = "'/b/falconer-hook' emit --source gemini --kind done";
         install(
             &mut s,
             "gemini",
@@ -250,12 +250,12 @@ mod tests {
                 command: cmd.into(),
             }],
             Some("*"),
-            Some("openmosh"),
+            Some("falconer"),
         )
         .unwrap();
         assert_eq!(
             s["hooks"]["AfterAgent"][0],
-            json!({"matcher": "*", "hooks": [{"name": "openmosh", "type": "command", "command": cmd}]})
+            json!({"matcher": "*", "hooks": [{"name": "falconer", "type": "command", "command": cmd}]})
         );
     }
 

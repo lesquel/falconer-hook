@@ -7,9 +7,9 @@ use std::path::PathBuf;
 
 #[derive(Debug, Parser)]
 #[command(
-    name = "openmosh-hook",
+    name = "falconer-hook",
     version,
-    about = "OpenMosh host daemon and CLI",
+    about = "Falconer host daemon and CLI",
     propagate_version = true
 )]
 pub struct Cli {
@@ -114,10 +114,10 @@ pub enum Command {
         #[command(flatten)]
         out: JsonFlag,
     },
-    /// Remove everything openmosh-hook created: service, integrations,
+    /// Remove everything falconer-hook created: service, integrations,
     /// paired keys, devices, state and config.
     Uninstall {
-        /// Also delete the openmosh-hook binary that is running.
+        /// Also delete the falconer-hook binary that is running.
         #[arg(long)]
         all: bool,
         /// Print the plan without changing anything.
@@ -325,11 +325,11 @@ pub enum AgentArg {
     Gemini,
     /// Cursor agent (~/.cursor/hooks.json)
     Cursor,
-    /// GitHub Copilot CLI (~/.copilot/hooks/openmosh.json)
+    /// GitHub Copilot CLI (~/.copilot/hooks/falconer.json)
     Copilot,
-    /// Kiro CLI (~/.kiro/hooks/openmosh.json)
+    /// Kiro CLI (~/.kiro/hooks/falconer.json)
     Kiro,
-    /// OpenCode (~/.config/opencode/plugins/openmosh.js)
+    /// OpenCode (~/.config/opencode/plugins/falconer.js)
     Opencode,
     /// Aider (~/.aider.conf.yml)
     Aider,
@@ -337,7 +337,7 @@ pub enum AgentArg {
 
 #[derive(Debug, Subcommand)]
 pub enum IntegrationCmd {
-    /// Wire the agent's hooks to `openmosh-hook emit`.
+    /// Wire the agent's hooks to `falconer-hook emit`.
     Install {
         agent: AgentArg,
         /// File to edit (default: the agent's user-level file listed above).
@@ -346,7 +346,7 @@ pub enum IntegrationCmd {
         #[command(flatten)]
         out: JsonFlag,
     },
-    /// Remove only the hooks openmosh-hook added.
+    /// Remove only the hooks falconer-hook added.
     Uninstall {
         agent: AgentArg,
         #[arg(long)]

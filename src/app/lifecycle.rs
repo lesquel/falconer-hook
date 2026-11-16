@@ -31,8 +31,8 @@ fn ask(question: &str) -> bool {
 }
 
 fn interactive(json: bool) -> bool {
-    // `OPENMOSH_ASSUME_TTY=1` lets tests drive the prompts through a pipe.
-    !json && (std::io::stdin().is_terminal() || std::env::var_os("OPENMOSH_ASSUME_TTY").is_some())
+    // `FALCONER_ASSUME_TTY=1` lets tests drive the prompts through a pipe.
+    !json && (std::io::stdin().is_terminal() || std::env::var_os("FALCONER_ASSUME_TTY").is_some())
 }
 
 /// Asks `<question> [Y/n]`; Enter means yes.
@@ -140,12 +140,12 @@ pub fn setup(ctx: &Ctx, yes: bool, no_service: bool, json: bool) -> Result<Reply
     if agents.is_empty() {
         let _ = writeln!(
             human,
-            "No supported agent detected (see `openmosh-hook integration list`)."
+            "No supported agent detected (see `falconer-hook integration list`)."
         );
     } else if !yes && !ask_user {
         let _ = writeln!(
             human,
-            "Run `openmosh-hook setup --yes` or `openmosh-hook integration install <agent>` to add the skipped integrations."
+            "Run `falconer-hook setup --yes` or `falconer-hook integration install <agent>` to add the skipped integrations."
         );
     }
 
@@ -162,7 +162,7 @@ pub fn setup(ctx: &Ctx, yes: bool, no_service: bool, json: bool) -> Result<Reply
     let _ = writeln!(human, "\n{}", doctor.human);
     let healthy = doctor.data["healthy"] == true;
     let unpaired = ctx.registry().list().map(|d| d.is_empty()).unwrap_or(false);
-    let next_step = "Next: run `openmosh-hook pair` and scan the QR code with OpenMosh.";
+    let next_step = "Next: run `falconer-hook pair` and scan the QR code with Falconer.";
     let pairing = if !healthy || !unpaired {
         let _ = write!(human, "\n{next_step}");
         json!({"action": "skipped", "reason": if healthy { "already_paired" } else { "checks_failed" }})
@@ -199,7 +199,7 @@ pub fn setup(ctx: &Ctx, yes: bool, no_service: bool, json: bool) -> Result<Reply
         "prerequisites": {"agent_runtime": runtime, "ssh": ssh},
         "doctor": doctor.data,
         "pairing": pairing,
-        "next": "openmosh-hook pair",
+        "next": "falconer-hook pair",
     });
     Ok(Reply::new(&data, human))
 }
@@ -211,7 +211,7 @@ fn keys(ctx: &Ctx) -> FileAuthorizedKeys {
     }
 }
 
-/// Read-only inventory of what openmosh-hook created.
+/// Read-only inventory of what falconer-hook created.
 fn facts(ctx: &Ctx) -> Result<Facts, CliError> {
     let (_, unit) = platform_unit(ctx);
     let integrations = integrations::statuses(ctx)
@@ -286,14 +286,14 @@ impl UninstallPorts for Ports<'_> {
 
     fn remove_dir(&self, path: &Path) -> Result<(), String> {
         if !deletable_dir(path) {
-            return Err("refusing to delete a directory not named openmosh".into());
+            return Err("refusing to delete a directory not named falconer".into());
         }
         std::fs::remove_dir_all(path).map_err(|e| e.to_string())
     }
 
     fn remove_binary(&self, path: &Path) -> Result<(), String> {
         if !deletable_binary(path) {
-            return Err("refusing to delete a file not named openmosh-hook".into());
+            return Err("refusing to delete a file not named falconer-hook".into());
         }
         std::fs::remove_file(path).map_err(|e| e.to_string())
     }
@@ -337,14 +337,14 @@ pub fn uninstall(
     if steps.is_empty() {
         return Ok(Reply::new(
             &json!({"dry_run": dry_run, "steps": steps, "complete": true, "kept": kept}),
-            format!("Nothing to remove: openmosh-hook left nothing on this machine.{kept_text}"),
+            format!("Nothing to remove: falconer-hook left nothing on this machine.{kept_text}"),
         ));
     }
     if dry_run {
         return Ok(Reply::new(
             &json!({"dry_run": true, "steps": steps, "kept": kept}),
             format!(
-                "openmosh-hook uninstall would:\n{}{kept_text}",
+                "falconer-hook uninstall would:\n{}{kept_text}",
                 plan_text.trim_end()
             ),
         ));
@@ -357,7 +357,7 @@ pub fn uninstall(
             ));
         }
         eprintln!(
-            "openmosh-hook uninstall will:\n{}{kept_text}",
+            "falconer-hook uninstall will:\n{}{kept_text}",
             plan_text.trim_end()
         );
         if !ask("Proceed?") {
@@ -383,9 +383,9 @@ pub fn uninstall(
         );
     }
     human.push_str(if complete {
-        "openmosh-hook was removed."
+        "falconer-hook was removed."
     } else {
-        "Some steps failed; fix them and run `openmosh-hook uninstall` again."
+        "Some steps failed; fix them and run `falconer-hook uninstall` again."
     });
     human.push_str(&kept_text);
     Ok(Reply::new(
@@ -403,7 +403,7 @@ mod tests {
         assert!(kept_notes(false).is_empty());
         let k = kept_notes(true);
         assert_eq!(k.len(), 1);
-        assert!(k[0].starts_with("/etc/ssh/sshd_config.d/10-openmosh.conf"));
-        assert!(k[0].contains("sudo rm /etc/ssh/sshd_config.d/10-openmosh.conf"));
+        assert!(k[0].starts_with("/etc/ssh/sshd_config.d/10-falconer.conf"));
+        assert!(k[0].contains("sudo rm /etc/ssh/sshd_config.d/10-falconer.conf"));
     }
 }

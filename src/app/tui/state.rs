@@ -436,7 +436,7 @@ impl App {
 
     fn on_screen_key(&mut self, key: KeyEvent, exec: &mut dyn Exec) -> Effect {
         if self.uninstalled {
-            self.error("openmosh-hook was removed; press q to quit.");
+            self.error("falconer-hook was removed; press q to quit.");
             return Effect::None;
         }
         let sel = self.selected();
@@ -727,7 +727,7 @@ impl App {
                 if r.data["complete"].as_bool().unwrap_or(false) {
                     self.uninstalled = true;
                     self.plan_empty = true;
-                    self.info("openmosh-hook was removed. Press q to quit.");
+                    self.info("falconer-hook was removed. Press q to quit.");
                 } else {
                     self.error("Some steps failed; see the list, then try again.");
                     self.invalidate();

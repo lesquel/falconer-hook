@@ -2,7 +2,7 @@
 //!
 //! The app's crypto tests consume these files. They are generated from fixed
 //! keys and nonces by `regenerate_vectors` (run with
-//! `OPENMOSH_WRITE_VECTORS=1 cargo test regenerate_vectors -- --ignored`) and
+//! `FALCONER_WRITE_VECTORS=1 cargo test regenerate_vectors -- --ignored`) and
 //! verified on every `cargo test` by `vectors_match_implementation`.
 
 use serde::{Deserialize, Serialize};
@@ -144,7 +144,7 @@ fn build_pair() -> PairVector {
 #[test]
 #[ignore = "writes tests/vectors; run explicitly to regenerate"]
 fn regenerate_vectors() {
-    if std::env::var("OPENMOSH_WRITE_VECTORS").as_deref() != Ok("1") {
+    if std::env::var("FALCONER_WRITE_VECTORS").as_deref() != Ok("1") {
         return;
     }
     let push = serde_json::to_string_pretty(&build_push()).unwrap() + "\n";

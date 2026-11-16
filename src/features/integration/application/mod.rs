@@ -29,7 +29,7 @@ pub struct IntegrationResult {
 pub struct Integration<'a, F> {
     pub file: &'a F,
     pub spec: &'static AgentSpec,
-    /// Absolute path of the `openmosh-hook` executable the hooks call.
+    /// Absolute path of the `falconer-hook` executable the hooks call.
     pub exe: String,
 }
 
@@ -219,7 +219,7 @@ mod tests {
         Integration {
             file: f,
             spec: id.spec(),
-            exe: "/x/openmosh-hook".into(),
+            exe: "/x/falconer-hook".into(),
         }
     }
 

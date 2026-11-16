@@ -32,7 +32,7 @@ mod tests {
     #[test]
     fn writes_and_removes_idempotently() {
         let t = tempfile::tempdir().unwrap();
-        let p = t.path().join("systemd/user/openmosh-hook.service");
+        let p = t.path().join("systemd/user/falconer-hook.service");
         FsServiceFiles.write(&p, "x").unwrap();
         assert_eq!(std::fs::read_to_string(&p).unwrap(), "x");
         FsServiceFiles.remove(&p).unwrap();

@@ -109,7 +109,7 @@ pub fn installed(settings: &Value, agent: &str) -> Result<bool, IntegrationError
 mod tests {
     use super::*;
 
-    const CMD: &str = "'/b/openmosh-hook' emit --source cursor --kind done";
+    const CMD: &str = "'/b/falconer-hook' emit --source cursor --kind done";
 
     fn stop() -> Vec<Hook<'static>> {
         vec![Hook {

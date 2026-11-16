@@ -1,7 +1,7 @@
-//! The uninstall plan. Only things openmosh-hook created are ever listed:
+//! The uninstall plan. Only things falconer-hook created are ever listed:
 //! its user service, its own hooks, `authorized_keys` lines tagged
-//! `openmosh:`, its `openmosh` config/state directories and, with `--all`,
-//! the `openmosh-hook` binary.
+//! `openmosh:`, its `falconer` config/state directories and, with `--all`,
+//! the `falconer-hook` binary.
 
 pub mod prereqs;
 
@@ -20,9 +20,9 @@ pub enum Step {
     },
     /// Remove the lines tagged `openmosh:` (paired phones).
     AuthorizedKeys { path: PathBuf, lines: usize },
-    /// Delete an `openmosh` directory (config, or state with devices and events).
+    /// Delete an `falconer` directory (config, or state with devices and events).
     RemoveDir { path: PathBuf },
-    /// Delete the `openmosh-hook` binary.
+    /// Delete the `falconer-hook` binary.
     RemoveBinary { path: PathBuf },
 }
 
@@ -34,7 +34,7 @@ impl Step {
                 format!("remove the {agent} hooks from {settings}")
             }
             Step::AuthorizedKeys { path, lines } => format!(
-                "remove {lines} paired-phone key line(s) tagged openmosh: from {}",
+                "remove {lines} paired-phone key line(s) tagged falconer: from {}",
                 path.display()
             ),
             Step::RemoveDir { path } => format!("delete {}", path.display()),
@@ -58,14 +58,14 @@ pub struct Facts {
     pub binary: PathBuf,
 }
 
-/// Only directories named `openmosh` are ever deleted.
+/// Only directories named `falconer` are ever deleted.
 pub fn deletable_dir(p: &Path) -> bool {
-    p.is_absolute() && p.file_name().is_some_and(|n| n == "openmosh")
+    p.is_absolute() && p.file_name().is_some_and(|n| n == "falconer")
 }
 
-/// Only a file named `openmosh-hook` is ever deleted.
+/// Only a file named `falconer-hook` is ever deleted.
 pub fn deletable_binary(p: &Path) -> bool {
-    p.is_absolute() && p.file_name().is_some_and(|n| n == "openmosh-hook")
+    p.is_absolute() && p.file_name().is_some_and(|n| n == "falconer-hook")
 }
 
 /// Ordered plan: stop the service first, delete the binary last.
@@ -98,16 +98,16 @@ mod tests {
 
     fn facts() -> Facts {
         Facts {
-            unit: Some("/h/.config/systemd/user/openmosh-hook.service".into()),
+            unit: Some("/h/.config/systemd/user/falconer-hook.service".into()),
             integrations: vec![("claude", "/h/.claude/settings.json".into())],
             authorized_keys: "/h/.ssh/authorized_keys".into(),
             tagged_keys: 2,
             dirs: vec![
-                "/h/.config/openmosh".into(),
-                "/h/.local/state/openmosh".into(),
+                "/h/.config/falconer".into(),
+                "/h/.local/state/falconer".into(),
                 "/h/.config".into(),
             ],
-            binary: "/h/.local/bin/openmosh-hook".into(),
+            binary: "/h/.local/bin/falconer-hook".into(),
         }
     }
 
@@ -123,13 +123,13 @@ mod tests {
             }
         ));
         assert!(matches!(steps[2], Step::AuthorizedKeys { lines: 2, .. }));
-        assert_eq!(steps.len(), 5, "the non-openmosh dir is never listed");
+        assert_eq!(steps.len(), 5, "the non-falconer dir is never listed");
         assert!(!steps.iter().any(|s| matches!(s, Step::RemoveBinary { .. })));
         let all = plan_uninstall(facts(), true);
         assert_eq!(
             all.last(),
             Some(&Step::RemoveBinary {
-                path: "/h/.local/bin/openmosh-hook".into()
+                path: "/h/.local/bin/falconer-hook".into()
             })
         );
     }
@@ -141,7 +141,7 @@ mod tests {
             ..Facts::default()
         };
         assert!(plan_uninstall(f, true).is_empty());
-        assert!(!deletable_dir(Path::new("openmosh")));
-        assert!(!deletable_binary(Path::new("/x/openmosh-hook-old")));
+        assert!(!deletable_dir(Path::new("falconer")));
+        assert!(!deletable_binary(Path::new("/x/falconer-hook-old")));
     }
 }

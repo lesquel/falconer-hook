@@ -28,7 +28,7 @@ pub fn generic_title(kind: &str) -> &'static str {
         "approval_required" | "approval" | "permission" => "An agent needs approval",
         "question" => "An agent has a question",
         "done" | "finished" => "An agent finished",
-        _ => "OpenMosh",
+        _ => "Falconer",
     }
 }
 
@@ -38,7 +38,7 @@ impl WebPushPayload {
             v: 1,
             kind: kind.to_string(),
             title: generic_title(kind),
-            body: "Open OpenMosh to respond.",
+            body: "Open Falconer to respond.",
             url: "openmosh:///inbox",
         }
     }
@@ -61,10 +61,10 @@ mod tests {
     fn payload_is_generic_and_in_wire_order() {
         assert_eq!(
             WebPushPayload::for_kind("approval_required").to_json(),
-            r#"{"v":1,"kind":"approval_required","title":"An agent needs approval","body":"Open OpenMosh to respond.","url":"openmosh:///inbox"}"#
+            r#"{"v":1,"kind":"approval_required","title":"An agent needs approval","body":"Open Falconer to respond.","url":"openmosh:///inbox"}"#
         );
         assert_eq!(generic_title("question"), "An agent has a question");
         assert_eq!(generic_title("done"), "An agent finished");
-        assert_eq!(generic_title("resolved"), "OpenMosh");
+        assert_eq!(generic_title("resolved"), "Falconer");
     }
 }

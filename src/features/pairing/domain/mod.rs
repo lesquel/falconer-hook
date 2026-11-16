@@ -108,7 +108,7 @@ pub trait LiveSessions {
 }
 
 /// Whether an `authorized_keys` line belongs to a paired phone.
-/// A line OpenMosh wrote: its comment is exactly `openmosh:<device id>`, where the id is
+/// A line Falconer wrote: its comment is exactly `openmosh:<device id>`, where the id is
 /// 16 random bytes in b64url (22 characters). Hand-written comments that merely start with
 /// `openmosh:` are left alone.
 pub fn is_tagged_line(line: &str) -> bool {
@@ -166,9 +166,9 @@ pub trait Tailnet {
 
 /// Tailscale SSH only takes over the standard SSH port.
 pub const TAILSCALE_SSH_PORT: u16 = 22;
-/// Why Tailscale SSH breaks OpenMosh.
+/// Why Tailscale SSH breaks Falconer.
 pub const TAILSCALE_SSH_REASON: &str =
-    "it intercepts port 22 on the tailnet address, so OpenMosh cannot reach OpenSSH";
+    "it intercepts port 22 on the tailnet address, so Falconer cannot reach OpenSSH";
 /// How to switch it off.
 pub const TAILSCALE_SSH_FIX: &str = "sudo tailscale set --ssh=false";
 

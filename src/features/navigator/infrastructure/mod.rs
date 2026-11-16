@@ -190,7 +190,7 @@ impl SocketNavigator {
 
     fn call(&mut self, method: &str, params: Value, wait: Duration) -> Result<Value, NavError> {
         self.next_id += 1;
-        let id = format!("openmosh-nav-{}", self.next_id);
+        let id = format!("falconer-nav-{}", self.next_id);
         Ok(request_once(
             &self.path, self.owner, &id, method, params, wait,
         )?)

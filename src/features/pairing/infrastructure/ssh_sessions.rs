@@ -146,7 +146,7 @@ mod tests {
         // The phone's session: sshd-session -> bash.
         proc(root, 11, 10, "sshd-session", "");
         proc(root, 12, 11, "bash", &conn("100.101.1.2"));
-        proc(root, 13, 12, "openmosh-hook", &conn("100.101.1.2"));
+        proc(root, 13, 12, "falconer-hook", &conn("100.101.1.2"));
         // Another device.
         proc(root, 20, 10, "sshd: me@pts/1", "");
         proc(root, 21, 20, "zsh", &conn("100.101.9.9"));

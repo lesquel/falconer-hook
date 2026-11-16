@@ -33,7 +33,7 @@ const USER_KEY: &str =
     "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJYwG729z8R85TUE6pHTEWVG3RxgVSZik0RW18NtXepH me@laptop";
 const CLAUDE_ORIGINAL: &str = "{\n  \"model\": \"opus\"\n}\n";
 
-/// A machine where openmosh-hook was set up: service, Claude hooks, one
+/// A machine where falconer-hook was set up: service, Claude hooks, one
 /// paired phone key next to the user's own key, state and config.
 fn installed() -> Env {
     let e = Env::isolated();
@@ -42,7 +42,7 @@ fn installed() -> Env {
     fs::write(&claude, CLAUDE_ORIGINAL).unwrap();
     let (code, v) = e.json(&["setup", "--yes", "--json"], None, &[]);
     let d = ok_data(code, &v).clone();
-    assert_eq!(d["next"], "openmosh-hook pair");
+    assert_eq!(d["next"], "falconer-hook pair");
     let req = r#"{"name":"Pixel 8","ppk":"B6N8vBQgk8i3VdwbEOhstCY3StFqqFPtC9_AsrhtHHw","endpoint":"https://ntfy.sh/upTest?up=1"}"#;
     let (code, v) = e.json(&["pair-ssh", "--json"], Some(req), &[]);
     ok_data(code, &v);
@@ -68,19 +68,19 @@ fn setup_yes_installs_service_and_detected_integrations() {
     let e = Env::isolated();
     fs::create_dir_all(e.home().join(".claude")).unwrap();
     fs::create_dir_all(e.home().join(".codex")).unwrap();
-    let cfg_before = fs::read(e.root.join("config/openmosh/config.toml")).unwrap();
+    let cfg_before = fs::read(e.root.join("config/falconer/config.toml")).unwrap();
     let (code, v) = e.json(&["setup", "--yes", "--json"], None, &[]);
     let d = ok_data(code, &v);
     assert_eq!(d["config"]["created"], false);
     assert_eq!(
-        fs::read(e.root.join("config/openmosh/config.toml")).unwrap(),
+        fs::read(e.root.join("config/falconer/config.toml")).unwrap(),
         cfg_before,
         "existing config kept"
     );
     assert_eq!(d["service"]["installed"], true);
     assert!(e
         .root
-        .join("config/systemd/user/openmosh-hook.service")
+        .join("config/systemd/user/falconer-hook.service")
         .exists());
     let actions: BTreeMap<String, String> = d["integrations"]
         .as_array()
@@ -104,7 +104,7 @@ fn setup_yes_installs_service_and_detected_integrations() {
     let calls = e.calls();
     assert!(calls
         .iter()
-        .any(|c| c[1..] == ["--user", "enable", "--now", "openmosh-hook.service"]));
+        .any(|c| c[1..] == ["--user", "enable", "--now", "falconer-hook.service"]));
 
     let (code, v) = e.json(&["setup", "--yes", "--json"], None, &[]);
     let again = &ok_data(code, &v)["integrations"];
@@ -119,12 +119,12 @@ fn setup_yes_installs_service_and_detected_integrations() {
 fn setup_without_yes_offers_but_changes_no_agent_file() {
     let e = Env::isolated();
     fs::create_dir_all(e.home().join(".codex")).unwrap();
-    fs::remove_file(e.root.join("config/openmosh/config.toml")).unwrap();
+    fs::remove_file(e.root.join("config/falconer/config.toml")).unwrap();
     let (code, v) = e.json(&["setup", "--no-service", "--json"], None, &[]);
     let d = ok_data(code, &v);
     assert_eq!(d["config"]["created"], true);
     assert_eq!(d["service"]["skipped"], true);
-    let cfg = e.root.join("config/openmosh/config.toml");
+    let cfg = e.root.join("config/falconer/config.toml");
     assert_eq!(mode(&cfg), 0o600);
     assert!(fs::read_to_string(&cfg)
         .unwrap()
@@ -167,7 +167,7 @@ fn uninstall_dry_run_and_unconfirmed_change_nothing() {
 }
 
 #[test]
-fn uninstall_yes_removes_only_what_openmosh_created() {
+fn uninstall_yes_removes_only_what_falconer_created() {
     let e = installed();
     let calls_before = e.calls().len();
     let (code, v) = e.json(&["uninstall", "--yes", "--json"], None, &[]);
@@ -175,11 +175,11 @@ fn uninstall_yes_removes_only_what_openmosh_created() {
     assert_eq!(d["complete"], true, "{d}");
     assert!(!e
         .root
-        .join("config/systemd/user/openmosh-hook.service")
+        .join("config/systemd/user/falconer-hook.service")
         .exists());
     assert!(e.calls()[calls_before..]
         .iter()
-        .any(|c| c[1..] == ["--user", "disable", "--now", "openmosh-hook.service"]));
+        .any(|c| c[1..] == ["--user", "disable", "--now", "falconer-hook.service"]));
     let claude: Value =
         serde_json::from_str(&fs::read_to_string(e.home().join(".claude/settings.json")).unwrap())
             .unwrap();
@@ -190,9 +190,9 @@ fn uninstall_yes_removes_only_what_openmosh_created() {
     assert_eq!(
         fs::read_to_string(e.home().join(".ssh/authorized_keys")).unwrap(),
         format!("{USER_KEY}\n"),
-        "only the openmosh: line is removed"
+        "only the falconer: line is removed"
     );
-    assert!(!e.root.join("config/openmosh").exists());
+    assert!(!e.root.join("config/falconer").exists());
     assert!(!e.state().exists());
     assert!(e.root.join("config").exists(), "parent dirs are kept");
     assert!(Path::new(BIN).exists(), "the binary needs --all");
@@ -204,7 +204,7 @@ fn uninstall_yes_removes_only_what_openmosh_created() {
 #[test]
 fn uninstall_all_deletes_the_running_binary() {
     let e = Env::isolated();
-    let bin = e.root.join("bin/openmosh-hook");
+    let bin = e.root.join("bin/falconer-hook");
     fs::copy(BIN, &bin).unwrap();
     // Run the copy, never BIN itself.
     let out = std::process::Command::new(&bin)

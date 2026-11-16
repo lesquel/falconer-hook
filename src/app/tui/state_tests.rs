@@ -19,7 +19,7 @@ impl Exec for FakeExec {
         Ok(match cmd {
             Command::Doctor { .. } => Reply::new(
                 &json!({"healthy": false, "checks": [
-                    {"name": "config", "status": "ok", "detail": "/h/.config/openmosh/config.toml"},
+                    {"name": "config", "status": "ok", "detail": "/h/.config/falconer/config.toml"},
                     {"name": "tailscale", "status": "ok", "detail": "running as me@example.com"},
                     {"name": "herdr", "status": "warn", "detail": "not found"},
                     {"name": "service", "status": "fail", "detail": "not installed"}
@@ -51,11 +51,11 @@ impl Exec for FakeExec {
             ),
             Command::Uninstall { dry_run: true, .. } => Reply::new(
                 &json!({"dry_run": true, "steps": if self.empty_plan { json!([]) } else { json!([{"service": "u"}]) }}),
-                "openmosh-hook uninstall would:\n- remove the user service\n- delete /h/.config/openmosh",
+                "falconer-hook uninstall would:\n- remove the user service\n- delete /h/.config/falconer",
             ),
             Command::Uninstall { .. } => Reply::new(
                 &json!({"dry_run": false, "complete": self.complete}),
-                "[ok  ] remove the user service\nopenmosh-hook was removed.",
+                "[ok  ] remove the user service\nfalconer-hook was removed.",
             ),
             Command::Setup { .. } => Reply::new(&json!({}), "Wrote config\nNext: pair"),
             _ => Reply::new(&json!({}), "Done"),

@@ -10,7 +10,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 
-pub const BIN: &str = env!("CARGO_BIN_EXE_openmosh-hook");
+pub const BIN: &str = env!("CARGO_BIN_EXE_falconer-hook");
 pub const HOST_KEY: &str =
     "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJYwG729z8R85TUE6pHTEWVG3RxgVSZik0RW18NtXepH root@host";
 pub const AGENTS: &str = r#"{"id":"cli:agent:list","result":{"agents":[{"agent":"claude","agent_status":"blocked","cwd":"/w","pane_id":"w7:pA","state_change_seq":21,"terminal_title_stripped":"Fix tests","workspace_id":"w7"}],"type":"agent_list"}}"#;
@@ -79,7 +79,7 @@ impl Env {
         .unwrap();
         fs::write(fake.join("ts_ip"), "100.88.77.66\n").unwrap();
         fs::write(root.join("ssh_host_ed25519_key.pub"), HOST_KEY).unwrap();
-        let cfg_dir = root.join("config/openmosh");
+        let cfg_dir = root.join("config/falconer");
         fs::create_dir_all(&cfg_dir).unwrap();
         fs::set_permissions(&cfg_dir, fs::Permissions::from_mode(0o700)).unwrap();
         let b = |n: &str| bin.join(n).display().to_string();
@@ -126,7 +126,7 @@ impl Env {
     }
 
     fn edit_config(&self, f: impl FnOnce(String) -> String) {
-        let file = self.root.join("config/openmosh/config.toml");
+        let file = self.root.join("config/falconer/config.toml");
         let text = f(fs::read_to_string(&file).unwrap());
         fs::write(file, text).unwrap();
     }
@@ -171,7 +171,7 @@ impl Env {
     }
 
     pub fn state(&self) -> PathBuf {
-        self.root.join("state/openmosh")
+        self.root.join("state/falconer")
     }
 
     pub fn cmd(&self, args: &[&str]) -> Command {

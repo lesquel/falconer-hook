@@ -1,10 +1,10 @@
 //! A marked block of top-level keys appended to `~/.aider.conf.yml`:
 //!
 //! ```yaml
-//! # >>> openmosh-hook (managed: `openmosh-hook integration uninstall aider` removes it)
+//! # >>> falconer-hook (managed: `falconer-hook integration uninstall aider` removes it)
 //! notifications: true
 //! notifications_command: '<exe>' emit --source aider --kind done < /dev/null
-//! # <<< openmosh-hook
+//! # <<< falconer-hook
 //! ```
 //!
 //! Aider runs the command through a shell when it is waiting for input.
@@ -13,8 +13,8 @@
 
 use super::{agent_command, IntegrationError};
 
-const BEGIN: &str = "# >>> openmosh-hook";
-const END: &str = "# <<< openmosh-hook";
+const BEGIN: &str = "# >>> falconer-hook";
+const END: &str = "# <<< falconer-hook";
 
 fn yaml_single_quoted(s: &str) -> String {
     format!("'{}'", s.replace('\'', "''"))
@@ -23,7 +23,7 @@ fn yaml_single_quoted(s: &str) -> String {
 pub fn block(exe: &str) -> String {
     let cmd = format!("{} < /dev/null", agent_command(exe, "aider", Some("done")));
     format!(
-        "{BEGIN} (managed: `openmosh-hook integration uninstall aider` removes it)\nnotifications: true\nnotifications_command: {}\n{END}\n",
+        "{BEGIN} (managed: `falconer-hook integration uninstall aider` removes it)\nnotifications: true\nnotifications_command: {}\n{END}\n",
         yaml_single_quoted(&cmd)
     )
 }
@@ -97,7 +97,7 @@ pub fn installed(current: &str) -> Result<bool, IntegrationError> {
 mod tests {
     use super::*;
 
-    const EXE: &str = "/home/u/.local/bin/openmosh-hook";
+    const EXE: &str = "/home/u/.local/bin/falconer-hook";
 
     #[test]
     fn install_appends_once_and_uninstall_restores_bytes() {
@@ -105,7 +105,7 @@ mod tests {
         let installed_text = install(Some(original), EXE).unwrap().unwrap();
         assert!(installed_text.starts_with(original));
         assert!(installed_text.contains(
-            "notifications_command: '''/home/u/.local/bin/openmosh-hook'' emit --source aider --kind done < /dev/null'"
+            "notifications_command: '''/home/u/.local/bin/falconer-hook'' emit --source aider --kind done < /dev/null'"
         ));
         assert_eq!(install(Some(&installed_text), EXE).unwrap(), None);
         assert!(installed(&installed_text).unwrap());
@@ -119,20 +119,20 @@ mod tests {
     #[test]
     fn repoints_and_refuses_conflicts_and_broken_markers() {
         let first = install(None, EXE).unwrap().unwrap();
-        let moved = install(Some(&first), "/new/openmosh-hook")
+        let moved = install(Some(&first), "/new/falconer-hook")
             .unwrap()
             .unwrap();
-        assert!(moved.contains("/new/openmosh-hook") && !moved.contains(EXE));
+        assert!(moved.contains("/new/falconer-hook") && !moved.contains(EXE));
         assert_eq!(
             install(Some("notifications: false\n"), EXE),
             Err(IntegrationError::Conflict)
         );
         assert_eq!(
-            install(Some("# >>> openmosh-hook\nnotifications: true\n"), EXE),
+            install(Some("# >>> falconer-hook\nnotifications: true\n"), EXE),
             Err(IntegrationError::BadHooks)
         );
         assert_eq!(
-            uninstall("# <<< openmosh-hook\n"),
+            uninstall("# <<< falconer-hook\n"),
             Err(IntegrationError::BadHooks)
         );
     }

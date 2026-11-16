@@ -1,11 +1,11 @@
 # Contributing
 
-Thanks for helping. OpenMosh is maintained by [lesquel](https://github.com/lesquel).
+Thanks for helping. Falconer is maintained by [lesquel](https://github.com/lesquel).
 
 ## Issues first
 
 - **Bug:** open an issue with the *Bug report* template: what you did, what you expected, what
-  happened, versions (`openmosh-hook version`, app version from Settings) and logs with secrets
+  happened, versions (`falconer-hook version`, app version from Settings) and logs with secrets
   removed.
 - **Feature:** open an issue with the *Feature request* template before writing code, so we agree
   on the behavior first.

@@ -163,7 +163,7 @@ pub fn pair(
         println!("{}", offer.uri());
     }
     println!(
-        "Scan with OpenMosh: Add host > Scan QR  (host \"{}\")",
+        "Scan with Falconer: Add host > Scan QR  (host \"{}\")",
         alias_shown
     );
     println!("Listening on {ip}:{port} (Tailscale only) for {timeout} s. Ctrl+C cancels.");

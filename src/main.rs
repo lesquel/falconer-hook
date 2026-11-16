@@ -1,4 +1,4 @@
-//! `openmosh-hook` entry point. With `app/`, this is the composition root:
+//! `falconer-hook` entry point. With `app/`, this is the composition root:
 //! the only place that knows concrete adapter types.
 #![forbid(unsafe_code)]
 
@@ -34,7 +34,7 @@ fn main() -> ExitCode {
         return match app::Ctx::from_env().and_then(|ctx| app::run_tui(&ctx)) {
             Ok(()) => ExitCode::SUCCESS,
             Err(e) => {
-                eprintln!("openmosh-hook: {}", e.message);
+                eprintln!("falconer-hook: {}", e.message);
                 ExitCode::from(1)
             }
         };
@@ -49,7 +49,7 @@ fn main() -> ExitCode {
         {
             Ok(code) => ExitCode::from(code),
             Err(e) => {
-                eprintln!("openmosh-hook: {}", e.message);
+                eprintln!("falconer-hook: {}", e.message);
                 ExitCode::from(1)
             }
         };
@@ -81,7 +81,7 @@ fn main() -> ExitCode {
             if json {
                 println!("{}", err_envelope(&e));
             } else {
-                eprintln!("openmosh-hook: {}", e.message);
+                eprintln!("falconer-hook: {}", e.message);
             }
             ExitCode::from(1)
         }

@@ -46,7 +46,7 @@ fn write_fixtures(env: &Env) {
     use std::os::unix::fs::PermissionsExt;
     let ts = now_rfc3339();
     let home = env.home();
-    let claude = home.join(".claude/projects/-w-OpenMosh");
+    let claude = home.join(".claude/projects/-w-Falconer");
     fs::create_dir_all(&claude).unwrap();
     let transcript = claude.join("s.jsonl");
     fs::write(

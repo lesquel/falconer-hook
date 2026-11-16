@@ -47,8 +47,8 @@ impl Paths {
         let xdg_state_home =
             abs(get("XDG_STATE_HOME")).unwrap_or_else(|| home.join(".local/state"));
         Ok(Self {
-            config_dir: xdg_config_home.join("openmosh"),
-            state_dir: xdg_state_home.join("openmosh"),
+            config_dir: xdg_config_home.join("falconer"),
+            state_dir: xdg_state_home.join("falconer"),
             xdg_config_home,
             home,
         })
@@ -71,16 +71,16 @@ impl Paths {
     }
     pub fn systemd_unit(&self) -> PathBuf {
         self.xdg_config_home
-            .join("systemd/user/openmosh-hook.service")
+            .join("systemd/user/falconer-hook.service")
     }
     pub fn launchd_plist(&self) -> PathBuf {
         self.home
-            .join("Library/LaunchAgents/dev.openmosh.hook.plist")
+            .join("Library/LaunchAgents/dev.falconer.hook.plist")
     }
 }
 
 /// `config.toml` written by `setup` (and `install.sh`) when none exists.
-pub const DEFAULT_CONFIG: &str = r#"# openmosh-hook configuration. Keep this file mode 0600.
+pub const DEFAULT_CONFIG: &str = r#"# falconer-hook configuration. Keep this file mode 0600.
 # host_alias = "my-laptop"   # name shown on the phone (default: hostname)
 retention_days = 7
 poll_interval_ms = 1000
@@ -207,8 +207,8 @@ mod tests {
             _ => None,
         })
         .unwrap();
-        assert_eq!(p.state_dir, PathBuf::from("/s/openmosh"));
-        assert_eq!(p.config_dir, PathBuf::from("/h/.config/openmosh"));
+        assert_eq!(p.state_dir, PathBuf::from("/s/falconer"));
+        assert_eq!(p.config_dir, PathBuf::from("/h/.config/falconer"));
         assert_eq!(
             p.authorized_keys(),
             PathBuf::from("/h/.ssh/authorized_keys")

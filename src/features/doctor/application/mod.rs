@@ -82,7 +82,7 @@ pub fn check_devices(registry: &impl DeviceRegistry) -> Check {
     match registry.list() {
         Err(e) => Check::fail("devices", e.to_string()),
         Ok(d) if d.is_empty() => {
-            Check::warn("devices", "no paired phone; run `openmosh-hook pair`")
+            Check::warn("devices", "no paired phone; run `falconer-hook pair`")
         }
         Ok(d) => {
             let stale = d.iter().filter(|x| x.endpoint_stale).count();

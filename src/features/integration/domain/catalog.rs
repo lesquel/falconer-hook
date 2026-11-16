@@ -1,5 +1,5 @@
-//! The agents openmosh-hook can wire, where each keeps its hook config, and
-//! which of its events map to which OpenMosh event kind. Sources are the
+//! The agents falconer-hook can wire, where each keeps its hook config, and
+//! which of its events map to which Falconer event kind. Sources are the
 //! agents' official docs (see `doc` on each entry).
 
 use serde::Serialize;
@@ -63,7 +63,7 @@ pub enum Format {
     Flat {
         events: &'static [(&'static str, &'static str)],
     },
-    /// A whole file created (and removed) by openmosh-hook.
+    /// A whole file created (and removed) by falconer-hook.
     Owned(OwnedKind),
     /// A marked block of top-level keys in a YAML file.
     AiderBlock,
@@ -133,7 +133,7 @@ pub const CATALOG: &[AgentSpec] = &[
                 ("AfterAgent", Some("done")),
             ],
             matcher: Some("*"),
-            name: Some("openmosh"),
+            name: Some("falconer"),
         },
         doc: "https://geminicli.com/docs/hooks/",
         note: None,
@@ -155,7 +155,7 @@ pub const CATALOG: &[AgentSpec] = &[
         id: AgentId::Copilot,
         name: "GitHub Copilot CLI",
         base: Base::Home,
-        rel: ".copilot/hooks/openmosh.json",
+        rel: ".copilot/hooks/falconer.json",
         bins: &["copilot"],
         detect: &[(Base::Home, ".copilot")],
         format: Format::Owned(OwnedKind::Copilot),
@@ -166,7 +166,7 @@ pub const CATALOG: &[AgentSpec] = &[
         id: AgentId::Kiro,
         name: "Kiro CLI",
         base: Base::Home,
-        rel: ".kiro/hooks/openmosh.json",
+        rel: ".kiro/hooks/falconer.json",
         bins: &["kiro-cli"],
         detect: &[(Base::Home, ".kiro")],
         format: Format::Owned(OwnedKind::Kiro),
@@ -177,7 +177,7 @@ pub const CATALOG: &[AgentSpec] = &[
         id: AgentId::Opencode,
         name: "OpenCode",
         base: Base::XdgConfig,
-        rel: "opencode/plugins/openmosh.js",
+        rel: "opencode/plugins/falconer.js",
         bins: &["opencode"],
         detect: &[(Base::XdgConfig, "opencode")],
         format: Format::Owned(OwnedKind::Opencode),

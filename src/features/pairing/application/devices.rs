@@ -71,7 +71,7 @@ pub fn lost_phone_checklist(name: &str, ips: &[String], ended: Option<&[u32]>) -
         "Next: if the phone stored SSH keys for other hosts, remove those keys from each host too."
             .into(),
     );
-    c.push("Next: run `openmosh-hook doctor` and review ~/.ssh/authorized_keys for keys you do not recognize.".into());
+    c.push("Next: run `falconer-hook doctor` and review ~/.ssh/authorized_keys for keys you do not recognize.".into());
     c
 }
 

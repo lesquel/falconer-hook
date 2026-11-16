@@ -54,7 +54,7 @@ impl Ctx {
         let pane = pane_from_env(get);
         let exe = std::env::current_exe()
             .and_then(|p| p.canonicalize())
-            .unwrap_or_else(|_| PathBuf::from("openmosh-hook"));
+            .unwrap_or_else(|_| PathBuf::from("falconer-hook"));
         Ok(Self {
             paths,
             runner: ProcessRunner::default(),
