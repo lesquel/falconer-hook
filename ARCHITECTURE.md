@@ -21,10 +21,15 @@ src/
 │   ├── usage.rs             #   `usage`: token usage per agent from local logs
 │   ├── update.rs            #   `update`: latest release check and reinstall via the tag-pinned install.sh, after consent
 │   └── tui/                 #   terminal UI: presentation only, every action is a `cli::Command` run via `run`
-│       ├── state.rs         #     pure state machine (screens, selection, confirmations) over an `Exec` port
-│       ├── state_tests.rs   #     unit tests of the state machine
-│       ├── view.rs          #     ratatui rendering of the state
-│       └── mod.rs           #     terminal setup/restore (raw mode, alternate screen, panic hook), event loop
+│       ├── state.rs         #     pure state machine (8 screens, selection, confirmations, wizard, palette)
+│       │                    #     over an `Exec` port; suspending work is returned as an `Effect`
+│       ├── actions.rs       #     one table of every action: screen, keys, footer hint, help/palette label
+│       ├── wizard.rs        #     the first-run wizard's steps and the doctor fixes that complete them
+│       ├── i18n.rs          #     English-keyed string table, Spanish by locale (LC_ALL > LC_MESSAGES > LANG)
+│       ├── view.rs          #     ratatui rendering: screens, wizard, help, palette, dialogs, footer
+│       ├── *_tests.rs       #     unit tests through a fake `Exec` and ratatui's `TestBackend`
+│       └── mod.rs           #     terminal setup/restore, event loop, suspend-to-terminal effects,
+│                            #     background `update --check`
 ├── cli/                     # clap definitions and the JSON envelope; no adapters
 ├── test_vectors.rs          # checks and regenerates tests/vectors/*.json (test builds only)
 ├── shared/
@@ -90,6 +95,8 @@ Cross-feature calls go through another feature's `domain` ports (for example `pu
 7. External programs run through `CommandRunner` with argv only (no shell). The interactive
    Herdr client of `attach` is spawned by `TtyLauncher`, also argv only, with the inherited terminal.
 8. The TUI never calls use cases or adapters directly: it builds the same `cli::Command` the
-   CLI parses and runs it through `app::run`, so both surfaces share one code path. Text from
-   commands is stripped of control characters before it is drawn.
+   CLI parses and runs it through `app::run`, so both surfaces share one code path. Commands
+   that need the terminal (installers, `sudo`, logins, pairing) run while the TUI is suspended;
+   `devices set-webpush`, which reads stdin, runs as a child `falconer-hook` with the input
+   piped in. Text from commands is stripped of control characters before it is drawn.
 9. No `unsafe` (`#![forbid(unsafe_code)]`); secrets are held in `zeroize` buffers.

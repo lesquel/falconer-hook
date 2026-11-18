@@ -491,7 +491,7 @@ pub enum UpdateState {
         latest: String,
         tag: String,
     },
-    /// Offline or the release could not be resolved; not shown as an error.
+    /// No network, or the release could not be resolved; not shown as an error.
     Failed,
 }
 

@@ -137,7 +137,9 @@ What `setup` fixes, each time showing the exact command first:
   `falconer-hook pair`.
 
 `--yes` runs the install and SSH commands without asking but never starts pairing (a person
-has to scan the QR code). Without a terminal, or with `--json`, nothing is run: the commands
+has to scan the QR code). On a host with `curl` or `wget` but no Homebrew, that means
+`setup --yes` runs Herdr's official installer (https://herdr.dev/install.sh) rather than
+installing tmux; run `setup` without `--yes` and decline Herdr if you prefer tmux. Without a terminal, or with `--json`, nothing is run: the commands
 are printed (JSON: `prerequisites.agent_runtime` with the `runtime` installed, `prerequisites.ssh`, `prerequisites.tailscale` and `pairing`).
 
 `falconer-hook uninstall [--all] [--dry-run] [--yes] [--json]` removes everything
@@ -213,20 +215,48 @@ paired before the rename keep working.
 
 ## TUI
 
-`falconer-hook` with no command on a terminal (or `falconer-hook tui`) opens a terminal UI over
-the same commands as the CLI. Without a terminal, no command prints the help as before.
+The TUI is the main way to use falconer-hook on the host: `falconer-hook` with no command on a
+terminal (or `falconer-hook tui`) opens it. Every action runs the same command as the CLI, so
+scripts keep using the commands below; without a terminal, no command prints the help as before.
 
 | Screen | What it does |
 |---|---|
-| 1 Status | `doctor` (config, Tailscale, Herdr/tmux, permissions, sshd, devices, service) and the version; `r` refreshes |
-| 2 Agents & inbox | Agents with their state and the inbox, newest first; `a` allow, `d` deny, `t` reply with text to the selected pending event, each after a `y` confirmation |
-| 3 Devices | Paired devices, `(endpoint stale)` / `(no notifications)` marks; `x` revokes after confirmation |
-| 4 Pair | `Enter` suspends the TUI and runs `falconer-hook pair` in the terminal (`i` toggles `--invert`); Enter returns |
-| 5 Integrations | Every supported agent, detected or not, installed or not; `i` installs, `u` uninstalls after confirmation |
-| 6 Setup | `s` runs `setup`, `a` runs `setup --yes` (also installs every detected agent's integration), after confirmation |
-| 7 Uninstall | Shows the `uninstall --dry-run` plan; `a` toggles `--all`; `Enter` asks you to type `uninstall` before anything is removed |
+| 1 Home | Health from `doctor`: each failing or warning check with its fix (`Enter` or `f` fixes the selected one, `F` fixes them all), the checks that pass on one line, and quick actions: install what's missing, pair a phone, update Falconer (only when a newer release exists), run the setup wizard |
+| 2 Agents | Agents with their state and the inbox, newest first; `a` allow, `d` deny, `t` reply with text to the selected pending event |
+| 3 Phones | Paired phones with `(endpoint stale)` / `(no notifications)` marks; `p` pairs (`i` inverts the QR colors), `x` revokes, `w` registers a Web Push subscription (paste the JSON, as for `devices set-webpush`), `c` clears it |
+| 4 Integrations | Every supported agent, detected or not, installed or not; `i` installs, `u` uninstalls |
+| 5 Service | The user service's state; `i` installs (or reinstalls), `s` restarts (`service restart`), `u` uninstalls |
+| 6 Settings | Each phone's push endpoint, `e` sets it (`devices set-endpoint`); the config file's values, read-only (`config`) |
+| 7 Usage | `usage --days` for 1, 7, 14 or 31 days; `+` and `-` change the range |
+| 8 Advanced | SSH keys only (`s`, `harden-ssh`), setup (integrations as they are), setup with every detected integration, OpenMosh cleanup (only when `doctor` reports leftovers), and uninstall: the `--dry-run` plan is shown, `a` toggles `--all`, `u` asks you to type `uninstall` |
 
-`Tab`/`Shift+Tab` or `1`-`7` switch screens, `j`/`k` or the arrows select, `q` or `Esc` quits.
+Everything that changes something asks first (`y` confirms, `n` or `Esc` cancels); uninstall
+needs the typed word.
+
+Keys everywhere: `1`-`8`, `Tab`/`Shift+Tab` or `←`/`→` switch screens, `j`/`k` or `↑`/`↓`
+select, `r` refreshes, `/` searches, `?` shows the help, `q` (or `Esc` outside a dialog)
+quits. The footer lists the keys of the current screen.
+
+- **Fixes and installers in the terminal.** A fix, `setup --yes`, `update`, SSH hardening and
+  pairing may run official installers, `sudo` or a login. The TUI first shows what will run
+  (the installer URL, such as https://herdr.dev/install.sh or https://tailscale.com/install.sh,
+  or the command) and asks; after `y` it steps aside, runs the command in the plain terminal
+  (where `sudo` and the installers can talk to you), and comes back when you press Enter. Fix
+  all (`F`) runs `doctor --fix`, which shows each command and asks again for each one.
+- **Setup wizard.** When no phone is paired and a prerequisite or the config is missing, the TUI
+  opens a wizard: 1 prerequisites (Herdr or tmux), 2 SSH server, 3 Tailscale up, 4 agent
+  integrations, 5 user service, 6 pair a phone. Each step shows whether it is done; `Enter`
+  runs it (after the same confirmation), `s` skips it, `Esc` leaves for Home, and steps already
+  done are passed over. Home reopens it (`w` or Run setup wizard).
+- **Action palette.** `/` lists every screen and every action that can run now; typing filters
+  by words (in any order), `↑`/`↓` select, `Enter` goes to the action's screen and runs it there
+  with its usual confirmation, `Esc` closes.
+- **Updates.** On start the TUI runs `update --check` in the background (one HTTPS request to
+  GitHub; the TUI never waits for it). When a newer release exists, Home offers it; it runs
+  `update --version <tag> --yes` in the terminal after you confirm. Reopen the TUI afterwards.
+- **Language.** The TUI is in English, or in Spanish when `LC_ALL`, `LC_MESSAGES` or `LANG` (the
+  first one set) starts with `es`. Command output (doctor details, setup logs) stays in English.
+
 The terminal is restored on exit and on a panic. After a complete uninstall the TUI runs nothing
 else (it would recreate state); quit with `q`.
 
@@ -254,7 +284,9 @@ else (it would recreate state); quit with `q`.
 | `falconer-hook usage [--days <n>] [--json]` | Token [usage](#usage) per agent, project and model over the last `n` calendar days (1-31, default 7), from the agents' own local logs |
 | `falconer-hook doctor [--json]` | Check Tailscale, Herdr/tmux, permissions, sshd host key, sshd password logins (`sshd -G -C user=$USER,host=localhost,addr=127.0.0.1`, so `Match` blocks count; warns when password or keyboard-interactive login is on), that sshd's `AuthorizedKeysFile` includes `~/.ssh/authorized_keys`, that no untagged key was added below the first paired phone, devices, keymaps, service |
 | `falconer-hook doctor --fix [<id>] [--yes] [--json]` | Apply the fix of every failing or warning check that has one (or only `<id>`), then check again. Each fix reuses the command that already does it (`setup`'s prerequisite installers, `harden-ssh`, `service install`), shows its command and asks first; `--yes` applies without asking, and without a terminal (or with `--json`) and no `--yes` it only prints. Ids: `install_runtime`, `install_tailscale`, `tailscale_up`, `install_ssh`, `enable_ssh`, `fix_permissions`, `harden_ssh`, `install_service`, `pair` (only described, never run). An unknown id exits with `unknown_fix`. In `doctor --json` each fixable check carries `"fix":{"id","description"}`; `--fix` adds `"fixes":[{"id","action","result"}]` |
-| `falconer-hook harden-ssh [--dry-run] [--yes] [--json]` | Make sshd accept SSH keys only: pipes a fixed drop-in into `/usr/bin/sudo /usr/bin/tee /etc/ssh/sshd_config.d/10-falconer.conf` (absolute paths, no staged file), sets it `0644`, validates it with `sshd -t` (removed again on failure) and reloads sshd. Asks before changing anything; also `s` on the TUI Status screen |
+| `falconer-hook harden-ssh [--dry-run] [--yes] [--json]` | Make sshd accept SSH keys only: pipes a fixed drop-in into `/usr/bin/sudo /usr/bin/tee /etc/ssh/sshd_config.d/10-falconer.conf` (absolute paths, no staged file), sets it `0644`, validates it with `sshd -t` (removed again on failure) and reloads sshd. Asks before changing anything; also `s` on the TUI Advanced screen |
+| `falconer-hook service restart [--json]` | Restart the installed user service (`systemctl --user restart falconer-hook.service`, macOS `launchctl unload`/`load -w`) so it runs this binary; `not_found` when none is installed |
+| `falconer-hook config [--json]` | Print the config file path and its effective values (defaults included). Read-only; JSON `{"file","exists","config"}` |
 | `falconer-hook service install\|uninstall [--dry-run] [--json]` | Register/remove the user service. The systemd unit runs with `UMask=0077`, `NoNewPrivileges`, `SystemCallFilter=@system-service`, `RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6`, `RestrictNamespaces`, `RestrictRealtime`, `RestrictSUIDSGID` and `LockPersonality`. Mount sandboxing (`ProtectSystem=`, `PrivateTmp=`) is not used: user services need unprivileged user namespaces for it and would not start where those are off |
 | `falconer-hook attach herdr [--session <name>]` | Run the Herdr client (`herdr` or `herdr session attach <name>`, from `[bins] herdr`) with [focus mirroring](#mirroring); exits with Herdr's status code. Session names are `[A-Za-z0-9._-]`, not starting with `-`; the mirror only uses a Herdr socket owned by the owner of `$HOME` |
 | `falconer-hook herdr snapshot [--session <name>] [--since <rev>] [--wait-ms <n>] --json` | [Navigator](#herdr-navigator) snapshot: `{"rev","unchanged":false,"workspaces":[{"id","label","focused"}],"tabs":[{"id","workspace_id","label","number","agent_status","pane_count","focused"}],"panes":[{"id","tab_id","workspace_id","agent","agent_status","focused"}]}`; with `--since` equal to the current `rev` it waits up to `--wait-ms` (max 20000) for a change and answers `{"rev","unchanged":true}` when none came |
