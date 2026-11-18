@@ -252,7 +252,7 @@ resolve_tag() {
 	fi
 	case "$t" in
 	v[0-9]*) ;;
-	*) die "could not resolve the latest release tag, or pass --version <tag>" ;;
+	*) die "could not resolve the latest release tag; check your connection or pass --version <tag>" ;;
 	esac
 	case "$t" in
 	*[!0-9A-Za-z.+-]*) die "unexpected latest release tag: $t" ;;
