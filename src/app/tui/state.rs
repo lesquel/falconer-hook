@@ -2,75 +2,93 @@
 //!
 //! Every action is a `cli::Command` run through the `Exec` port, so the TUI
 //! uses exactly the same use cases as the CLI and is testable without a
-//! terminal.
+//! terminal. Commands that run installers, sudo or a login (fixes, setup
+//! with `--yes`, update, SSH hardening, pairing) are returned as an `Effect`
+//! for the terminal loop, which suspends the TUI to run them.
 
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use serde_json::Value;
 
+use super::actions;
+pub use super::actions::Act;
+use super::i18n::{t, tf, Lang};
 use crate::cli::output::{CliError, Reply};
 use crate::cli::{
     ActionArg, AgentArg, Command, DevicesCmd, InboxCmd, IntegrationCmd, JsonFlag, ListCmd,
+    ServiceCmd,
 };
+pub use crate::features::doctor::domain::FixId;
+use crate::features::setup::domain::prereqs::{HERDR_INSTALLER_URL, TAILSCALE_INSTALLER_URL};
+use crate::features::update::domain::script_url;
 
 /// Runs one CLI command (the composition root in production, a fake in tests).
 pub trait Exec {
     fn exec(&mut self, cmd: Command) -> Result<Reply, CliError>;
+    /// Runs `cmd` with `input` on its stdin (`devices set-webpush` reads it).
+    fn exec_stdin(&mut self, cmd: Command, input: &str) -> Result<Reply, CliError>;
 }
 
 /// Word the user must type to confirm `uninstall`.
 pub const UNINSTALL_WORD: &str = "uninstall";
 const MAX_TEXT: usize = 4096;
+/// `usage --days` choices.
+pub const USAGE_DAYS: [i64; 4] = [1, 7, 14, 31];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Screen {
-    Status,
+    Home,
     Agents,
-    Devices,
-    Pair,
+    Phones,
     Integrations,
-    Setup,
-    Uninstall,
+    Service,
+    Settings,
+    Usage,
+    Advanced,
 }
 
 impl Screen {
-    pub const ALL: [Screen; 7] = [
-        Screen::Status,
+    pub const ALL: [Screen; 8] = [
+        Screen::Home,
         Screen::Agents,
-        Screen::Devices,
-        Screen::Pair,
+        Screen::Phones,
         Screen::Integrations,
-        Screen::Setup,
-        Screen::Uninstall,
+        Screen::Service,
+        Screen::Settings,
+        Screen::Usage,
+        Screen::Advanced,
     ];
+
+    /// Short name for the screen list.
+    pub fn tab(self) -> &'static str {
+        match self {
+            Screen::Home => "Home",
+            Screen::Agents => "Agents",
+            Screen::Phones => "Phones",
+            Screen::Integrations => "Integrations",
+            Screen::Service => "Service",
+            Screen::Settings => "Settings",
+            Screen::Usage => "Usage",
+            Screen::Advanced => "Advanced",
+        }
+    }
 
     pub fn title(self) -> &'static str {
         match self {
-            Screen::Status => "Status",
             Screen::Agents => "Agents & inbox",
-            Screen::Devices => "Devices",
-            Screen::Pair => "Pair",
-            Screen::Integrations => "Integrations",
-            Screen::Setup => "Setup",
-            Screen::Uninstall => "Uninstall",
+            s => s.tab(),
         }
     }
 
     pub fn index(self) -> usize {
         Screen::ALL.iter().position(|s| *s == self).unwrap_or(0)
     }
+}
 
-    /// Key hints shown in the footer, besides the global ones.
-    pub fn keys(self) -> &'static str {
-        match self {
-            Screen::Status => "r refresh  s SSH: keys only (sudo)",
-            Screen::Agents => "j/k select  a allow  d deny  t reply text  r refresh",
-            Screen::Devices => "j/k select  x revoke  r refresh",
-            Screen::Pair => "Enter pair  i invert QR colors",
-            Screen::Integrations => "j/k select  i install  u uninstall  r refresh",
-            Screen::Setup => "s setup  a setup + install every detected integration",
-            Screen::Uninstall => "a toggle --all  Enter uninstall  r refresh plan",
-        }
-    }
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ServiceOp {
+    Install,
+    Restart,
+    Uninstall,
 }
 
 /// An action waiting for `y`.
@@ -94,10 +112,98 @@ pub enum Pending {
     Setup {
         yes: bool,
     },
+    LegacyCleanup,
+    Fix {
+        id: FixId,
+    },
+    FixAll {
+        ids: Vec<FixId>,
+    },
+    Update {
+        tag: String,
+    },
+    Service(ServiceOp),
+    SetEndpoint {
+        id: String,
+        name: String,
+        url: String,
+    },
+    SetWebpush {
+        id: String,
+        name: String,
+        subscription: String,
+    },
+    ClearWebpush {
+        id: String,
+        name: String,
+    },
+}
+
+/// What a fix does, for the Home list.
+pub fn fix_title(lang: Lang, id: FixId) -> &'static str {
+    t(
+        lang,
+        match id {
+            FixId::InstallRuntime => "Install Herdr or tmux",
+            FixId::InstallTailscale => "Install Tailscale",
+            FixId::TailscaleUp => "Start Tailscale (sudo tailscale up)",
+            FixId::InstallSsh => "Install the OpenSSH server",
+            FixId::EnableSsh => "Turn the SSH server on",
+            FixId::FixPermissions => "Make the config and state private",
+            FixId::HardenSsh => "SSH: keys only, no passwords",
+            FixId::InstallService => "Install the user service",
+            FixId::Pair => "Pair a phone",
+        },
+    )
+}
+
+/// The exact source or command a fix runs, shown before asking.
+fn fix_detail(lang: Lang, id: FixId) -> String {
+    match id {
+        FixId::InstallRuntime => tf(
+            lang,
+            "Homebrew or your package manager when present, else the official installer {}, downloaded over HTTPS to a private file and run with sh.",
+            &[HERDR_INSTALLER_URL],
+        ),
+        FixId::InstallTailscale => tf(
+            lang,
+            "Homebrew when present, else the official installer {}, downloaded over HTTPS to a private file and run with sh.",
+            &[TAILSCALE_INSTALLER_URL],
+        ),
+        FixId::TailscaleUp => {
+            t(lang, "Runs `sudo tailscale up`; open the login URL it prints.").into()
+        }
+        FixId::InstallSsh => t(
+            lang,
+            "Installs the OpenSSH server with your package manager (sudo), then turns it on.",
+        )
+        .into(),
+        FixId::EnableSsh => t(
+            lang,
+            "Runs `sudo systemctl enable --now ssh` (macOS: `sudo systemsetup -setremotelogin on`).",
+        )
+        .into(),
+        FixId::FixPermissions => t(
+            lang,
+            "chmod 700 the config and state directories, 600 their files.",
+        )
+        .into(),
+        FixId::HardenSsh => t(
+            lang,
+            "Runs `falconer-hook harden-ssh`; sudo asks for your password.",
+        )
+        .into(),
+        FixId::InstallService => t(lang, "Runs `falconer-hook service install`.").into(),
+        FixId::Pair => String::new(),
+    }
 }
 
 impl Pending {
-    pub fn question(&self) -> String {
+    pub fn question(&self, lang: Lang) -> String {
+        let in_terminal = t(
+            lang,
+            "It runs in this terminal; the TUI comes back when it ends.",
+        );
         match self {
             Pending::Respond {
                 title,
@@ -105,27 +211,124 @@ impl Pending {
                 text,
                 ..
             } => match action {
-                ActionArg::Allow => format!("Allow \"{title}\"?"),
-                ActionArg::Deny => format!("Deny \"{title}\"?"),
-                ActionArg::Text => format!(
-                    "Send \"{}\" to \"{title}\"?",
-                    text.as_deref().unwrap_or_default()
+                ActionArg::Allow => tf(lang, "Allow \"{}\"?", &[title]),
+                ActionArg::Deny => tf(lang, "Deny \"{}\"?", &[title]),
+                ActionArg::Text => tf(
+                    lang,
+                    "Send \"{}\" to \"{}\"?",
+                    &[text.as_deref().unwrap_or_default(), title],
                 ),
             },
-            Pending::Revoke { name, .. } => {
-                format!("Revoke {name}? Its SSH key and push registration are removed.")
-            }
-            Pending::Integration { name, install, .. } => format!(
-                "{} the {name} integration?",
-                if *install { "Install" } else { "Uninstall" }
+            Pending::Revoke { name, .. } => tf(
+                lang,
+                "Revoke {}? Its SSH key and push registration are removed.",
+                &[name],
             ),
-            Pending::Setup { yes: false } => {
-                "Run setup (config, user service, doctor)? Integrations are left as they are."
-                    .into()
+            Pending::Integration { name, install, .. } => tf(
+                lang,
+                if *install {
+                    "Install the {} integration?"
+                } else {
+                    "Uninstall the {} integration?"
+                },
+                &[name],
+            ),
+            Pending::Setup { yes: false } => t(
+                lang,
+                "Run setup (config, user service, doctor)? Integrations are left as they are and nothing is installed.",
+            )
+            .into(),
+            Pending::Setup { yes: true } => format!(
+                "{}\n{}\n{in_terminal}",
+                t(
+                    lang,
+                    "Run setup --yes: install every detected integration and every missing prerequisite without asking again?"
+                ),
+                tf(
+                    lang,
+                    "Official installers: {} and {} (Homebrew or your package manager first); sudo may ask for your password.",
+                    &[HERDR_INSTALLER_URL, TAILSCALE_INSTALLER_URL],
+                )
+            ),
+            Pending::LegacyCleanup => t(
+                lang,
+                "Clean up OpenMosh leftovers? Runs setup, which moves old hooks and replaces the old service.",
+            )
+            .into(),
+            Pending::Fix {
+                id: FixId::FixPermissions,
+            } => format!(
+                "{}?\n{}",
+                fix_title(lang, FixId::FixPermissions),
+                fix_detail(lang, FixId::FixPermissions)
+            ),
+            Pending::Fix { id } => format!(
+                "{}?\n{}\n{in_terminal}",
+                fix_title(lang, *id),
+                fix_detail(lang, *id)
+            ),
+            Pending::FixAll { ids } => format!(
+                "{}\n{}\n{in_terminal}",
+                tf(
+                    lang,
+                    "Fix {} problems: {}?",
+                    &[
+                        &ids.len().to_string(),
+                        &ids.iter()
+                            .map(|i| fix_title(lang, *i))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ],
+                ),
+                t(lang, "Each fix shows its exact command and asks first."),
+            ),
+            Pending::Update { tag } => format!(
+                "{}\n{}\n{in_terminal}",
+                tf(lang, "Update Falconer to {}?", &[tag]),
+                tf(
+                    lang,
+                    "Downloads {} and runs it; it verifies the signed release with minisign and keeps your config and service.",
+                    &[&script_url(tag)],
+                ),
+            ),
+            Pending::Service(op) => t(
+                lang,
+                match op {
+                    ServiceOp::Install => "Install (or reinstall) the user service?",
+                    ServiceOp::Restart => "Restart the user service?",
+                    ServiceOp::Uninstall => {
+                        "Uninstall the user service? Phones stop getting notifications."
+                    }
+                },
+            )
+            .into(),
+            Pending::SetEndpoint { name, url, .. } => {
+                tf(lang, "Set the push endpoint of {} to {}?", &[name, url])
             }
-            Pending::Setup { yes: true } => {
-                "Run setup and install the integration of every detected agent?".into()
+            Pending::SetWebpush { name, .. } => {
+                tf(lang, "Register this Web Push subscription for {}?", &[name])
             }
+            Pending::ClearWebpush { name, .. } => {
+                tf(lang, "Remove the Web Push subscription of {}?", &[name])
+            }
+        }
+    }
+}
+
+/// What a text field is for.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Input {
+    Reply { event_id: String, title: String },
+    Webpush { id: String, name: String },
+    Endpoint { id: String, name: String },
+}
+
+impl Input {
+    fn max(&self) -> usize {
+        match self {
+            Input::Reply { .. } => MAX_TEXT,
+            Input::Webpush { .. } => 16 * 1024,
+            Input::Endpoint { .. } => 2048,
         }
     }
 }
@@ -138,16 +341,15 @@ pub enum Mode {
     TypeConfirm {
         input: String,
     },
-    /// Free-text reply to an event, confirmed afterwards.
+    /// Free text, confirmed afterwards.
     TextInput {
-        event_id: String,
-        title: String,
+        purpose: Input,
         input: String,
     },
 }
 
 /// What the terminal loop must do after a key.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Effect {
     None,
     Quit,
@@ -155,8 +357,55 @@ pub enum Effect {
     Pair {
         invert: bool,
     },
-    /// Suspend the TUI and run `harden-ssh` (sudo prompts in the terminal).
+    /// The rest suspend the TUI and run `command()` in the terminal.
     HardenSsh,
+    Fix {
+        id: FixId,
+    },
+    FixAll,
+    Update {
+        tag: String,
+    },
+    SetupAll,
+}
+
+impl Effect {
+    /// The command to run in the plain terminal, for the suspending effects
+    /// other than pairing. Prompts and sudo talk to the person there.
+    pub fn command(&self) -> Option<Command> {
+        let human = JsonFlag { json: false };
+        Some(match self {
+            Effect::None | Effect::Quit | Effect::Pair { .. } => return None,
+            Effect::HardenSsh => Command::HardenSsh {
+                dry_run: false,
+                yes: false,
+                out: human,
+            },
+            // The TUI already showed the fix and asked.
+            Effect::Fix { id } => Command::Doctor {
+                fix: Some(Some(id.as_str().into())),
+                yes: true,
+                out: human,
+            },
+            // Each fix shows its command and asks in the terminal.
+            Effect::FixAll => Command::Doctor {
+                fix: Some(None),
+                yes: false,
+                out: human,
+            },
+            Effect::Update { tag } => Command::Update {
+                check: false,
+                version: Some(tag.clone()),
+                yes: true,
+                out: human,
+            },
+            Effect::SetupAll => Command::Setup {
+                yes: true,
+                no_service: false,
+                out: human,
+            },
+        })
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -164,6 +413,13 @@ pub struct CheckRow {
     pub name: String,
     pub status: String,
     pub detail: String,
+    pub fix: Option<FixId>,
+}
+
+impl CheckRow {
+    pub fn ok(&self) -> bool {
+        self.status == "ok"
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -192,6 +448,8 @@ pub struct DeviceRow {
     pub ssh: bool,
     /// Paired without a push endpoint: no notifications.
     pub no_push: bool,
+    pub endpoint: String,
+    pub webpush: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -209,25 +467,56 @@ pub struct Message {
     pub text: String,
 }
 
+/// The background `update --check`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum UpdateState {
+    Unknown,
+    Checking,
+    UpToDate,
+    Available {
+        latest: String,
+        tag: String,
+    },
+    /// Offline or the release could not be resolved; not shown as an error.
+    Failed,
+}
+
+/// A selectable Home row.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HomeItem {
+    /// A failing or warning check, by index in `checks`.
+    Check(usize),
+    FixAll,
+    Pair,
+    Update,
+    Wizard,
+}
+
 pub struct App {
+    pub lang: Lang,
     pub screen: Screen,
     pub mode: Mode,
     pub message: Option<Message>,
-    loaded: [bool; 7],
-    sel: [usize; 7],
+    loaded: [bool; 8],
+    sel: [usize; 8],
     pub version: Option<String>,
     pub healthy: Option<bool>,
     pub checks: Vec<CheckRow>,
+    pub update: UpdateState,
     pub agents: Vec<AgentRow>,
     pub events: Vec<EventRow>,
     pub devices: Vec<DeviceRow>,
     pub integrations: Vec<IntegrationRow>,
     pub invert: bool,
-    pub setup_output: Option<String>,
+    pub service_output: Option<String>,
+    pub config_text: String,
+    pub usage_days: i64,
+    pub usage_text: String,
     pub uninstall_all: bool,
     pub plan: String,
     pub plan_empty: bool,
-    pub uninstall_output: Option<String>,
+    /// Output of the last Advanced action (setup, uninstall); the plan otherwise.
+    pub output: Option<String>,
     /// Set after a complete uninstall: nothing else may run (it would
     /// recreate state).
     pub uninstalled: bool,
@@ -254,6 +543,10 @@ fn json() -> JsonFlag {
     JsonFlag { json: true }
 }
 
+fn first_line(s: &str) -> &str {
+    s.lines().find(|l| !l.trim().is_empty()).unwrap_or("")
+}
+
 impl Default for App {
     fn default() -> Self {
         Self::new()
@@ -262,27 +555,40 @@ impl Default for App {
 
 impl App {
     pub fn new() -> Self {
+        Self::with_lang(Lang::En)
+    }
+
+    pub fn with_lang(lang: Lang) -> Self {
         Self {
-            screen: Screen::Status,
+            lang,
+            screen: Screen::Home,
             mode: Mode::Normal,
             message: None,
-            loaded: [false; 7],
-            sel: [0; 7],
+            loaded: [false; 8],
+            sel: [0; 8],
             version: None,
             healthy: None,
             checks: Vec::new(),
+            update: UpdateState::Unknown,
             agents: Vec::new(),
             events: Vec::new(),
             devices: Vec::new(),
             integrations: Vec::new(),
             invert: false,
-            setup_output: None,
+            service_output: None,
+            config_text: String::new(),
+            usage_days: 7,
+            usage_text: String::new(),
             uninstall_all: false,
             plan: String::new(),
             plan_empty: true,
-            uninstall_output: None,
+            output: None,
             uninstalled: false,
         }
+    }
+
+    pub fn tr(&self, en: &'static str) -> &'static str {
+        t(self.lang, en)
     }
 
     /// Loads the first screen.
@@ -296,11 +602,53 @@ impl App {
 
     fn list_len(&self) -> usize {
         match self.screen {
+            Screen::Home => self.home_items().len(),
             Screen::Agents => self.events.len(),
-            Screen::Devices => self.devices.len(),
+            Screen::Phones | Screen::Settings => self.devices.len(),
             Screen::Integrations => self.integrations.len(),
-            _ => 0,
+            Screen::Advanced => self.advanced_items().len(),
+            Screen::Service | Screen::Usage => 0,
         }
+    }
+
+    /// Fixes `doctor --fix` would run, each once, in check order. Pairing is
+    /// separate: it needs a person.
+    pub fn pending_fixes(&self) -> Vec<FixId> {
+        let mut out = Vec::new();
+        for id in self.checks.iter().filter_map(|c| c.fix) {
+            if id != FixId::Pair && !out.contains(&id) {
+                out.push(id);
+            }
+        }
+        out
+    }
+
+    pub fn home_items(&self) -> Vec<HomeItem> {
+        let mut v: Vec<HomeItem> = self
+            .checks
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| !c.ok())
+            .map(|(i, _)| HomeItem::Check(i))
+            .collect();
+        if !self.pending_fixes().is_empty() {
+            v.push(HomeItem::FixAll);
+        }
+        v.push(HomeItem::Pair);
+        if matches!(self.update, UpdateState::Available { .. }) {
+            v.push(HomeItem::Update);
+        }
+        v.push(HomeItem::Wizard);
+        v
+    }
+
+    pub fn advanced_items(&self) -> Vec<Act> {
+        let mut v = vec![Act::HardenSsh, Act::Setup, Act::SetupAll];
+        if self.checks.iter().any(|c| c.name == "legacy" && !c.ok()) {
+            v.push(Act::LegacyCleanup);
+        }
+        v.push(Act::Uninstall);
+        v
     }
 
     fn info(&mut self, text: impl Into<String>) {
@@ -317,6 +665,24 @@ impl App {
         });
     }
 
+    /// The background update check started.
+    pub fn checking_updates(&mut self) {
+        self.update = UpdateState::Checking;
+    }
+
+    /// Result of `update --check --json` (its data), or why it failed.
+    pub fn on_update_check(&mut self, r: Result<Value, String>) {
+        self.update = match r {
+            Ok(v) if v["update_available"] == true => UpdateState::Available {
+                latest: text(&v, "latest"),
+                tag: text(&v, "tag"),
+            },
+            Ok(_) => UpdateState::UpToDate,
+            Err(_) => UpdateState::Failed,
+        };
+        self.clamp();
+    }
+
     pub fn on_key(&mut self, key: KeyEvent, exec: &mut dyn Exec) -> Effect {
         if key.kind != KeyEventKind::Press {
             return Effect::None;
@@ -326,25 +692,26 @@ impl App {
         }
         match std::mem::replace(&mut self.mode, Mode::Normal) {
             Mode::Normal => self.on_normal(key, exec),
-            Mode::Confirm(p) => {
-                match key.code {
-                    KeyCode::Char('y') | KeyCode::Char('Y') => self.perform(p, exec),
-                    KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
-                        self.info("Cancelled; nothing changed.")
-                    }
-                    _ => self.mode = Mode::Confirm(p),
+            Mode::Confirm(p) => match key.code {
+                KeyCode::Char('y') | KeyCode::Char('Y') => self.perform(p, exec),
+                KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
+                    self.info(self.tr("Cancelled; nothing changed."));
+                    Effect::None
                 }
-                Effect::None
-            }
+                _ => {
+                    self.mode = Mode::Confirm(p);
+                    Effect::None
+                }
+            },
             Mode::TypeConfirm { mut input } => {
                 match key.code {
-                    KeyCode::Esc => self.info("Uninstall cancelled; nothing changed."),
+                    KeyCode::Esc => self.info(self.tr("Uninstall cancelled; nothing changed.")),
                     KeyCode::Enter if input == UNINSTALL_WORD => self.uninstall(exec),
-                    KeyCode::Enter => {
-                        self.error(format!(
-                            "Type \"{UNINSTALL_WORD}\" to confirm; nothing changed."
-                        ));
-                    }
+                    KeyCode::Enter => self.error(tf(
+                        self.lang,
+                        "Type \"{}\" to confirm; nothing changed.",
+                        &[UNINSTALL_WORD],
+                    )),
                     KeyCode::Backspace => {
                         input.pop();
                         self.mode = Mode::TypeConfirm { input };
@@ -357,49 +724,44 @@ impl App {
                 }
                 Effect::None
             }
-            Mode::TextInput {
-                event_id,
-                title,
-                mut input,
-            } => {
+            Mode::TextInput { purpose, mut input } => {
                 match key.code {
-                    KeyCode::Esc => self.info("Cancelled; nothing sent."),
+                    KeyCode::Esc => self.info(self.tr("Cancelled; nothing changed.")),
                     KeyCode::Enter if input.trim().is_empty() => {
-                        self.error("Empty reply; nothing sent.")
+                        self.error(self.tr("Empty input; nothing changed."))
                     }
                     KeyCode::Enter => {
-                        self.mode = Mode::Confirm(Pending::Respond {
-                            event_id,
-                            title,
-                            action: ActionArg::Text,
-                            text: Some(input),
-                        })
+                        let value = input.trim().to_string();
+                        self.mode = Mode::Confirm(match purpose {
+                            Input::Reply { event_id, title } => Pending::Respond {
+                                event_id,
+                                title,
+                                action: ActionArg::Text,
+                                text: Some(input),
+                            },
+                            Input::Webpush { id, name } => Pending::SetWebpush {
+                                id,
+                                name,
+                                subscription: value,
+                            },
+                            Input::Endpoint { id, name } => Pending::SetEndpoint {
+                                id,
+                                name,
+                                url: value,
+                            },
+                        });
                     }
                     KeyCode::Backspace => {
                         input.pop();
-                        self.mode = Mode::TextInput {
-                            event_id,
-                            title,
-                            input,
-                        };
+                        self.mode = Mode::TextInput { purpose, input };
                     }
                     KeyCode::Char(c) => {
-                        if input.len() + c.len_utf8() <= MAX_TEXT && !c.is_control() {
+                        if input.len() + c.len_utf8() <= purpose.max() && !c.is_control() {
                             input.push(c);
                         }
-                        self.mode = Mode::TextInput {
-                            event_id,
-                            title,
-                            input,
-                        };
+                        self.mode = Mode::TextInput { purpose, input };
                     }
-                    _ => {
-                        self.mode = Mode::TextInput {
-                            event_id,
-                            title,
-                            input,
-                        }
-                    }
+                    _ => self.mode = Mode::TextInput { purpose, input },
                 }
                 Effect::None
             }
@@ -408,18 +770,16 @@ impl App {
 
     fn on_normal(&mut self, key: KeyEvent, exec: &mut dyn Exec) -> Effect {
         let i = self.screen.index();
+        let n = Screen::ALL.len();
         match key.code {
             KeyCode::Char('q') | KeyCode::Esc => return Effect::Quit,
             KeyCode::Tab | KeyCode::Right | KeyCode::Char('l') => {
-                self.goto(Screen::ALL[(i + 1) % Screen::ALL.len()], exec)
+                self.goto(Screen::ALL[(i + 1) % n], exec)
             }
             KeyCode::BackTab | KeyCode::Left | KeyCode::Char('h') => {
-                self.goto(
-                    Screen::ALL[(i + Screen::ALL.len() - 1) % Screen::ALL.len()],
-                    exec,
-                );
+                self.goto(Screen::ALL[(i + n - 1) % n], exec)
             }
-            KeyCode::Char(c @ '1'..='7') => {
+            KeyCode::Char(c @ '1'..='8') => {
                 self.goto(Screen::ALL[c as usize - '1' as usize], exec);
             }
             KeyCode::Char('r') => self.refresh(exec),
@@ -429,37 +789,65 @@ impl App {
                 }
             }
             KeyCode::Up | KeyCode::Char('k') => self.sel[i] = self.sel[i].saturating_sub(1),
-            _ => return self.on_screen_key(key, exec),
+            code => {
+                if let Some(act) = actions::for_key(self.screen, code) {
+                    return self.run_act(act, exec);
+                }
+            }
         }
         Effect::None
     }
 
-    fn on_screen_key(&mut self, key: KeyEvent, exec: &mut dyn Exec) -> Effect {
+    /// Runs `act` on the current screen and selection.
+    pub fn run_act(&mut self, act: Act, exec: &mut dyn Exec) -> Effect {
         if self.uninstalled {
-            self.error("falconer-hook was removed; press q to quit.");
+            self.error(self.tr("falconer-hook was removed; press q to quit."));
             return Effect::None;
         }
         let sel = self.selected();
-        match (self.screen, key.code) {
-            (Screen::Agents, KeyCode::Char(c @ ('a' | 'd' | 't'))) => {
+        match act {
+            Act::Activate => return self.activate(exec),
+            Act::Fix => match self.home_items().get(sel) {
+                Some(HomeItem::Check(i)) => return self.fix_check(*i),
+                _ => self.error(self.tr("Select a problem to fix.")),
+            },
+            Act::FixAll => {
+                let ids = self.pending_fixes();
+                if ids.is_empty() {
+                    self.info(self.tr("Nothing to fix."));
+                } else {
+                    self.mode = Mode::Confirm(Pending::FixAll { ids });
+                }
+            }
+            Act::Wizard => {}
+            Act::Update => match &self.update {
+                UpdateState::Available { tag, .. } => {
+                    self.mode = Mode::Confirm(Pending::Update { tag: tag.clone() })
+                }
+                UpdateState::Checking => self.info(self.tr("Still checking for updates.")),
+                _ => self.info(self.tr("No update available.")),
+            },
+            Act::Allow | Act::Deny | Act::Reply => {
                 let Some(e) = self.events.get(sel).cloned() else {
-                    self.error("No event selected.");
+                    self.error(self.tr("No event selected."));
                     return Effect::None;
                 };
                 if !e.pending {
-                    self.error("That event is already resolved.");
+                    self.error(self.tr("That event is already resolved."));
                     return Effect::None;
                 }
-                self.mode = match c {
-                    't' => Mode::TextInput {
-                        event_id: e.id,
-                        title: e.title,
+                self.mode = match act {
+                    Act::Reply => Mode::TextInput {
+                        purpose: Input::Reply {
+                            event_id: e.id,
+                            title: e.title,
+                        },
                         input: String::new(),
                     },
                     _ => Mode::Confirm(Pending::Respond {
                         event_id: e.id,
                         title: e.title,
-                        action: if c == 'a' {
+                        action: if act == Act::Allow {
                             ActionArg::Allow
                         } else {
                             ActionArg::Deny
@@ -468,25 +856,32 @@ impl App {
                     }),
                 };
             }
-            (Screen::Devices, KeyCode::Char('x') | KeyCode::Delete) => {
-                match self.devices.get(sel).cloned() {
-                    Some(d) => {
-                        self.mode = Mode::Confirm(Pending::Revoke {
-                            id: d.id,
-                            name: d.name,
-                        })
-                    }
-                    None => self.error("No device selected."),
-                }
-            }
-            (Screen::Status, KeyCode::Char('s')) => return Effect::HardenSsh,
-            (Screen::Pair, KeyCode::Enter | KeyCode::Char('p')) => {
+            Act::Pair => {
                 return Effect::Pair {
                     invert: self.invert,
                 }
             }
-            (Screen::Pair, KeyCode::Char('i')) => self.invert = !self.invert,
-            (Screen::Integrations, KeyCode::Char(c @ ('i' | 'u'))) => {
+            Act::InvertQr => self.invert = !self.invert,
+            Act::Revoke | Act::SetWebpush | Act::ClearWebpush | Act::SetEndpoint => {
+                let Some(d) = self.devices.get(sel).cloned() else {
+                    self.error(self.tr("No phone selected."));
+                    return Effect::None;
+                };
+                let (id, name) = (d.id, d.name);
+                self.mode = match act {
+                    Act::Revoke => Mode::Confirm(Pending::Revoke { id, name }),
+                    Act::ClearWebpush => Mode::Confirm(Pending::ClearWebpush { id, name }),
+                    Act::SetWebpush => Mode::TextInput {
+                        purpose: Input::Webpush { id, name },
+                        input: String::new(),
+                    },
+                    _ => Mode::TextInput {
+                        purpose: Input::Endpoint { id, name },
+                        input: String::new(),
+                    },
+                };
+            }
+            Act::IntegrationInstall | Act::IntegrationUninstall => {
                 let row = self.integrations.get(sel).cloned();
                 match row.and_then(|r| {
                     <AgentArg as clap::ValueEnum>::from_str(&r.agent, true)
@@ -497,29 +892,92 @@ impl App {
                         self.mode = Mode::Confirm(Pending::Integration {
                             agent,
                             name: r.name,
-                            install: c == 'i',
+                            install: act == Act::IntegrationInstall,
                         })
                     }
-                    None => self.error("No agent selected."),
+                    None => self.error(self.tr("No agent selected.")),
                 }
             }
-            (Screen::Setup, KeyCode::Char(c @ ('s' | 'a'))) => {
-                self.mode = Mode::Confirm(Pending::Setup { yes: c == 'a' })
+            Act::ServiceInstall => self.mode = Mode::Confirm(Pending::Service(ServiceOp::Install)),
+            Act::ServiceRestart => self.mode = Mode::Confirm(Pending::Service(ServiceOp::Restart)),
+            Act::ServiceUninstall => {
+                self.mode = Mode::Confirm(Pending::Service(ServiceOp::Uninstall))
             }
-            (Screen::Uninstall, KeyCode::Char('a')) => {
+            Act::MoreDays | Act::FewerDays => {
+                let i = USAGE_DAYS
+                    .iter()
+                    .position(|d| *d == self.usage_days)
+                    .unwrap_or(1);
+                let j = if act == Act::MoreDays {
+                    (i + 1).min(USAGE_DAYS.len() - 1)
+                } else {
+                    i.saturating_sub(1)
+                };
+                if j != i {
+                    self.usage_days = USAGE_DAYS[j];
+                    self.refresh(exec);
+                }
+            }
+            Act::HardenSsh => return Effect::HardenSsh,
+            Act::Setup => self.mode = Mode::Confirm(Pending::Setup { yes: false }),
+            Act::SetupAll => self.mode = Mode::Confirm(Pending::Setup { yes: true }),
+            Act::LegacyCleanup => self.mode = Mode::Confirm(Pending::LegacyCleanup),
+            Act::ToggleAll => {
                 self.uninstall_all = !self.uninstall_all;
+                self.output = None;
                 self.refresh(exec);
             }
-            (Screen::Uninstall, KeyCode::Enter | KeyCode::Char('u')) => {
+            Act::Uninstall => {
                 if self.plan_empty {
-                    self.info("Nothing to remove.");
+                    self.info(self.tr("Nothing to remove."));
                 } else {
+                    self.output = None;
                     self.mode = Mode::TypeConfirm {
                         input: String::new(),
                     };
                 }
             }
-            _ => {}
+        }
+        Effect::None
+    }
+
+    /// Enter: the selected row's action.
+    fn activate(&mut self, exec: &mut dyn Exec) -> Effect {
+        let sel = self.selected();
+        match self.screen {
+            Screen::Home => match self.home_items().get(sel).copied() {
+                Some(HomeItem::Check(i)) => self.fix_check(i),
+                Some(HomeItem::FixAll) => self.run_act(Act::FixAll, exec),
+                Some(HomeItem::Pair) => self.run_act(Act::Pair, exec),
+                Some(HomeItem::Update) => self.run_act(Act::Update, exec),
+                Some(HomeItem::Wizard) => self.run_act(Act::Wizard, exec),
+                None => Effect::None,
+            },
+            Screen::Advanced => match self.advanced_items().get(sel).copied() {
+                Some(act) => self.run_act(act, exec),
+                None => Effect::None,
+            },
+            _ => Effect::None,
+        }
+    }
+
+    fn fix_check(&mut self, i: usize) -> Effect {
+        let Some(c) = self.checks.get(i).cloned() else {
+            return Effect::None;
+        };
+        match c.fix {
+            None if c.ok() => self.info(tf(self.lang, "{} is OK.", &[&c.name])),
+            None => self.info(tf(
+                self.lang,
+                "No automatic fix for {}: {}",
+                &[&c.name, &c.detail],
+            )),
+            Some(FixId::Pair) => {
+                return Effect::Pair {
+                    invert: self.invert,
+                }
+            }
+            Some(id) => self.mode = Mode::Confirm(Pending::Fix { id }),
         }
         Effect::None
     }
@@ -531,6 +989,46 @@ impl App {
         }
     }
 
+    fn load_doctor(&mut self, exec: &mut dyn Exec) -> Result<(), CliError> {
+        let d = exec
+            .exec(Command::Doctor {
+                fix: None,
+                yes: false,
+                out: json(),
+            })?
+            .data;
+        self.set_checks(&d);
+        Ok(())
+    }
+
+    fn set_checks(&mut self, d: &Value) {
+        self.healthy = d["healthy"].as_bool();
+        self.checks = rows(d, "checks", |c| CheckRow {
+            name: text(c, "name"),
+            status: text(c, "status"),
+            detail: text(c, "detail"),
+            fix: c["fix"]["id"].as_str().and_then(FixId::parse),
+        });
+    }
+
+    fn load_devices(&mut self, exec: &mut dyn Exec) -> Result<(), CliError> {
+        let d = exec
+            .exec(Command::Devices {
+                cmd: DevicesCmd::List { out: json() },
+            })?
+            .data;
+        self.devices = rows(&d, "devices", |d| DeviceRow {
+            id: text(d, "id"),
+            name: text(d, "name"),
+            stale: d["endpoint_stale"].as_bool().unwrap_or(false),
+            ssh: d["ssh_authorized"].as_bool().unwrap_or(false),
+            no_push: d["endpoint"].as_str() == Some("") && d["webpush"] != true,
+            endpoint: text(d, "endpoint"),
+            webpush: d["webpush"].as_bool().unwrap_or(false),
+        });
+        Ok(())
+    }
+
     /// Reloads the current screen.
     pub fn refresh(&mut self, exec: &mut dyn Exec) {
         if self.uninstalled {
@@ -540,20 +1038,8 @@ impl App {
         self.loaded[i] = true;
         let r: Result<(), CliError> = (|| {
             match self.screen {
-                Screen::Status => {
-                    let d = exec
-                        .exec(Command::Doctor {
-                            fix: None,
-                            yes: false,
-                            out: json(),
-                        })?
-                        .data;
-                    self.healthy = d["healthy"].as_bool();
-                    self.checks = rows(&d, "checks", |c| CheckRow {
-                        name: text(c, "name"),
-                        status: text(c, "status"),
-                        detail: text(c, "detail"),
-                    });
+                Screen::Home => {
+                    self.load_doctor(exec)?;
                     let v = exec.exec(Command::Version { out: json() })?.data;
                     self.version = Some(text(&v, "version"));
                 }
@@ -590,19 +1076,11 @@ impl App {
                     events.sort_by_key(|e| std::cmp::Reverse(e.seq));
                     self.events = events;
                 }
-                Screen::Devices => {
-                    let d = exec
-                        .exec(Command::Devices {
-                            cmd: DevicesCmd::List { out: json() },
-                        })?
-                        .data;
-                    self.devices = rows(&d, "devices", |d| DeviceRow {
-                        id: text(d, "id"),
-                        name: text(d, "name"),
-                        stale: d["endpoint_stale"].as_bool().unwrap_or(false),
-                        ssh: d["ssh_authorized"].as_bool().unwrap_or(false),
-                        no_push: d["endpoint"].as_str() == Some(""),
-                    });
+                Screen::Phones => self.load_devices(exec)?,
+                Screen::Settings => {
+                    self.load_devices(exec)?;
+                    let c = exec.exec(Command::Config { out: json() })?;
+                    self.config_text = clean(&c.human);
                 }
                 Screen::Integrations => {
                     let d = exec
@@ -618,7 +1096,15 @@ impl App {
                         settings: text(a, "settings"),
                     });
                 }
-                Screen::Uninstall => {
+                Screen::Service => self.load_doctor(exec)?,
+                Screen::Usage => {
+                    let r = exec.exec(Command::Usage {
+                        days: self.usage_days,
+                        out: json(),
+                    })?;
+                    self.usage_text = clean(&r.human);
+                }
+                Screen::Advanced => {
                     let r = exec.exec(Command::Uninstall {
                         all: self.uninstall_all,
                         dry_run: true,
@@ -628,16 +1114,21 @@ impl App {
                     self.plan_empty = r.data["steps"].as_array().is_none_or(|s| s.is_empty());
                     self.plan = clean(&r.human);
                 }
-                Screen::Pair | Screen::Setup => {}
             }
             Ok(())
         })();
+        self.clamp();
+        if let Err(e) = r {
+            self.error(e.message);
+        }
+    }
+
+    /// Keeps the selection inside the current list.
+    fn clamp(&mut self) {
+        let i = self.screen.index();
         let n = self.list_len();
         if self.sel[i] >= n {
             self.sel[i] = n.saturating_sub(1);
-        }
-        if let Err(e) = r {
-            self.error(e.message);
         }
     }
 
@@ -651,11 +1142,22 @@ impl App {
         }
     }
 
-    fn perform(&mut self, p: Pending, exec: &mut dyn Exec) {
+    fn perform(&mut self, p: Pending, exec: &mut dyn Exec) -> Effect {
         if self.uninstalled {
-            return;
+            return Effect::None;
         }
         let cmd = match &p {
+            Pending::Fix { id } if *id != FixId::FixPermissions => {
+                return Effect::Fix { id: *id };
+            }
+            Pending::FixAll { .. } => return Effect::FixAll,
+            Pending::Update { tag } => return Effect::Update { tag: tag.clone() },
+            Pending::Setup { yes: true } => return Effect::SetupAll,
+            Pending::Fix { id } => Command::Doctor {
+                fix: Some(Some(id.as_str().into())),
+                yes: true,
+                out: json(),
+            },
             Pending::Respond {
                 event_id,
                 action,
@@ -688,27 +1190,77 @@ impl App {
                     }
                 },
             },
-            Pending::Setup { yes } => Command::Setup {
-                yes: *yes,
+            Pending::Setup { yes: false } | Pending::LegacyCleanup => Command::Setup {
+                yes: false,
                 no_service: false,
                 out: json(),
             },
+            Pending::Service(op) => Command::Service {
+                cmd: match op {
+                    ServiceOp::Install => ServiceCmd::Install {
+                        dry_run: false,
+                        out: json(),
+                    },
+                    ServiceOp::Restart => ServiceCmd::Restart { out: json() },
+                    ServiceOp::Uninstall => ServiceCmd::Uninstall {
+                        dry_run: false,
+                        out: json(),
+                    },
+                },
+            },
+            Pending::SetEndpoint { id, url, .. } => Command::Devices {
+                cmd: DevicesCmd::SetEndpoint {
+                    id: id.clone(),
+                    url: url.clone(),
+                    out: json(),
+                },
+            },
+            Pending::SetWebpush { id, .. } => Command::Devices {
+                cmd: DevicesCmd::SetWebpush {
+                    id: id.clone(),
+                    out: json(),
+                },
+            },
+            Pending::ClearWebpush { id, .. } => Command::Devices {
+                cmd: DevicesCmd::ClearWebpush {
+                    id: id.clone(),
+                    out: json(),
+                },
+            },
         };
-        match exec.exec(cmd) {
+        let r = match &p {
+            Pending::SetWebpush { subscription, .. } => exec.exec_stdin(cmd, subscription),
+            _ => exec.exec(cmd),
+        };
+        match r {
             Ok(reply) => {
                 let human = match &p {
-                    Pending::Respond { action, .. } => format!("Sent {}.", action_name(*action)),
-                    _ => reply.human.lines().next().unwrap_or("Done.").to_string(),
+                    Pending::Respond { action, .. } => tf(
+                        self.lang,
+                        match action {
+                            ActionArg::Allow => "Sent allow.",
+                            ActionArg::Deny => "Sent deny.",
+                            ActionArg::Text => "Sent the reply.",
+                        },
+                        &[],
+                    ),
+                    _ => match first_line(&reply.human) {
+                        "" => self.tr("Done.").to_string(),
+                        l => l.to_string(),
+                    },
                 };
-                if let Pending::Setup { .. } = p {
-                    self.setup_output = Some(clean(&reply.human));
+                match &p {
+                    Pending::Setup { .. } | Pending::LegacyCleanup => {
+                        self.output = Some(clean(&reply.human))
+                    }
+                    Pending::Service(_) => self.service_output = Some(clean(&reply.human)),
+                    Pending::Fix { .. } => self.set_checks(&reply.data),
+                    _ => {}
                 }
                 self.info(human);
                 self.invalidate();
                 let msg = self.message.clone();
-                if self.screen != Screen::Setup {
-                    self.refresh(exec);
-                }
+                self.refresh(exec);
                 // Keep the action's outcome unless the refresh failed.
                 if !self.message.as_ref().is_some_and(|m| m.error) {
                     self.message = msg;
@@ -716,6 +1268,7 @@ impl App {
             }
             Err(e) => self.error(e.message),
         }
+        Effect::None
     }
 
     fn uninstall(&mut self, exec: &mut dyn Exec) {
@@ -729,13 +1282,13 @@ impl App {
             out: json(),
         }) {
             Ok(r) => {
-                self.uninstall_output = Some(clean(&r.human));
+                self.output = Some(clean(&r.human));
                 if r.data["complete"].as_bool().unwrap_or(false) {
                     self.uninstalled = true;
                     self.plan_empty = true;
-                    self.info("falconer-hook was removed. Press q to quit.");
+                    self.info(self.tr("falconer-hook was removed. Press q to quit."));
                 } else {
-                    self.error("Some steps failed; see the list, then try again.");
+                    self.error(self.tr("Some steps failed; see the list, then try again."));
                     self.invalidate();
                 }
             }
@@ -745,27 +1298,41 @@ impl App {
 
     /// Result of a command run while the TUI was suspended.
     pub fn after_suspended(&mut self, r: Result<Reply, CliError>) {
-        self.after_pair(r)
-    }
-
-    /// Records the outcome of the pairing flow run outside the TUI.
-    pub fn after_pair(&mut self, r: Result<Reply, CliError>) {
         match r {
-            Ok(reply) => self.info(reply.human),
+            Ok(reply) => self.info(first_line(&reply.human).to_string()),
             Err(e) => self.error(e.message),
         }
         self.invalidate();
     }
-}
 
-fn action_name(a: ActionArg) -> &'static str {
-    match a {
-        ActionArg::Allow => "allow",
-        ActionArg::Deny => "deny",
-        ActionArg::Text => "the reply",
+    /// Records the outcome of the pairing flow run outside the TUI.
+    pub fn after_pair(&mut self, r: Result<Reply, CliError>) {
+        self.after_suspended(r)
+    }
+
+    /// Back from the terminal: reload what the command may have changed,
+    /// keeping its outcome message.
+    pub fn resume(&mut self, exec: &mut dyn Exec) {
+        let msg = self.message.clone();
+        self.loaded = [false; 8];
+        self.refresh(exec);
+        if self.screen != Screen::Home && !self.uninstalled {
+            // Home's health drives the problems list and the wizard.
+            let screen = self.screen;
+            self.screen = Screen::Home;
+            self.refresh(exec);
+            self.screen = screen;
+        }
+        if !self.message.as_ref().is_some_and(|m| m.error) {
+            self.message = msg;
+        }
     }
 }
 
 #[cfg(test)]
 #[path = "state_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "hub_tests.rs"]
+mod hub_tests;

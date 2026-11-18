@@ -3,76 +3,121 @@
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Tabs, Wrap};
+use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap};
 use ratatui::Frame;
 
-use super::state::{App, Mode, Screen, UNINSTALL_WORD};
+use super::actions;
+use super::i18n::tf;
+use super::state::{fix_title, App, HomeItem, Input, Mode, Screen, UpdateState, UNINSTALL_WORD};
 
-const GLOBAL_KEYS: &str = "Tab/1-7 screens  q quit";
+const REVERSED: Style = Style::new().add_modifier(Modifier::REVERSED);
 
-pub fn draw(f: &mut Frame, app: &App) {
-    let [tabs, body, footer] = Layout::vertical([
-        Constraint::Length(3),
-        Constraint::Min(3),
-        Constraint::Length(3),
-    ])
-    .areas(f.area());
-
-    let titles: Vec<Line> = Screen::ALL
-        .iter()
-        .enumerate()
-        .map(|(i, s)| Line::from(format!("{} {}", i + 1, s.title())))
-        .collect();
-    f.render_widget(
-        Tabs::new(titles)
-            .select(app.screen.index())
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .title(" falconer-hook "),
-            )
-            .highlight_style(Style::default().add_modifier(Modifier::BOLD | Modifier::REVERSED)),
-        tabs,
-    );
-
-    match app.screen {
-        Screen::Status => status(f, app, body),
-        Screen::Agents => agents(f, app, body),
-        Screen::Devices => devices(f, app, body),
-        Screen::Pair => pair(f, app, body),
-        Screen::Integrations => integrations(f, app, body),
-        Screen::Setup => setup(f, app, body),
-        Screen::Uninstall => uninstall(f, app, body),
+/// Greedy word wrap of `items` (each kept whole, `sep` between them) into
+/// lines of `width`.
+fn wrap_items<'a>(items: Vec<Span<'a>>, sep: &'static str, width: usize) -> Vec<Line<'a>> {
+    let mut lines: Vec<Line> = Vec::new();
+    let mut cur: Vec<Span> = Vec::new();
+    let mut used = 0;
+    for s in items {
+        let w = s.content.chars().count();
+        if used > 0 && used + sep.len() + w > width {
+            lines.push(Line::from(std::mem::take(&mut cur)));
+            used = 0;
+        }
+        if used > 0 {
+            cur.push(Span::raw(sep));
+            used += sep.len();
+        }
+        used += w;
+        cur.push(s);
     }
+    if !cur.is_empty() {
+        lines.push(Line::from(cur));
+    }
+    lines
+}
 
+fn footer_lines(app: &App, width: usize) -> Vec<Line<'static>> {
     let msg = app.message.as_ref().map_or(Line::from(""), |m| {
         Line::from(Span::styled(
             m.text.clone(),
             Style::default().fg(if m.error { Color::Red } else { Color::Green }),
         ))
     });
+    let tabs = Screen::ALL
+        .iter()
+        .enumerate()
+        .map(|(i, s)| {
+            let label = format!("{} {}", i + 1, app.tr(s.tab()));
+            if *s == app.screen {
+                Span::styled(label, REVERSED.add_modifier(Modifier::BOLD))
+            } else {
+                Span::raw(label)
+            }
+        })
+        .collect();
+    let mut hints: Vec<Span> = actions::on(app.screen)
+        .filter(|d| !d.key.is_empty())
+        .map(|d| Span::raw(format!("{} {}", d.key, app.tr(d.hint))))
+        .collect();
+    for (k, h) in [("r", "refresh"), ("q", "quit")] {
+        hints.push(Span::raw(format!("{k} {}", app.tr(h))));
+    }
+    let mut lines = vec![msg];
+    lines.extend(wrap_items(tabs, " ", width));
+    lines.extend(wrap_items(hints, "  ", width));
+    lines
+}
+
+pub fn draw(f: &mut Frame, app: &App) {
+    let area = f.area();
+    let footer = footer_lines(app, area.width.max(1) as usize);
+    // The body keeps at least three rows; the footer gets the rest.
+    let fh = (footer.len() as u16 + 1).min(area.height.saturating_sub(3));
+    let [body, foot] = Layout::vertical([Constraint::Min(0), Constraint::Length(fh)]).areas(area);
+
+    let title = format!(" Falconer ─ {} ", app.tr(app.screen.title()));
+    let outer = Block::default().borders(Borders::ALL).title(title);
+    let inner = outer.inner(body);
+    f.render_widget(outer, body);
+
+    match app.screen {
+        Screen::Home => home(f, app, inner),
+        Screen::Agents => agents(f, app, inner),
+        Screen::Phones => phones(f, app, inner),
+        Screen::Integrations => integrations(f, app, inner),
+        Screen::Service => service(f, app, inner),
+        Screen::Settings => settings(f, app, inner),
+        Screen::Usage => usage(f, app, inner),
+        Screen::Advanced => advanced(f, app, inner),
+    }
+
     f.render_widget(
-        Paragraph::new(vec![
-            msg,
-            Line::from(format!("{}  {GLOBAL_KEYS}", app.screen.keys())),
-        ])
-        .block(Block::default().borders(Borders::TOP)),
-        footer,
+        Paragraph::new(footer).block(Block::default().borders(Borders::TOP)),
+        foot,
     );
 
     modal(f, app);
 }
 
+/// A section inside the screen: a titled rule above its content.
 fn block(title: &str) -> Block<'_> {
     Block::default()
-        .borders(Borders::ALL)
+        .borders(Borders::TOP)
         .title(format!(" {title} "))
 }
 
-fn list(f: &mut Frame, area: Rect, title: &str, items: Vec<ListItem>, sel: Option<usize>) {
+fn list(
+    f: &mut Frame,
+    app: &App,
+    area: Rect,
+    title: &str,
+    items: Vec<ListItem>,
+    sel: Option<usize>,
+) {
     let empty = items.is_empty();
     let items = if empty {
-        vec![ListItem::new("(none)")]
+        vec![ListItem::new(app.tr("(none)"))]
     } else {
         items
     };
@@ -80,41 +125,128 @@ fn list(f: &mut Frame, area: Rect, title: &str, items: Vec<ListItem>, sel: Optio
     f.render_stateful_widget(
         List::new(items)
             .block(block(title))
-            .highlight_symbol("> ")
-            .highlight_style(Style::default().add_modifier(Modifier::REVERSED)),
+            .highlight_symbol("› ")
+            .highlight_style(REVERSED),
         area,
         &mut state,
     );
 }
 
-fn status(f: &mut Frame, app: &App, area: Rect) {
-    let mut lines = vec![Line::from(format!(
-        "Version {}   Health: {}",
-        app.version.as_deref().unwrap_or("?"),
-        match app.healthy {
-            Some(true) => "ok",
-            Some(false) => "needs attention",
-            None => "unknown",
-        }
-    ))];
-    for c in &app.checks {
-        let (mark, color) = match c.status.as_str() {
-            "ok" => ("ok  ", Color::Green),
-            "warn" => ("warn", Color::Yellow),
-            _ => ("FAIL", Color::Red),
-        };
-        lines.push(Line::from(vec![
-            Span::styled(format!("[{mark}] "), Style::default().fg(color)),
-            Span::raw(format!("{:<13} {}", c.name, c.detail)),
-        ]));
-    }
+fn text_panel(f: &mut Frame, area: Rect, title: &str, lines: Vec<Line>) {
     f.render_widget(
         Paragraph::new(lines)
-            .block(block(
-                "Doctor: service, Tailscale, multiplexers, permissions",
-            ))
+            .block(block(title))
             .wrap(Wrap { trim: false }),
         area,
+    );
+}
+
+fn lines_of(s: &str) -> Vec<Line<'static>> {
+    s.lines().map(|l| Line::from(l.to_string())).collect()
+}
+
+fn mark(status: &str) -> (&'static str, Color) {
+    match status {
+        "ok" => ("✓", Color::Green),
+        "warn" => ("!", Color::Yellow),
+        _ => ("✗", Color::Red),
+    }
+}
+
+fn heading(s: &str) -> ListItem<'static> {
+    ListItem::new(Line::from(Span::styled(
+        s.to_string(),
+        Style::default().add_modifier(Modifier::BOLD),
+    )))
+}
+
+fn home(f: &mut Frame, app: &App, area: Rect) {
+    let lang = app.lang;
+    let health = match app.healthy {
+        Some(true) => app.tr("all good"),
+        Some(false) => app.tr("needs attention"),
+        None => app.tr("unknown"),
+    };
+    let update = match &app.update {
+        UpdateState::Unknown => String::new(),
+        UpdateState::Checking => app.tr("Checking for updates…").to_string(),
+        UpdateState::UpToDate => app.tr("Up to date").to_string(),
+        UpdateState::Available { latest, .. } => tf(lang, "v{} available", &[latest]),
+        UpdateState::Failed => app.tr("Update check failed").to_string(),
+    };
+    let mut items = vec![ListItem::new(format!(
+        "{} {} · {} {health}{}",
+        app.tr("Version"),
+        app.version.as_deref().unwrap_or("?"),
+        app.tr("Health:"),
+        if update.is_empty() {
+            String::new()
+        } else {
+            format!(" · {update}")
+        }
+    ))];
+    let mut selectable: Vec<usize> = Vec::new();
+    items.push(heading(app.tr("Health")));
+    let home_items = app.home_items();
+    let mut quick_heading = false;
+    for item in &home_items {
+        let label = match item {
+            HomeItem::Check(i) => {
+                let c = &app.checks[*i];
+                let (m, color) = mark(&c.status);
+                let mut lines = vec![Line::from(vec![
+                    Span::styled(format!("{m} "), Style::default().fg(color)),
+                    Span::raw(format!("{:<12} {}", c.name, c.detail)),
+                ])];
+                lines.push(Line::from(match c.fix {
+                    Some(id) => format!("    → {}", fix_title(lang, id)),
+                    None => format!("    {}", app.tr("(no automatic fix)")),
+                }));
+                selectable.push(items.len());
+                items.push(ListItem::new(lines));
+                continue;
+            }
+            HomeItem::FixAll => app.tr("Install what's missing").to_string(),
+            HomeItem::Pair => app.tr("Pair a phone").to_string(),
+            HomeItem::Update => match &app.update {
+                UpdateState::Available { latest, .. } => {
+                    tf(lang, "Update Falconer (v{} available)", &[latest])
+                }
+                _ => continue,
+            },
+            HomeItem::Wizard => app.tr("Run setup wizard").to_string(),
+        };
+        if !quick_heading {
+            let ok: Vec<&str> = app
+                .checks
+                .iter()
+                .filter(|c| c.ok())
+                .map(|c| c.name.as_str())
+                .collect();
+            if !ok.is_empty() {
+                items.push(ListItem::new(Line::from(vec![
+                    Span::styled("✓ ", Style::default().fg(Color::Green)),
+                    Span::raw(tf(
+                        lang,
+                        "{} OK: {}",
+                        &[&ok.len().to_string(), &ok.join(", ")],
+                    )),
+                ])));
+            }
+            items.push(heading(app.tr("Quick actions")));
+            quick_heading = true;
+        }
+        selectable.push(items.len());
+        items.push(ListItem::new(label));
+    }
+    let sel = selectable.get(app.selected()).copied();
+    let mut state = ListState::default().with_selected(sel);
+    f.render_stateful_widget(
+        List::new(items)
+            .highlight_symbol("› ")
+            .highlight_style(REVERSED),
+        area,
+        &mut state,
     );
 }
 
@@ -135,7 +267,7 @@ fn agents(f: &mut Frame, app: &App, area: Rect) {
             ))
         })
         .collect();
-    list(f, top, "Agents", items, None);
+    list(f, app, top, app.tr("Agents"), items, None);
     let items = app
         .events
         .iter()
@@ -145,58 +277,70 @@ fn agents(f: &mut Frame, app: &App, area: Rect) {
                 e.seq,
                 e.agent,
                 e.kind,
-                if e.pending { "pending" } else { "resolved" },
+                if e.pending {
+                    app.tr("pending")
+                } else {
+                    app.tr("resolved")
+                },
                 e.title
             ))
         })
         .collect();
-    list(f, bottom, "Inbox", items, Some(app.selected()));
+    list(f, app, bottom, app.tr("Inbox"), items, Some(app.selected()));
 }
 
-fn devices(f: &mut Frame, app: &App, area: Rect) {
+fn phones(f: &mut Frame, app: &App, area: Rect) {
+    let [top, bottom] = Layout::vertical([Constraint::Min(3), Constraint::Length(5)]).areas(area);
     let items = app
         .devices
         .iter()
         .map(|d| {
             ListItem::new(format!(
-                "{:<24} {:<20} {}{}",
+                "{:<24} {:<20} {}{}{}",
                 d.id,
                 d.name,
-                if d.ssh { "ssh" } else { "no ssh key" },
+                if d.ssh {
+                    app.tr("ssh")
+                } else {
+                    app.tr("no ssh key")
+                },
                 if d.no_push {
-                    "  (no notifications)"
+                    app.tr("  (no notifications)")
                 } else if d.stale {
-                    "  (endpoint stale)"
+                    app.tr("  (endpoint stale)")
                 } else {
                     ""
-                }
+                },
+                if d.webpush { "  [web push]" } else { "" }
             ))
         })
         .collect();
-    list(f, area, "Paired devices", items, Some(app.selected()));
-}
-
-fn pair(f: &mut Frame, app: &App, area: Rect) {
-    let text = vec![
-        Line::from("Pair a phone by QR over a one-shot, Tailscale-only listener."),
-        Line::from(""),
-        Line::from("Press Enter: the TUI steps aside, the QR code is shown in this terminal,"),
-        Line::from("and you return here when pairing ends (Ctrl+C cancels and burns the token)."),
-        Line::from(""),
-        Line::from(format!(
-            "QR colors: {} (i toggles, for light terminal themes)",
-            if app.invert {
-                "dark on light"
-            } else {
-                "light on dark"
-            }
-        )),
-    ];
-    f.render_widget(
-        Paragraph::new(text)
-            .block(block("Pair"))
-            .wrap(Wrap { trim: false }),
-        area,
+    list(
+        f,
+        app,
+        top,
+        app.tr("Paired phones"),
+        items,
+        Some(app.selected()),
+    );
+    text_panel(
+        f,
+        bottom,
+        app.tr("Pair"),
+        vec![
+            Line::from(app.tr(
+                "p pairs a phone by QR over a one-shot, Tailscale-only listener in this terminal.",
+            )),
+            Line::from(tf(
+                app.lang,
+                "QR colors: {} (i inverts, for light terminal themes)",
+                &[if app.invert {
+                    app.tr("dark on light")
+                } else {
+                    app.tr("light on dark")
+                }],
+            )),
+        ],
     );
 }
 
@@ -209,54 +353,133 @@ fn integrations(f: &mut Frame, app: &App, area: Rect) {
                 "{:<9} {:<19} {:<10} {:<10} {}",
                 a.agent,
                 a.name,
-                if a.detected { "detected" } else { "not found" },
+                if a.detected {
+                    app.tr("detected")
+                } else {
+                    app.tr("not found")
+                },
                 match a.installed {
-                    Some(true) => "installed",
+                    Some(true) => app.tr("installed"),
                     Some(false) => "-",
-                    None => "error",
+                    None => app.tr("error"),
                 },
                 a.settings
             ))
         })
         .collect();
-    list(f, area, "Agent integrations", items, Some(app.selected()));
+    list(
+        f,
+        app,
+        area,
+        app.tr("Agent integrations"),
+        items,
+        Some(app.selected()),
+    );
 }
 
-fn setup(f: &mut Frame, app: &App, area: Rect) {
+fn service(f: &mut Frame, app: &App, area: Rect) {
+    let mut text = Vec::new();
+    match app.checks.iter().find(|c| c.name == "service") {
+        Some(c) => {
+            let (m, color) = mark(&c.status);
+            text.push(Line::from(vec![
+                Span::styled(format!("{m} "), Style::default().fg(color)),
+                Span::raw(c.detail.clone()),
+            ]));
+        }
+        None => text.push(Line::from(app.tr("Service status unknown; r refreshes."))),
+    }
+    text.push(Line::from(""));
+    text.push(Line::from(app.tr(
+        "The user service runs `falconer-hook serve`: it watches agents and sends notifications.",
+    )));
+    if let Some(out) = &app.service_output {
+        text.push(Line::from(""));
+        text.extend(lines_of(out));
+    }
+    text_panel(f, area, app.tr("User service"), text);
+}
+
+fn settings(f: &mut Frame, app: &App, area: Rect) {
+    let n = app.devices.len().max(1) as u16 + 2;
+    let [top, bottom] = Layout::vertical([
+        Constraint::Length(n.min(area.height / 2)),
+        Constraint::Min(3),
+    ])
+    .areas(area);
+    let items = app
+        .devices
+        .iter()
+        .map(|d| {
+            ListItem::new(format!(
+                "{:<20} {}",
+                d.name,
+                if d.endpoint.is_empty() {
+                    app.tr("(no push endpoint)")
+                } else {
+                    d.endpoint.as_str()
+                }
+            ))
+        })
+        .collect();
+    list(
+        f,
+        app,
+        top,
+        app.tr("Push endpoint per phone"),
+        items,
+        Some(app.selected()),
+    );
+    text_panel(
+        f,
+        bottom,
+        app.tr("Config (read-only)"),
+        lines_of(&app.config_text),
+    );
+}
+
+fn usage(f: &mut Frame, app: &App, area: Rect) {
+    let days = app.usage_days.to_string();
     let mut text = vec![
-        Line::from("Setup writes the default config, registers the user service and runs doctor."),
-        Line::from("s: keep integrations as they are   a: also install every detected agent"),
+        Line::from(tf(
+            app.lang,
+            "Last {} days, from the agents' own local logs (+/- change the range).",
+            &[&days],
+        )),
         Line::from(""),
     ];
-    if let Some(out) = &app.setup_output {
-        text.extend(out.lines().map(|l| Line::from(l.to_string())));
-    }
-    f.render_widget(
-        Paragraph::new(text)
-            .block(block("Setup"))
-            .wrap(Wrap { trim: false }),
-        area,
-    );
+    text.extend(lines_of(&app.usage_text));
+    text_panel(f, area, app.tr("Token usage"), text);
 }
 
-fn uninstall(f: &mut Frame, app: &App, area: Rect) {
-    let mut text = vec![Line::from(format!(
-        "--all (also delete this binary): {}",
-        if app.uninstall_all { "yes" } else { "no" }
-    ))];
-    text.push(Line::from(""));
-    let body = app.uninstall_output.as_deref().unwrap_or(&app.plan);
-    text.extend(body.lines().map(|l| Line::from(l.to_string())));
-    f.render_widget(
-        Paragraph::new(text)
-            .block(block(if app.uninstall_output.is_some() {
-                "Uninstall result"
-            } else {
-                "Uninstall plan (dry run)"
-            }))
-            .wrap(Wrap { trim: false }),
-        area,
-    );
+fn advanced(f: &mut Frame, app: &App, area: Rect) {
+    let acts = app.advanced_items();
+    let [top, bottom] = Layout::vertical([
+        Constraint::Length((acts.len() as u16 + 2).min(area.height / 2)),
+        Constraint::Min(3),
+    ])
+    .areas(area);
+    let items = acts
+        .iter()
+        .map(|a| ListItem::new(app.tr(actions::def(*a).label)))
+        .collect();
+    list(f, app, top, app.tr("Actions"), items, Some(app.selected()));
+    let (title, body) = match &app.output {
+        Some(out) => (app.tr("Output").to_string(), out.as_str()),
+        None => (
+            tf(
+                app.lang,
+                "Uninstall plan (dry run), --all: {}",
+                &[if app.uninstall_all {
+                    app.tr("yes")
+                } else {
+                    app.tr("no")
+                }],
+            ),
+            app.plan.as_str(),
+        ),
+    };
+    text_panel(f, bottom, &title, lines_of(body));
 }
 
 fn centered(area: Rect, width: u16, height: u16) -> Rect {
@@ -270,41 +493,76 @@ fn centered(area: Rect, width: u16, height: u16) -> Rect {
     )
 }
 
-fn modal(f: &mut Frame, app: &App) {
-    let (title, lines): (&str, Vec<Line>) = match &app.mode {
-        Mode::Normal => return,
-        Mode::Confirm(p) => (
-            "Confirm",
-            vec![
-                Line::from(p.question()),
-                Line::from(""),
-                Line::from("y confirm   n / Esc cancel"),
-            ],
-        ),
-        Mode::TypeConfirm { input } => (
-            "Confirm uninstall",
-            vec![
-                Line::from("This removes everything listed in the plan."),
-                Line::from(format!("Type \"{UNINSTALL_WORD}\" and press Enter:")),
-                Line::from(format!("> {input}")),
-                Line::from("Esc cancel"),
-            ],
-        ),
-        Mode::TextInput { title, input, .. } => (
-            "Reply text",
-            vec![
-                Line::from(format!("Reply to \"{title}\":")),
-                Line::from(format!("> {input}")),
-                Line::from("Enter continue   Esc cancel"),
-            ],
-        ),
-    };
-    let area = centered(f.area(), 70, lines.len() as u16 + 2);
+/// Draws a centered dialog that fits `lines` (wrapped) when it can.
+pub fn dialog(f: &mut Frame, title: &str, lines: Vec<Line>) {
+    let area = f.area();
+    let width = 76.min(area.width);
+    let inner = width.saturating_sub(2).max(1) as usize;
+    let rows: usize = lines.iter().map(|l| l.width().max(1).div_ceil(inner)).sum();
+    let area = centered(area, width, rows as u16 + 2);
     f.render_widget(Clear, area);
     f.render_widget(
         Paragraph::new(lines)
-            .block(block(title))
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title(format!(" {title} ")),
+            )
             .wrap(Wrap { trim: false }),
         area,
     );
+}
+
+fn modal(f: &mut Frame, app: &App) {
+    let (title, lines): (&str, Vec<Line>) = match &app.mode {
+        Mode::Normal => return,
+        Mode::Confirm(p) => {
+            let mut l = lines_of(&p.question(app.lang));
+            l.push(Line::from(""));
+            l.push(Line::from(app.tr("y confirm   n / Esc cancel")));
+            (app.tr("Confirm"), l)
+        }
+        Mode::TypeConfirm { input } => (
+            app.tr("Confirm uninstall"),
+            vec![
+                Line::from(app.tr("This removes everything listed in the plan.")),
+                Line::from(tf(
+                    app.lang,
+                    "Type \"{}\" and press Enter:",
+                    &[UNINSTALL_WORD],
+                )),
+                Line::from(format!("> {input}")),
+                Line::from(app.tr("Esc cancel")),
+            ],
+        ),
+        Mode::TextInput { purpose, input } => {
+            let (title, prompt) = match purpose {
+                Input::Reply { title, .. } => (
+                    app.tr("Reply text"),
+                    tf(app.lang, "Reply to \"{}\":", &[title]),
+                ),
+                Input::Webpush { name, .. } => (
+                    app.tr("Web Push subscription"),
+                    tf(
+                        app.lang,
+                        "Paste the subscription JSON for {} (as for devices set-webpush):",
+                        &[name],
+                    ),
+                ),
+                Input::Endpoint { name, .. } => (
+                    app.tr("Push endpoint"),
+                    tf(app.lang, "New push endpoint URL for {}:", &[name]),
+                ),
+            };
+            (
+                title,
+                vec![
+                    Line::from(prompt),
+                    Line::from(format!("> {input}")),
+                    Line::from(app.tr("Enter continue   Esc cancel")),
+                ],
+            )
+        }
+    };
+    dialog(f, title, lines);
 }
