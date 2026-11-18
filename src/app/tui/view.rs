@@ -60,14 +60,24 @@ fn footer_lines(app: &App, width: usize) -> Vec<Line<'static>> {
         })
         .collect();
     let mut hints: Vec<Span> = if app.wizard.is_some() {
-        [("Enter", "run"), ("s", "skip"), ("Esc", "leave")]
-            .iter()
-            .map(|(k, h)| Span::raw(format!("{k} {}", app.tr(h))))
-            .collect()
+        [
+            ("Enter", "run"),
+            ("s", "skip"),
+            ("Esc", "leave"),
+            ("?", "help"),
+        ]
+        .iter()
+        .map(|(k, h)| Span::raw(format!("{k} {}", app.tr(h))))
+        .collect()
     } else {
         actions::on(app.screen)
             .filter(|d| !d.key.is_empty())
             .map(|d| Span::raw(format!("{} {}", d.key, app.tr(d.hint))))
+            .chain(
+                [("/", "search"), ("?", "help")]
+                    .iter()
+                    .map(|(k, h)| Span::raw(format!("{k} {}", app.tr(h)))),
+            )
             .collect()
     };
     for (k, h) in [("r", "refresh"), ("q", "quit")] {
@@ -108,7 +118,86 @@ pub fn draw(f: &mut Frame, app: &App) {
         foot,
     );
 
+    if app.help {
+        help(f, app);
+    }
+    if app.palette.is_some() {
+        palette(f, app);
+    }
     modal(f, app);
+}
+
+/// Global keys, then the keys of what is on screen.
+fn help(f: &mut Frame, app: &App) {
+    let bold = Style::default().add_modifier(Modifier::BOLD);
+    let row = |k: &str, label: &str| Line::from(format!("  {k:<16} {label}"));
+    let mut lines = vec![Line::from(Span::styled(app.tr("Everywhere"), bold))];
+    for (k, label) in [
+        ("1-8 Tab ← →", "Switch screens"),
+        ("j k ↑ ↓", "Move the selection"),
+        ("r", "Refresh"),
+        ("/", "Search every action"),
+        ("?", "Show or hide this help"),
+        ("q Esc", "Quit (Esc closes a dialog first)"),
+    ] {
+        lines.push(row(k, app.tr(label)));
+    }
+    lines.push(Line::from(""));
+    if app.wizard.is_some() {
+        lines.push(Line::from(Span::styled(app.tr("Setup wizard"), bold)));
+        for (k, label) in [
+            ("Enter", "Run this step (asks first)"),
+            ("s", "Skip this step"),
+            ("Esc", "Leave the wizard for Home"),
+        ] {
+            lines.push(row(k, app.tr(label)));
+        }
+    } else {
+        lines.push(Line::from(Span::styled(app.tr(app.screen.title()), bold)));
+        for d in actions::on(app.screen) {
+            let k = if d.key.is_empty() {
+                app.tr("Enter on list")
+            } else {
+                d.key
+            };
+            lines.push(row(k, app.tr(d.label)));
+        }
+    }
+    dialog(f, app.tr("Help"), lines);
+}
+
+fn palette(f: &mut Frame, app: &App) {
+    let Some(p) = &app.palette else { return };
+    let matches = app.palette_matches();
+    let full = f.area();
+    let height = (matches.len() as u16 + 4)
+        .min(full.height.saturating_sub(2))
+        .max(3);
+    let area = centered(full, 72, height);
+    f.render_widget(Clear, area);
+    let outer = Block::default()
+        .borders(Borders::ALL)
+        .title(format!(" {} ", app.tr("Search actions")));
+    let inner = outer.inner(area);
+    f.render_widget(outer, area);
+    let [query, rest] = Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).areas(inner);
+    f.render_widget(Paragraph::new(format!("> {}_", p.query)), query);
+    let items: Vec<ListItem> = if matches.is_empty() {
+        vec![ListItem::new(app.tr("No matching action."))]
+    } else {
+        matches
+            .iter()
+            .map(|e| ListItem::new(format!("{}  · {}", e.label, app.tr(e.screen.tab()))))
+            .collect()
+    };
+    let mut state = ListState::default().with_selected((!matches.is_empty()).then_some(p.sel));
+    f.render_stateful_widget(
+        List::new(items)
+            .highlight_symbol("› ")
+            .highlight_style(REVERSED),
+        rest,
+        &mut state,
+    );
 }
 
 fn screen(f: &mut Frame, app: &App, inner: Rect) {

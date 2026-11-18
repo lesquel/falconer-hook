@@ -495,6 +495,21 @@ pub enum UpdateState {
     Failed,
 }
 
+/// The `/` action palette.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Palette {
+    pub query: String,
+    pub sel: usize,
+}
+
+/// One palette line: a screen to go to, or an action on its screen.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PaletteEntry {
+    pub screen: Screen,
+    pub act: Option<Act>,
+    pub label: String,
+}
+
 /// A selectable Home row.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HomeItem {
@@ -536,6 +551,9 @@ pub struct App {
     pub uninstalled: bool,
     /// The open setup wizard's step.
     pub wizard: Option<usize>,
+    /// The `?` overlay is open.
+    pub help: bool,
+    pub palette: Option<Palette>,
     integrations_known: bool,
 }
 
@@ -602,6 +620,8 @@ impl App {
             output: None,
             uninstalled: false,
             wizard: None,
+            help: false,
+            palette: None,
             integrations_known: false,
         }
     }
@@ -727,6 +747,7 @@ impl App {
                 self.clamp();
             }
             KeyCode::Char('q') => return Effect::Quit,
+            KeyCode::Char('?') => self.help = true,
             KeyCode::Char('s') => self.next_step(),
             KeyCode::Char('r') => self.reload_wizard(exec),
             KeyCode::Enter => match self.step_status(step) {
@@ -847,6 +868,16 @@ impl App {
             return Effect::Quit;
         }
         match std::mem::replace(&mut self.mode, Mode::Normal) {
+            Mode::Normal if self.palette.is_some() => self.on_palette_key(key, exec),
+            Mode::Normal if self.help => {
+                if matches!(
+                    key.code,
+                    KeyCode::Char('?') | KeyCode::Esc | KeyCode::Char('q')
+                ) {
+                    self.help = false;
+                }
+                Effect::None
+            }
             Mode::Normal if self.wizard.is_some() => self.on_wizard_key(key, exec),
             Mode::Normal => self.on_normal(key, exec),
             Mode::Confirm(p) => match key.code {
@@ -940,6 +971,8 @@ impl App {
                 self.goto(Screen::ALL[c as usize - '1' as usize], exec);
             }
             KeyCode::Char('r') => self.refresh(exec),
+            KeyCode::Char('?') => self.help = true,
+            KeyCode::Char('/') => self.palette = Some(Palette::default()),
             KeyCode::Down | KeyCode::Char('j') => {
                 if self.sel[i] + 1 < self.list_len() {
                     self.sel[i] += 1;
@@ -951,6 +984,89 @@ impl App {
                     return self.run_act(act, exec);
                 }
             }
+        }
+        Effect::None
+    }
+
+    /// Every screen and every action that can run now.
+    pub fn palette_entries(&self) -> Vec<PaletteEntry> {
+        let mut v: Vec<PaletteEntry> = Screen::ALL
+            .iter()
+            .map(|s| PaletteEntry {
+                screen: *s,
+                act: None,
+                label: tf(self.lang, "Go to {}", &[self.tr(s.title())]),
+            })
+            .collect();
+        let advanced = self.advanced_items();
+        for d in actions::ACTIONS {
+            let hidden = match d.act {
+                Act::Activate => true,
+                Act::Update => !matches!(self.update, UpdateState::Available { .. }),
+                Act::LegacyCleanup => !advanced.contains(&Act::LegacyCleanup),
+                _ => false,
+            };
+            if !hidden {
+                v.push(PaletteEntry {
+                    screen: d.screen,
+                    act: Some(d.act),
+                    label: self.tr(d.label).to_string(),
+                });
+            }
+        }
+        v
+    }
+
+    /// Palette entries whose label or screen contains every word typed.
+    pub fn palette_matches(&self) -> Vec<PaletteEntry> {
+        let query = self
+            .palette
+            .as_ref()
+            .map(|p| p.query.to_lowercase())
+            .unwrap_or_default();
+        let words: Vec<&str> = query.split_whitespace().collect();
+        self.palette_entries()
+            .into_iter()
+            .filter(|e| {
+                let hay = format!("{} {}", e.label, self.tr(e.screen.tab())).to_lowercase();
+                words.iter().all(|w| hay.contains(w))
+            })
+            .collect()
+    }
+
+    fn on_palette_key(&mut self, key: KeyEvent, exec: &mut dyn Exec) -> Effect {
+        let matches = self.palette_matches();
+        let n = matches.len();
+        let Some(p) = self.palette.as_mut() else {
+            return Effect::None;
+        };
+        match key.code {
+            KeyCode::Esc => self.palette = None,
+            KeyCode::Enter => match matches.get(p.sel).cloned() {
+                Some(e) => {
+                    self.palette = None;
+                    self.goto(e.screen, exec);
+                    if let Some(act) = e.act {
+                        return self.run_act(act, exec);
+                    }
+                }
+                None => self.error(self.tr("No matching action.")),
+            },
+            KeyCode::Down | KeyCode::Tab => {
+                if p.sel + 1 < n {
+                    p.sel += 1;
+                }
+            }
+            KeyCode::Up | KeyCode::BackTab => p.sel = p.sel.saturating_sub(1),
+            KeyCode::Backspace => {
+                p.query.pop();
+                p.sel = 0;
+            }
+            KeyCode::Char(c) if !c.is_control() && p.query.len() < 64 => {
+                p.query.push(c);
+                p.sel = 0;
+            }
+            _ => {}
         }
         Effect::None
     }
@@ -1539,3 +1655,7 @@ mod hub_tests;
 #[cfg(test)]
 #[path = "wizard_tests.rs"]
 mod wizard_tests;
+
+#[cfg(test)]
+#[path = "palette_tests.rs"]
+mod palette_tests;
