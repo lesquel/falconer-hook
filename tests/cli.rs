@@ -928,3 +928,52 @@ fn tui_refuses_without_a_terminal() {
     );
     assert!(!e.state().exists(), "nothing was created");
 }
+
+#[test]
+fn service_restart_restarts_only_an_installed_service() {
+    let e = Env::new();
+    let (code, v) = e.json(&["service", "restart", "--json"], None, &[]);
+    assert_eq!(err_code(code, &v), "not_found");
+    assert!(e.calls().is_empty(), "nothing ran: {:?}", e.calls());
+
+    let (code, v) = e.json(&["service", "install", "--json"], None, &[]);
+    ok_data(code, &v);
+    let before = e.calls().len();
+    let (code, v) = e.json(&["service", "restart", "--json"], None, &[]);
+    let d = ok_data(code, &v);
+    assert_eq!(d["restarted"], true);
+    let calls = e.calls()[before..].to_vec();
+    if cfg!(target_os = "macos") {
+        assert_eq!(calls.len(), 2, "{calls:?}");
+        assert_eq!(calls[0][..2], ["launchctl", "unload"]);
+        assert_eq!(calls[1][..3], ["launchctl", "load", "-w"]);
+    } else {
+        assert_eq!(
+            calls,
+            vec![vec![
+                "systemctl".to_string(),
+                "--user".into(),
+                "restart".into(),
+                "falconer-hook.service".into()
+            ]]
+        );
+    }
+}
+
+#[test]
+fn config_shows_the_effective_values_read_only() {
+    let e = Env::new();
+    let (code, v) = e.json(&["config", "--json"], None, &[]);
+    let d = ok_data(code, &v);
+    assert!(d["file"]
+        .as_str()
+        .unwrap()
+        .ends_with("falconer/config.toml"));
+    assert_eq!(d["config"]["host_alias"], "devbox");
+    assert_eq!(d["config"]["push"]["server"], "https://ntfy.sh");
+    let out = e.run(&["config"], None, &[]);
+    assert_eq!(out.status.code(), Some(0));
+    let human = String::from_utf8(out.stdout).unwrap();
+    assert!(human.contains("host_alias = \"devbox\""), "{human}");
+    assert!(e.calls().is_empty(), "read-only");
+}

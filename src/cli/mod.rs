@@ -186,6 +186,11 @@ pub enum Command {
     },
     /// Open the interactive terminal UI (also the default on a terminal).
     Tui,
+    /// Print the config file and its effective values (read-only).
+    Config {
+        #[command(flatten)]
+        out: JsonFlag,
+    },
     /// Update to the latest release (`--check` only reports).
     ///
     /// Reinstalls through the release's own install.sh (pinned to its tag), which verifies the
@@ -408,6 +413,11 @@ pub enum ServiceCmd {
         #[command(flatten)]
         out: JsonFlag,
     },
+    /// Restart the installed user service (so it runs this binary).
+    Restart {
+        #[command(flatten)]
+        out: JsonFlag,
+    },
 }
 
 impl Command {
@@ -424,6 +434,7 @@ impl Command {
             | Command::Uninstall { out, .. }
             | Command::Usage { out, .. }
             | Command::Update { out, .. }
+            | Command::Config { out }
             | Command::Version { out } => out.json,
             Command::Sessions {
                 cmd: ListCmd::List { out },
@@ -447,7 +458,9 @@ impl Command {
                 | IntegrationCmd::List { out } => out.json,
             },
             Command::Service { cmd } => match cmd {
-                ServiceCmd::Install { out, .. } | ServiceCmd::Uninstall { out, .. } => out.json,
+                ServiceCmd::Install { out, .. }
+                | ServiceCmd::Uninstall { out, .. }
+                | ServiceCmd::Restart { out } => out.json,
             },
             Command::Herdr { cmd } => match cmd {
                 HerdrCmd::Snapshot { out, .. }

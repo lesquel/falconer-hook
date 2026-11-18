@@ -274,7 +274,9 @@ pub fn run(ctx: &Ctx, command: Command) -> Result<Reply, CliError> {
         Command::Service { cmd } => match cmd {
             ServiceCmd::Install { dry_run, .. } => commands::service(ctx, true, dry_run),
             ServiceCmd::Uninstall { dry_run, .. } => commands::service(ctx, false, dry_run),
+            ServiceCmd::Restart { .. } => service_restart(ctx),
         },
+        Command::Config { .. } => config_show(ctx),
         Command::Attach { .. } | Command::Tui => {
             Err(CliError::new("internal", "dispatched by main"))
         }
@@ -287,6 +289,72 @@ pub fn run(ctx: &Ctx, command: Command) -> Result<Reply, CliError> {
         } => update::update(ctx, check, version.as_deref(), yes, out.json),
         Command::Herdr { cmd } => navigator::run(ctx, cmd),
     }
+}
+
+/// The commands that restart the installed user service.
+fn restart_commands(macos: bool, unit: &std::path::Path, cfg: &Config) -> Vec<Vec<String>> {
+    if macos {
+        let p = unit.display().to_string();
+        vec![
+            vec![cfg.bins.launchctl.clone(), "unload".into(), p.clone()],
+            vec![cfg.bins.launchctl.clone(), "load".into(), "-w".into(), p],
+        ]
+    } else {
+        vec![vec![
+            cfg.bins.systemctl.clone(),
+            "--user".into(),
+            "restart".into(),
+            crate::features::service::domain::SYSTEMD_UNIT_NAME.into(),
+        ]]
+    }
+}
+
+/// `service restart`: restarts the installed user service; refuses when
+/// there is none (`service install` creates it).
+fn service_restart(ctx: &Ctx) -> Result<Reply, CliError> {
+    use crate::shared::domain::command::CommandRunner;
+    let cfg = ctx.config()?;
+    let macos = cfg!(target_os = "macos");
+    let unit = if macos {
+        ctx.paths.launchd_plist()
+    } else {
+        ctx.paths.systemd_unit()
+    };
+    if !unit.exists() {
+        return Err(CliError::new(
+            "not_found",
+            "the user service is not installed; run `falconer-hook service install`",
+        ));
+    }
+    let cmds = restart_commands(macos, &unit, &cfg);
+    for argv in &cmds {
+        let err = match ctx.runner.run(&argv[0], &argv[1..]) {
+            Ok(o) if o.success() => continue,
+            Ok(o) => format!("`{}` exited with {}", argv.join(" "), o.status),
+            Err(e) => e.to_string(),
+        };
+        return Err(CliError::new(
+            "internal",
+            format!("could not restart the service: {err}"),
+        ));
+    }
+    Ok(Reply::new(
+        &serde_json::json!({"restarted": true, "unit": unit, "commands": cmds}),
+        "Restarted the user service",
+    ))
+}
+
+/// `config`: the config file and its effective values. Read-only; it holds
+/// no secrets (push endpoints live per device).
+fn config_show(ctx: &Ctx) -> Result<Reply, CliError> {
+    let file = ctx.paths.config_file();
+    let cfg = ctx.config()?;
+    let body = toml::to_string(&cfg)
+        .map_err(|e| CliError::new("internal", format!("config not printable: {e}")))?;
+    Ok(Reply::new(
+        &serde_json::json!({"file": file, "exists": file.exists(), "config": cfg}),
+        format!("# {}\n{}", file.display(), body.trim_end()),
+    ))
 }
 
 /// Builds the push notifier (sealer + HTTPS publisher) for the duration of `f`.
