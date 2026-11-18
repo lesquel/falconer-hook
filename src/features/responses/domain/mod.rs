@@ -124,11 +124,20 @@ impl ErrorCode for ResponseError {
     }
 }
 
-/// An approval past its time to live cannot be answered.
+/// How far in the future an approval's `created_at` may be (clock skew)
+/// before it is treated as unverifiable.
+pub const APPROVAL_FUTURE_SKEW_SECS: u64 = 60;
+
+/// An approval past its time to live cannot be answered. Neither can one dated
+/// further in the future than [`APPROVAL_FUTURE_SKEW_SECS`] (the clock stepped
+/// back), since its real age is unknown.
 pub fn check_age(event: &Event, now: u64) -> Result<(), ResponseError> {
-    if event.kind == EventKind::ApprovalRequired
-        && now.saturating_sub(event.created_at) > APPROVAL_TTL_SECS
-    {
+    if event.kind != EventKind::ApprovalRequired {
+        return Ok(());
+    }
+    let too_old = now.saturating_sub(event.created_at) > APPROVAL_TTL_SECS;
+    let from_future = event.created_at > now.saturating_add(APPROVAL_FUTURE_SKEW_SECS);
+    if too_old || from_future {
         return Err(ResponseError::Expired);
     }
     Ok(())
@@ -261,6 +270,18 @@ mod tests {
         assert_eq!(ResponseError::Expired.code(), "expired");
         let q = event(Runtime::Herdr, EventKind::Question);
         assert_eq!(check_age(&q, 1000 + 5000), Ok(()));
+    }
+
+    #[test]
+    fn approvals_dated_in_the_future_beyond_the_skew_are_refused() {
+        // The host clock stepped back after the approval was recorded.
+        let e = event(Runtime::Herdr, EventKind::ApprovalRequired);
+        assert_eq!(check_age(&e, 1000 - 60), Ok(()));
+        assert_eq!(check_age(&e, 1000 - 61), Err(ResponseError::Expired));
+        assert_eq!(check_age(&e, 0), Err(ResponseError::Expired));
+        // Questions never expire, whatever their timestamp.
+        let q = event(Runtime::Herdr, EventKind::Question);
+        assert_eq!(check_age(&q, 0), Ok(()));
     }
 
     #[test]
