@@ -8,6 +8,13 @@ Website: <https://falconer-web.vercel.app/>.
 It opens **no permanent network port**. The only listener is the one-shot pairing listener of
 `falconer-hook pair`, bound to the Tailscale address for at most 5 minutes.
 
+**How it fits together.** The hook runs on the computer where your agents run. Agent hooks (or
+Herdr state polling) feed it events; it stores them in a local inbox and pushes an encrypted
+notification to every paired phone. The [Falconer app](https://github.com/lesquel/falconer-app)
+then connects back over SSH inside your Tailscale network and calls `falconer-hook` commands
+(`inbox list`, `respond`, `herdr snapshot`, …) to read the inbox and answer. See
+[Security model](#security-model) for what that access means.
+
 > Status: v0.2.0. Linux (x86_64, aarch64) and macOS (Intel, Apple Silicon).
 
 Supported agents: Claude Code, Codex CLI, Gemini CLI, Cursor, GitHub Copilot CLI, Kiro CLI,
@@ -32,15 +39,39 @@ is required: install [minisign](https://jedisct1.github.io/minisign/) (`apt`/`dn
 installer stops before downloading and says how to get one (`--insecure-no-signature` checks the
 checksums only, not recommended). The signature's trusted comment must be exactly
 `falconer-hook <tag>` for the release being installed (`latest` is resolved to its tag first),
-so an older or different release cannot be served in its place. **While the repository is private**, anonymous downloads fail: install the
-[GitHub CLI](https://cli.github.com), run `gh auth login`, and the installer uses
+so an older or different release cannot be served in its place. Downloads use curl or wget;
+when the [GitHub CLI](https://cli.github.com) is installed and logged in, the installer uses
 `gh release download` instead (set `FALCONER_NO_GH=1` to never use it). From a clone you can
 also run `sh install.sh --from-source` or `--binary <path>`.
+
+### Verify before running
+
+The one-liner above runs `install.sh` from `main` without a signature on the script itself. If
+you prefer to read what you run, download the script pinned to a release tag, inspect it, then
+run it:
+
+```sh
+curl -fsSLO https://raw.githubusercontent.com/lesquel/falconer-hook/v0.2.0/install.sh
+less install.sh                  # read it
+sh install.sh --version v0.2.0   # add --dry-run first to print every step without changing anything
+```
+
+What the script verifies before installing anything:
+
+- The minisign public key is pinned in the script (`PUBKEY`, key id `59E37F1EF15B67E2`, the same
+  key as [`minisign.pub`](./minisign.pub)).
+- `SHA256SUMS.minisig` must be a valid signature of `SHA256SUMS` by that key, and its signed
+  trusted comment must be exactly `falconer-hook <tag>` for the release being installed, so an
+  older or different release cannot be substituted.
+- The downloaded `falconer-hook-<target>.tar.gz` must match its line in `SHA256SUMS`.
+
+The script itself is not signed; pinning it to a tag and reading it is what protects you from a
+changed `main`.
 
 | Option | Effect |
 |---|---|
 | `--dry-run` | Print every step, change nothing |
-| `--from-source` | `cargo install --git https://github.com/lesquel/falconer-hook --locked`, with `--tag <tag>` when `--version` is given (else the default branch); the repository is private for now, so this uses your git credentials |
+| `--from-source` | `cargo install --git https://github.com/lesquel/falconer-hook --locked`, with `--tag <tag>` when `--version` is given (else the default branch) |
 | `--binary <path>` | Install a binary you already built |
 | `--version <tag>` | Release to download, `vX.Y.Z` or a pre-release `vX.Y.Z-rc.N` (default: the latest stable release), with `gh` or curl/wget |
 | `--yes` | Accept the offers to install Herdr / Tailscale with their official installers |
@@ -103,7 +134,8 @@ falconer-hook created, and nothing else:
 
 1. the user service (stopped and disabled first),
 2. every agent integration it installed (only its own hooks; your other hooks stay),
-3. the `authorized_keys` lines tagged `openmosh:` (paired phones; your own keys stay),
+3. the `authorized_keys` lines tagged `openmosh:` (paired phones; your own keys stay; `openmosh`
+   is a legacy identifier, see [Upgrading from OpenMosh](#upgrading-from-openmosh)),
 4. `$XDG_CONFIG_HOME/falconer` and `$XDG_STATE_HOME/falconer` (config, devices, events, host key),
 5. with `--all`, the `falconer-hook` binary that is running.
 
@@ -132,7 +164,8 @@ falconer-hook was called `openmosh-hook`. On a machine that still has the old in
 - `doctor` warns (`legacy`) about anything left: the old service, hooks that still call
   `openmosh-hook`, or an `openmosh` directory kept because a `falconer` one already exists.
 
-The wire labels (`openmosh/pair/v1`, `openmosh/push/v1`, `openmosh://pair`, `openmosh:///inbox`)
+Falconer was called OpenMosh. Apart from the migration above, `openmosh` remains only as a
+**legacy identifier** that must not change: the wire labels (`openmosh/pair/v1`, `openmosh/push/v1`, `openmosh://pair`, `openmosh:///inbox`)
 and the `openmosh:` tag on paired-phone `authorized_keys` lines keep their names, so phones
 paired before the rename keep working.
 
@@ -260,7 +293,7 @@ symlink is refused), pinned to the phone's own tailnet addresses (the connecting
 node's addresses from `tailscale whois`, IPv4 and IPv6):
 
 ```text
-restrict,pty,from="100.101.1.2,fd7a:115c:a1e0::1:2" ssh-ed25519 AAAA… openmosh:<device_id>
+restrict,pty,from="100.88.77.66,fd7a:115c:a1e0::1:2" ssh-ed25519 AAAA… openmosh:<device_id>
 ```
 
 `restrict` turns off agent, X11 and port forwarding, `~/.ssh/rc` and any restriction a future
@@ -297,7 +330,11 @@ pane running another agent, not blocked any more (an approval) or working (a tex
 newer blocked state, gets `stale`. tmux has no agent state, so a tmux approval is accepted only
 while the pane still runs the recorded process; events recorded before this check existed are
 answered only when that can still be verified (Herdr: still blocked; tmux: never). An approval
-older than 15 minutes gets `expired`. Refused events stay pending. Answer text loses control,
+older than 15 minutes gets `expired`, and so does one dated more than 60 s in the future (the
+host clock stepped back, so its real age is unknown). Refused events stay pending. If a text
+answer was typed but the Enter that submits it failed, the event stays resolved and `respond`
+fails with `partial_delivery`: press Enter in the pane yourself; sending again would type the
+text twice. Answer text loses control,
 bidi, zero-width and format characters.
 
 Approval summaries name what is being approved: the command or file path from the agent's tool
@@ -468,6 +505,27 @@ Regenerate (only when the wire format version changes):
 FALCONER_WRITE_VECTORS=1 cargo test regenerate_vectors -- --ignored
 ```
 
+## Security model
+
+In short (the full threat model and how to report a vulnerability are in
+[`SECURITY.md`](./SECURITY.md)):
+
+- **The paired phone has a real shell.** Its `authorized_keys` line is
+  `restrict,pty,from="<phone's tailnet addresses>"` with no `command=`: Falconer is a terminal, so
+  this is intended. A stolen phone key equals account access from that phone's tailnet address.
+  Revoke a lost phone with `falconer-hook devices revoke <id>`.
+- **Approvals expire** after 15 minutes and are re-checked against the live pane before any key
+  is sent.
+- **Pushes are end-to-end encrypted** (XChaCha20-Poly1305 with X25519 + HKDF); ntfy only sees
+  ciphertext. Web Push payloads are generic.
+- **State stays private:** files are `0600`, directories `0700`, and the hook refuses to run when
+  they are readable by others.
+- **Releases are signed** with minisign; the installer refuses unsigned or mismatched releases.
+
+Please report vulnerabilities privately through
+[GitHub private vulnerability reporting](https://github.com/lesquel/falconer-hook/security/advisories/new),
+never in a public issue.
+
 ## Architecture
 
 Clean Architecture by feature. See [`ARCHITECTURE.md`](./ARCHITECTURE.md).
@@ -479,9 +537,11 @@ cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test
 cargo test --test cli -- --ignored   # QR pairing end to end over this machine's Tailscale IPv4
 ```
 
-CLI tests (`tests/cli.rs`, `tests/agents.rs`, `tests/lifecycle.rs`, sharing `tests/common/`) run
-the binary against a temporary HOME with fake `herdr`, `tmux`, `tailscale` and `systemctl`
-scripts; no test sends keys to a real pane or touches real user files. `tests/install_sh.rs`
+CLI tests (`tests/cli.rs`, `tests/agents.rs`, `tests/lifecycle.rs`, `tests/herdr.rs`,
+`tests/migration.rs`, `tests/prereqs.rs`, `tests/usage.rs`, sharing `tests/common/`) run the
+binary against a temporary HOME with fake `herdr`, `tmux`, `tailscale`, `systemctl`, package
+manager and `sudo` scripts (and a fake Herdr socket); no test sends keys to a real pane,
+installs anything or touches real user files. `tests/install_sh.rs`
 runs `install.sh --dry-run` with fake `uname`/`gh`/`minisign`/`rsign`, and real installs into a
 temporary HOME against a fake `curl` that serves a fixture release (signature tag check,
 checksum mismatch).
@@ -504,6 +564,10 @@ so the installer's default skips them; see [`CONTRIBUTING.md`](./CONTRIBUTING.md
 Every action in every workflow is pinned to a full commit SHA (CI fails otherwise; Dependabot
 proposes updates), the release uses only `actions/*` actions plus `rustup` and `gh`, and it
 caches nothing.
+
+## Contributing
+
+See [`CONTRIBUTING.md`](./CONTRIBUTING.md) and the [Code of Conduct](./CODE_OF_CONDUCT.md).
 
 ## License
 
