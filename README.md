@@ -15,14 +15,16 @@ then connects back over SSH inside your Tailscale network and calls `falconer-ho
 (`inbox list`, `respond`, `herdr snapshot`, …) to read the inbox and answer. See
 [Security model](#security-model) for what that access means.
 
-> Status: v0.2.0. Linux (x86_64, aarch64) and macOS (Intel, Apple Silicon).
+> Status: v0.3.0. Linux (x86_64, aarch64) and macOS (Intel, Apple Silicon).
 
 Supported agents: Claude Code, Codex CLI, Gemini CLI, Cursor, GitHub Copilot CLI, Kiro CLI,
 OpenCode and Aider through their own hooks ([Agents](#agents)); Amp through Herdr state polling
-only. Highlights of v0.2.0: the [TUI](#tui), a `y/N` confirmation on the host for every
-[pairing](#pairing), pairing without notifications, [`harden-ssh`](#commands), stale-approval
-checks in `respond`, revoke that ends the phone's live sessions, [`usage`](#usage),
-[mirroring](#mirroring) with `attach herdr`, and signed releases required by the installer.
+only. Highlights of v0.3.0: the [TUI](#tui) is now the hub for everything (eight screens,
+a first-run wizard, `?` help, a `/` action palette, Spanish when your locale is), `setup`
+installs missing prerequisites (Herdr, Tailscale, the OpenSSH server) after showing the
+exact command, `doctor --fix` repairs what doctor finds, and `update` upgrades through the
+signed release path. v0.2.0 added the `y/N` pairing confirmation, `harden-ssh`, `usage`,
+[mirroring](#mirroring) and signed releases required by the installer.
 
 ## Install
 
@@ -51,9 +53,9 @@ you prefer to read what you run, download the script pinned to a release tag, in
 run it:
 
 ```sh
-curl -fsSLO https://raw.githubusercontent.com/lesquel/falconer-hook/v0.2.0/install.sh
+curl -fsSLO https://raw.githubusercontent.com/lesquel/falconer-hook/v0.3.0/install.sh
 less install.sh                  # read it
-sh install.sh --version v0.2.0   # add --dry-run first to print every step without changing anything
+sh install.sh --version v0.3.0   # add --dry-run first to print every step without changing anything
 ```
 
 What the script verifies before installing anything:
@@ -165,7 +167,7 @@ it refuses with `confirmation_required`. `--dry-run` prints the plan and changes
 install:
 
 ```sh
-falconer-hook update --check        # Up to date (v0.2.0)  |  Update available: v0.2.0 → v0.2.1
+falconer-hook update --check        # Up to date (v0.3.0)  |  Update available: v0.3.0 → v0.3.1
 falconer-hook update                # shows what it will run, asks [y/N]
 falconer-hook update --yes          # no question (needed without a terminal)
 falconer-hook update --version v0.2.1 --yes   # a specific tag, even an older one or a prerelease
