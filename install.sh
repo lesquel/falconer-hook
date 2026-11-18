@@ -3,9 +3,8 @@
 #
 #   curl -fsSL https://raw.githubusercontent.com/lesquel/falconer-hook/main/install.sh | sh
 #
-# While the repository is private, anonymous downloads fail: install and
-# log in to the GitHub CLI (`gh auth login`) and the installer downloads the
-# release with `gh release download` instead (or run it from a clone).
+# Downloads use plain HTTPS. When the GitHub CLI is installed and logged in,
+# the installer uses `gh release download` instead.
 #
 # Installs falconer-hook to ~/.local/bin, checks sshd, Herdr/tmux and
 # Tailscale, writes a default config, registers the user service and runs
@@ -35,14 +34,12 @@ usage() {
 Usage: install.sh [options]
 
   --dry-run          Print what would be done; change nothing.
-  --from-source      Build with `cargo install --git` (needs Rust and, while the
-                     repository is private, git access to it).
+  --from-source      Build with `cargo install --git` (needs Rust).
   --binary <path>    Install an already-built falconer-hook binary.
   --version <tag>    Release tag to download, or to build with --from-source
                      (default: the latest release; --from-source: main).
                      Downloads use `gh release download` when the GitHub CLI
-                     is installed and logged in (needed while the repository
-                     is private), else curl/wget. "latest" is resolved to its
+                     is installed and logged in, else curl/wget. "latest" is resolved to its
                      tag first. Every download is checked against the
                      release's SHA256SUMS, SHA256SUMS against its minisign
                      signature (needs minisign or rsign), and the signature's
@@ -255,7 +252,7 @@ resolve_tag() {
 	fi
 	case "$t" in
 	v[0-9]*) ;;
-	*) die "could not resolve the latest release tag. While the repository is private, run 'gh auth login' first, or pass --version <tag>" ;;
+	*) die "could not resolve the latest release tag, or pass --version <tag>" ;;
 	esac
 	case "$t" in
 	*[!0-9A-Za-z.+-]*) die "unexpected latest release tag: $t" ;;
@@ -263,7 +260,7 @@ resolve_tag() {
 	echo "$t"
 }
 
-# The GitHub CLI is used when installed and logged in (private repository).
+# The GitHub CLI is used when installed and logged in.
 use_gh() {
 	[ "${FALCONER_NO_GH:-0}" != 1 ] && have gh && gh auth status >/dev/null 2>&1
 }
@@ -292,7 +289,7 @@ install_release() {
 	else
 		base="https://github.com/$REPO/releases/download/$tag"
 		if ! download "$base/$asset" "$tmp/$asset" || ! download "$base/SHA256SUMS" "$tmp/SHA256SUMS"; then
-			die "download failed. While the repository is private, run 'gh auth login' first (the installer then uses 'gh release download'), or use --from-source or --binary <path>"
+			die "download failed; check your connection, or use --from-source or --binary <path>"
 		fi
 		if [ "$REQUIRE_SIG" -eq 1 ]; then
 			download "$base/SHA256SUMS.minisig" "$tmp/SHA256SUMS.minisig" ||
@@ -318,7 +315,7 @@ install_release() {
 
 install_source() {
 	have cargo || die "cargo not found; install Rust from https://rustup.rs first"
-	say "Building falconer-hook from source (the repository is private: your git credentials are used)"
+	say "Building falconer-hook from source"
 	# cargo installs into <root>/bin, i.e. ~/.local/bin by default.
 	root=$(dirname "$BIN_DIR")
 	CARGO_NET_GIT_FETCH_WITH_CLI=true
