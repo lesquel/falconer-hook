@@ -19,6 +19,7 @@ src/
 │   ├── attach.rs            #   `attach herdr`: Herdr client + focus mirror
 │   ├── navigator.rs         #   `herdr snapshot|read|action`: the phone's Herdr navigator
 │   ├── usage.rs             #   `usage`: token usage per agent from local logs
+│   ├── update.rs            #   `update`: latest release check and reinstall via the tag-pinned install.sh, after consent
 │   └── tui/                 #   terminal UI: presentation only, every action is a `cli::Command` run via `run`
 │       ├── state.rs         #     pure state machine (screens, selection, confirmations) over an `Exec` port
 │       ├── state_tests.rs   #     unit tests of the state machine
@@ -48,6 +49,7 @@ tests/
 ├── migration.rs             # upgrading an OpenMosh install to the Falconer names
 ├── prereqs.rs               # `setup` fixing tmux/SSH with fake package managers and sudo
 ├── usage.rs                 # `usage` against fixture agent logs
+├── update.rs                # `update` with a fake curl and a logging install.sh
 ├── install_sh.rs            # install.sh --dry-run and fixture installs (fake uname/gh/minisign/rsign/curl)
 └── vectors/                 # shared wire-format vectors (push_v1.json, pair_v1.json)
 data/
@@ -69,6 +71,7 @@ data/
 | `setup` | Uninstall plan (only what falconer-hook created) and its step-by-step execution; pure decisions for the prerequisites `setup` fixes | `UninstallPorts` (implemented in `app/lifecycle.rs` over `service`, `integration`, `pairing`) | — |
 | `mirror` | Run the Herdr client and mirror focus to every attached client | `FocusSocket`, `Launcher`, `MonoClock` | `HerdrSocket` (Unix socket, NDJSON), `TtyLauncher`, `SystemMonoClock` |
 | `navigator` | Herdr workspaces, tabs, panes and pane text for the phone, with a fixed allowlist of actions and long-poll `rev` | `NavigatorApi` | `SocketNavigator` (Herdr socket) |
+| `update` | Self-update: release tag rules, semver comparison (no prerelease offered to a stable version), install.sh arguments | uses `CommandRunner` | `Downloader` (curl/wget, HTTPS only), `PrivateTemp` (0700 dir, 0600 file), `run_installer` (`sh install.sh`) |
 | `usage` | Token usage per agent, project and model from the agents' local logs (read-only) | `UsageLogs` | `FsUsageLogs` |
 
 Cross-feature calls go through another feature's `domain` ports (for example `push` reads
