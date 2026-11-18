@@ -200,7 +200,7 @@ With `--json` every command prints exactly one line:
 
 Exit code is `0` on success and `1` on error. Messages never contain secrets. Error codes:
 `invalid_input`, `invalid_request`, `not_found`, `already_resolved`, `text_too_long`, `no_pane`, `stale`, `expired`, `no_keymap`,
-`runtime_unavailable`, `runtime_error`, `invalid_endpoint`, `permissions_too_open`,
+`runtime_unavailable`, `runtime_error`, `partial_delivery`, `invalid_endpoint`, `permissions_too_open`,
 `config_error`, `io_error`, `store_error`, `registry_corrupt`, `storage_error`,
 `tailscale_missing`, `tailscale_not_running`, `tailscale_tagged`, `tailscale_error`, `ssh_host_key_missing`,
 `listen_failed`, `pair_closed`, `pair_cancelled`, `confirmation_required`, `settings_invalid`, `service_error`, `internal`.

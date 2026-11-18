@@ -88,27 +88,41 @@ impl<S: EventStore, K: KeymapSource, C: Clock> RespondToEvent<'_, S, K, C> {
             Err(StoreError::NotFound) => return Err(ResponseError::AlreadyResolved),
             Err(e) => return Err(store_err(e)),
         };
+        let to_error = |e: AgentError| match e {
+            AgentError::Unavailable(_) => ResponseError::RuntimeUnavailable,
+            _ => ResponseError::Delivery,
+        };
         let delivered = match action {
-            Action::Allow => runtime.send_keys(&pane, &keymap.allow),
-            Action::Deny => runtime.send_keys(&pane, &keymap.deny),
+            Action::Allow => runtime.send_keys(&pane, &keymap.allow).map_err(to_error),
+            Action::Deny => runtime.send_keys(&pane, &keymap.deny).map_err(to_error),
             Action::Text => {
                 let t = text.as_deref().unwrap_or_default();
-                runtime.send_text(&pane, t).and_then(|_| {
+                runtime.send_text(&pane, t).map_err(to_error).and_then(|_| {
                     if keymap.submit.is_empty() {
                         Ok(())
                     } else {
-                        runtime.send_keys(&pane, &keymap.submit)
+                        // The text is already in the pane from here on.
+                        runtime
+                            .send_keys(&pane, &keymap.submit)
+                            .map_err(|_| ResponseError::PartialDelivery)
                     }
                 })
             }
         };
-        if let Err(e) = delivered {
-            // Nothing reached the agent: give the event back so it can be retried.
-            let _ = self.store.reopen(event_id);
-            return Err(match e {
-                AgentError::Unavailable(_) => ResponseError::RuntimeUnavailable,
-                _ => ResponseError::Delivery,
-            });
+        match delivered {
+            Ok(()) => {}
+            Err(ResponseError::PartialDelivery) => {
+                // Something reached the agent: keep the event resolved so a
+                // retry cannot type the text a second time, and tell the other
+                // devices the prompt is no longer answerable.
+                self.notifier.notify_resolved(&resolved);
+                return Err(ResponseError::PartialDelivery);
+            }
+            Err(e) => {
+                // Nothing reached the agent: give the event back so it can be retried.
+                let _ = self.store.reopen(event_id);
+                return Err(e);
+            }
         }
         let pushed = self.notifier.notify_resolved(&resolved);
         Ok(RespondOutcome {
@@ -449,6 +463,121 @@ mod tests {
             racy.0.get("a").unwrap().unwrap().resolution.as_deref(),
             Some("deny")
         );
+    }
+
+    /// Wraps the fake so typing or key presses can fail while probes succeed.
+    struct Flaky<'a> {
+        inner: &'a FakeRuntime,
+        text_fails: bool,
+    }
+    impl AgentRuntime for Flaky<'_> {
+        fn runtime(&self) -> Runtime {
+            self.inner.runtime()
+        }
+        fn list_agents(&self) -> Result<Vec<crate::features::agents::domain::Agent>, AgentError> {
+            self.inner.list_agents()
+        }
+        fn list_sessions(
+            &self,
+        ) -> Result<Vec<crate::features::agents::domain::Session>, AgentError> {
+            self.inner.list_sessions()
+        }
+        fn send_keys(&self, _: &PaneRef, _: &[String]) -> Result<(), AgentError> {
+            Err(AgentError::Unavailable("fake"))
+        }
+        fn send_text(&self, pane: &PaneRef, text: &str) -> Result<(), AgentError> {
+            if self.text_fails {
+                return Err(AgentError::Unavailable("fake"));
+            }
+            self.inner.send_text(pane, text)
+        }
+        fn probe(
+            &self,
+            pane: &PaneRef,
+        ) -> Result<crate::features::agents::domain::PaneProbe, AgentError> {
+            self.inner.probe(pane)
+        }
+    }
+
+    #[test]
+    fn submit_failure_after_text_was_typed_is_not_retryable() {
+        let r = Rig::new();
+        let failing = Flaky {
+            inner: &r.herdr,
+            text_fails: false,
+        };
+        let rts: [&dyn AgentRuntime; 1] = [&failing];
+        let uc = RespondToEvent {
+            store: &r.store,
+            keymaps: &Maps,
+            clock: &r.clock,
+            runtimes: &rts,
+            notifier: &r.notifier,
+        };
+        let err = uc.respond("q", Action::Text, Some("go")).unwrap_err();
+        assert_eq!(err, ResponseError::PartialDelivery);
+        assert_eq!(err.code(), "partial_delivery");
+        // The text is already in the pane: the event must not go back to
+        // pending, or a retry would type it a second time.
+        let e = r.store.get("q").unwrap().unwrap();
+        assert_eq!(e.status, EventStatus::Resolved);
+        assert_eq!(
+            uc.respond("q", Action::Text, Some("go")).unwrap_err(),
+            ResponseError::AlreadyResolved
+        );
+        assert_eq!(
+            r.herdr.typed.borrow().as_slice(),
+            [("w1:p2".to_string(), "go".to_string())],
+            "typed exactly once"
+        );
+        // Other devices drop the prompt: it can no longer be answered.
+        assert_eq!(r.notifier.resolved.borrow().as_slice(), ["q"]);
+    }
+
+    #[test]
+    fn text_reply_success_is_unchanged() {
+        let r = Rig::new();
+        let out = r.run("q", Action::Text, Some("go on")).unwrap();
+        assert_eq!(
+            (out.event_id.as_str(), out.action, out.pushed),
+            ("q", Action::Text, 1)
+        );
+        assert_eq!(
+            r.herdr.typed.borrow().as_slice(),
+            [("w1:p2".to_string(), "go on".to_string())]
+        );
+        assert_eq!(r.herdr.sent.borrow().as_slice(), [sent("w1:p2", "enter")]);
+        let e = r.store.get("q").unwrap().unwrap();
+        assert_eq!(e.status, EventStatus::Resolved);
+        assert_eq!(e.resolution.as_deref(), Some("text"));
+        assert_eq!(r.notifier.resolved.borrow().as_slice(), ["q"]);
+    }
+
+    #[test]
+    fn text_that_never_reached_the_pane_leaves_event_pending() {
+        let r = Rig::new();
+        let failing = Flaky {
+            inner: &r.herdr,
+            text_fails: true,
+        };
+        let rts: [&dyn AgentRuntime; 1] = [&failing];
+        let uc = RespondToEvent {
+            store: &r.store,
+            keymaps: &Maps,
+            clock: &r.clock,
+            runtimes: &rts,
+            notifier: &r.notifier,
+        };
+        assert_eq!(
+            uc.respond("q", Action::Text, Some("go")).unwrap_err(),
+            ResponseError::RuntimeUnavailable
+        );
+        assert_eq!(
+            r.store.get("q").unwrap().unwrap().status,
+            EventStatus::Pending
+        );
+        assert!(r.herdr.sent.borrow().is_empty());
+        assert!(r.notifier.resolved.borrow().is_empty());
     }
 
     #[test]

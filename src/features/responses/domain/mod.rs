@@ -101,6 +101,8 @@ pub enum ResponseError {
     RuntimeUnavailable,
     #[error("delivering the keystrokes failed")]
     Delivery,
+    #[error("the text was typed into the pane but the submit key failed; press Enter in the pane, the reply cannot be sent again")]
+    PartialDelivery,
     #[error("event store failure")]
     Store,
 }
@@ -119,6 +121,7 @@ impl ErrorCode for ResponseError {
             ResponseError::NoKeymap => "no_keymap",
             ResponseError::RuntimeUnavailable => "runtime_unavailable",
             ResponseError::Delivery => "runtime_error",
+            ResponseError::PartialDelivery => "partial_delivery",
             ResponseError::Store => "store_error",
         }
     }
