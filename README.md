@@ -178,8 +178,9 @@ version. To update it downloads that release's own installer,
 `https://raw.githubusercontent.com/lesquel/falconer-hook/<tag>/install.sh`, with
 `curl --proto '=https' --tlsv1.2` into a private temp directory (`0700`, file `0600`), shows the
 URL and the command and, after consent, runs
-`FALCONER_BIN_DIR=<directory of the running binary> sh install.sh --version <tag> --yes`. The
-script verifies the release's signed `SHA256SUMS` with minisign, as in a first install. Your
+`FALCONER_SKIP_PREREQS=1 FALCONER_BIN_DIR=<directory of the running binary> sh install.sh --version <tag>`.
+`FALCONER_SKIP_PREREQS=1` makes install.sh skip its sshd/Herdr/Tailscale checks and offers, so an
+update never installs anything but falconer-hook. The script verifies the release's signed `SHA256SUMS` with minisign, as in a first install. Your
 config is kept; when a user service is installed it is kept and restarted
 (`systemctl --user restart falconer-hook.service`, macOS `launchctl unload`/`load -w`),
 otherwise `--no-service` is passed so none is created. The temp copy is deleted afterwards.

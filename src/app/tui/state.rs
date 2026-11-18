@@ -1526,6 +1526,8 @@ impl App {
                         },
                         &[],
                     ),
+                    Pending::SetWebpush { .. } => self.tr("Web Push registered").to_string(),
+                    Pending::ClearWebpush { .. } => self.tr("Web Push removed").to_string(),
                     _ => match first_line(&reply.human) {
                         "" => self.tr("Done.").to_string(),
                         l => l.to_string(),

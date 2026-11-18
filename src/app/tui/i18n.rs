@@ -269,6 +269,8 @@ static ES: &[(&str, &str)] = &[
     ("Reply text", "Texto de respuesta"),
     ("Reply to \"{}\":", "Responder a \"{}\":"),
     ("Web Push subscription", "Suscripción Web Push"),
+    ("Web Push registered", "Web Push registrado"),
+    ("Web Push removed", "Web Push eliminado"),
     ("Paste the subscription JSON for {} (as for devices set-webpush):",
      "Pega el JSON de la suscripción para {} (como en devices set-webpush):"),
     ("Push endpoint", "Endpoint de notificaciones"),

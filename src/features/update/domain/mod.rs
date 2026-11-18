@@ -167,8 +167,8 @@ impl UpdateCheck {
 }
 
 /// install.sh arguments for a reinstall of `tag`: the release path (which
-/// verifies the signed SHA256SUMS), the offers to install missing Herdr or
-/// Tailscale accepted, and the service left alone when none is installed.
+/// verifies the signed SHA256SUMS), no prerequisite offers (the caller sets
+/// FALCONER_SKIP_PREREQS=1), and the service left alone when none is installed.
 pub fn installer_args(tag: &str, has_service: bool) -> Vec<String> {
     // No `--yes`: install.sh's only prompts are prerequisite offers, which an update skips
     // (FALCONER_SKIP_PREREQS), so nothing is ever installed without consent.

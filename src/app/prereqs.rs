@@ -290,10 +290,15 @@ pub fn ensure_runtime(ctx: &Ctx, cfg: &Config, mode: &Mode, human: &mut String) 
         }
         _ => {}
     }
-    if let (Some(h), Value::Object(m)) = (herdr_offer, &mut r) {
-        m.insert("herdr".into(), h);
-    } else if let Value::Object(m) = &mut r {
-        m.insert("alternative".into(), json!(HERDR_URL));
+    if let Value::Object(m) = &mut r {
+        if let Some(h) = herdr_offer {
+            m.insert("herdr".into(), h);
+        }
+        // As before the official installer existed: `alternative` is there unless
+        // the package manager itself offers Herdr.
+        if !pm.has_herdr() {
+            m.insert("alternative".into(), json!(HERDR_URL));
+        }
     }
     r
 }

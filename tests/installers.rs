@@ -111,6 +111,8 @@ fn herdr_installer_is_only_printed_without_a_terminal() {
     assert_eq!(r["action"], "printed");
     assert_eq!(r["herdr"]["action"], "printed");
     assert_eq!(r["herdr"]["url"], HERDR_URL);
+    // The pre-existing field stays next to the new offer.
+    assert_eq!(r["alternative"], "https://herdr.dev");
     assert!(calls_to(&e, "curl").is_empty());
     assert!(calls_to(&e, "sh").is_empty());
     assert!(tmp_is_empty(&e));

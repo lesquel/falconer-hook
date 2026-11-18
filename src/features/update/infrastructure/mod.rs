@@ -43,7 +43,15 @@ impl Downloader {
                 &dest,
                 url,
             ],
-            Self::Wget => vec!["wget", "-q", "--https-only", "-O", &dest, url],
+            Self::Wget => vec![
+                "wget",
+                "-q",
+                "--https-only",
+                "--secure-protocol=TLSv1_2",
+                "-O",
+                &dest,
+                url,
+            ],
         };
         a.into_iter().map(String::from).collect()
     }
@@ -89,6 +97,7 @@ pub fn resolve_latest(runner: &dyn CommandRunner, d: Downloader) -> Result<Strin
                     &args(&[
                         "-q",
                         "--https-only",
+                        "--secure-protocol=TLSv1_2",
                         "--max-redirect=0",
                         "-S",
                         "-O",
@@ -256,7 +265,7 @@ mod tests {
             Downloader::Wget
                 .download_argv("https://x/i.sh", p)
                 .join(" "),
-            "wget -q --https-only -O /t/install.sh https://x/i.sh"
+            "wget -q --https-only --secure-protocol=TLSv1_2 -O /t/install.sh https://x/i.sh"
         );
     }
 }
