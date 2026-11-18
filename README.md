@@ -114,20 +114,31 @@ What `setup` fixes, each time showing the exact command first:
 
 - **No agent runtime** (neither Herdr nor tmux): with Homebrew it offers
   `Install Herdr with brew install herdr? [y/N]` first (Herdr unlocks View as agents in the
-  app), then tmux if you decline. Elsewhere it offers tmux through `apt-get`/`dnf`/`pacman`/
-  `zypper`/`apk` with `sudo`, and only mentions [herdr.dev](https://herdr.dev): none of those
-  managers ships Herdr (Arch has it only in the AUR), and `setup` never runs a `curl | sh`.
-  Without any package manager it prints how to get Homebrew. With tmux but no Herdr,
-  an interactive `setup` offers Herdr once; `doctor` shows `brew install herdr`.
+  app), then tmux if you decline. Without Homebrew it offers Herdr's official installer
+  (latest release) when `curl` or `wget` is present, then tmux through `apt-get`/`dnf`/
+  `pacman`/`zypper`/`apk` with `sudo`. Without any package manager it prints how to get
+  Homebrew. With tmux but no Herdr, an interactive `setup` offers Herdr once; `doctor` shows
+  `brew install herdr`.
+- **Official installers** (Herdr, Tailscale) are never piped from the network. `setup` shows
+  the URL and the exact command, for example
+  `curl --proto =https --tlsv1.2 -fsSL -o install.sh https://herdr.dev/install.sh && sh install.sh`,
+  and only after you confirm (or pass `--yes`) downloads it over HTTPS to a `0600` file in a
+  fresh `0700` temp directory, runs it with `sh`, and deletes it. Without a terminal it only
+  prints the command.
 - **Nothing listening on the SSH port**: `doctor` now fails with the fix, and `setup` offers to
   run it (macOS `sudo systemsetup -setremotelogin on`, Linux `sudo systemctl enable --now ssh`
-  or `sshd`).
+  or `sshd`). When the OpenSSH server is not installed on Linux it first offers the package
+  (`openssh-server` on apt/dnf, `openssh` on pacman/zypper/apk).
+- **Tailscale missing or down**: missing, it offers `brew install tailscale` with Homebrew, else
+  Tailscale's official installer (https://tailscale.com/install.sh). Installed but stopped or
+  logged out, it offers `sudo tailscale up`, which prints a login URL; that step runs only on a
+  terminal, even with `--yes`.
 - **No phone paired** and every check passed: asks `Pair a phone now? [Y/n]` and runs
   `falconer-hook pair`.
 
 `--yes` runs the install and SSH commands without asking but never starts pairing (a person
 has to scan the QR code). Without a terminal, or with `--json`, nothing is run: the commands
-are printed (JSON: `prerequisites.agent_runtime` with the `runtime` installed, `prerequisites.ssh` and `pairing`).
+are printed (JSON: `prerequisites.agent_runtime` with the `runtime` installed, `prerequisites.ssh`, `prerequisites.tailscale` and `pairing`).
 
 `falconer-hook uninstall [--all] [--dry-run] [--yes] [--json]` removes everything
 falconer-hook created, and nothing else:

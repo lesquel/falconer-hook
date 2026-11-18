@@ -66,7 +66,7 @@ data/
 | `service` | Render and apply the user service plan | `ServiceFiles` (uses `CommandRunner`) | `FsServiceFiles` |
 | `doctor` | Diagnose dependencies, permissions and connectivity | uses other ports read-only | filesystem and service checks |
 | `integration` | Agent catalog (Claude Code, Codex, Gemini, Cursor, Copilot, Kiro, OpenCode, Aider; Amp has no hook, so it is reached via Herdr only) and pure edits of each agent's hook file calling `emit` | `SettingsFile` | `JsonSettingsFile` |
-| `setup` | Uninstall plan (only what falconer-hook created) and its step-by-step execution; pure decisions for the prerequisites `setup` fixes | `UninstallPorts` (implemented in `app/lifecycle.rs` over `service`, `integration`, `pairing`) | — |
+| `setup` | Uninstall plan (only what falconer-hook created) and its step-by-step execution; pure decisions for the prerequisites `setup` fixes (package manager, official installer, argv, consent), and the private temp file an official installer is downloaded to | `UninstallPorts` (implemented in `app/lifecycle.rs` over `service`, `integration`, `pairing`) | — |
 | `mirror` | Run the Herdr client and mirror focus to every attached client | `FocusSocket`, `Launcher`, `MonoClock` | `HerdrSocket` (Unix socket, NDJSON), `TtyLauncher`, `SystemMonoClock` |
 | `navigator` | Herdr workspaces, tabs, panes and pane text for the phone, with a fixed allowlist of actions and long-poll `rev` | `NavigatorApi` | `SocketNavigator` (Herdr socket) |
 | `usage` | Token usage per agent, project and model from the agents' local logs (read-only) | `UsageLogs` | `FsUsageLogs` |

@@ -135,6 +135,8 @@ fn from_source_and_binary_modes() {
 fn yes_never_runs_installers_in_dry_run() {
     let (_t, out) = dry_run(&["--yes", "--no-service"]);
     assert!(!out.contains("+ curl -fsSL https://herdr.dev/install.sh | sh"));
+    assert!(!out.contains("+ sh "), "{out}");
+    assert!(!out.contains("| sh"), "an installer is never piped: {out}");
 }
 
 #[test]
@@ -408,7 +410,7 @@ impl Release {
                     "#!/bin/sh\nout=''; w=''; for a in \"$@\"; do case \"$prev\" in -o) out=$a ;; -w) w=$a ;; esac; prev=$a; url=$a; done\n\
                      echo \"$url\" >> \"{log}\"\n\
                      if [ -n \"$w\" ]; then printf 'https://github.com/lesquel/falconer-hook/releases/tag/{served_tag}'; exit 0; fi\n\
-                     case \"$url\" in */download/{served_tag}/*) cp \"{fix}/${{url##*/}}\" \"$out\" ;; *) exit 22 ;; esac\n",
+                     case \"$url\" in */download/{served_tag}/*) cp \"{fix}/${{url##*/}}\" \"$out\" ;; https://herdr.dev/install.sh) printf 'echo herdr-installer-ran\\n' > \"$out\" ;; *) exit 22 ;; esac\n",
                     log = t.path().join("curl.log").display(),
                     fix = fix.display(),
                 ),
@@ -427,6 +429,11 @@ impl Release {
     }
 
     fn install(&self, args: &[&str]) -> Output {
+        let path = format!("{}:/usr/bin:/bin", self.t.path().join("bin").display());
+        self.install_with_path(args, &path)
+    }
+
+    fn install_with_path(&self, args: &[&str], path: &str) -> Output {
         Command::new("sh")
             .arg(concat!(env!("CARGO_MANIFEST_DIR"), "/install.sh"))
             .args(args)
@@ -434,12 +441,13 @@ impl Release {
             .env_clear()
             .env("HOME", self.t.path().join("home"))
             .env("FALCONER_NO_GH", "1")
-            .env(
-                "PATH",
-                format!("{}:/usr/bin:/bin", self.t.path().join("bin").display()),
-            )
+            .env("PATH", path)
             .output()
             .unwrap()
+    }
+
+    fn remove_fake(&self, name: &str) {
+        fs::remove_file(self.t.path().join("bin").join(name)).unwrap();
     }
 
     fn installed(&self) -> bool {
@@ -561,4 +569,36 @@ fn no_compatibility_symlink_without_an_old_binary() {
     assert!(out.status.success());
     assert!(r.installed());
     assert!(fs::symlink_metadata(r.t.path().join("home/.local/bin/openmosh-hook")).is_err());
+}
+
+#[test]
+fn yes_downloads_the_herdr_installer_to_a_private_file_before_running_it() {
+    let r = Release::new("v9.9.9", "falconer-hook v9.9.9");
+    r.remove_fake("tmux");
+    // The system tools, minus any real runtime, so the installer is offered.
+    let sys = r.t.path().join("sys");
+    fs::create_dir_all(&sys).unwrap();
+    for dir in ["/usr/bin", "/bin"] {
+        for entry in fs::read_dir(dir).unwrap().flatten() {
+            let name = entry.file_name();
+            if ["herdr", "tmux"].iter().any(|t| name == *t) {
+                continue;
+            }
+            let _ = std::os::unix::fs::symlink(entry.path(), sys.join(&name));
+        }
+    }
+    let path = format!("{}:{}", r.t.path().join("bin").display(), sys.display());
+    let out = r.install_with_path(&["--yes"], &path);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success(), "{stdout}");
+    let fetch = stdout
+        .lines()
+        .find(|l| l.starts_with("+ curl --proto =https --tlsv1.2 -fsSL -o "))
+        .unwrap_or_else(|| panic!("{stdout}"));
+    assert!(fetch.ends_with(" https://herdr.dev/install.sh"), "{fetch}");
+    let file = fetch.split(' ').nth(7).unwrap();
+    assert!(stdout.contains(&format!("+ sh {file}")), "{stdout}");
+    assert!(stdout.contains("herdr-installer-ran"), "{stdout}");
+    assert!(!Path::new(file).exists(), "the installer is deleted");
+    assert!(!stdout.contains("| sh"), "{stdout}");
 }

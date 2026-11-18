@@ -1,6 +1,7 @@
-//! Prerequisites `setup` can fix on its own: an agent runtime (tmux) and a
-//! reachable SSH server. Pure decisions only: which package manager, which
-//! argv, whether to ask. Nothing here runs a program.
+//! Prerequisites `setup` can fix on its own: an agent runtime (Herdr or
+//! tmux), a reachable SSH server and Tailscale. Pure decisions only: which
+//! package manager, which installer, which argv, whether to ask. Nothing here
+//! runs a program.
 
 use serde::Serialize;
 
@@ -8,6 +9,14 @@ pub const TMUX: &str = "tmux";
 pub const HERDR: &str = "herdr";
 pub const HERDR_URL: &str = "https://herdr.dev";
 pub const HOMEBREW_URL: &str = "https://brew.sh";
+pub const TAILSCALE: &str = "tailscale";
+pub const TAILSCALE_DOWNLOAD_URL: &str = "https://tailscale.com/download";
+/// Official installers, which always install the latest release. Used only
+/// when no package manager here ships the tool (Homebrew stays preferred).
+pub const HERDR_INSTALLER_URL: &str = "https://herdr.dev/install.sh";
+pub const TAILSCALE_INSTALLER_URL: &str = "https://tailscale.com/install.sh";
+/// What the downloaded installer is called in the commands shown to the user.
+pub const INSTALLER_FILE: &str = "install.sh";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -46,9 +55,27 @@ impl PackageManager {
     /// Whether this manager ships Herdr. Checked against Repology: only
     /// Homebrew has it among the supported managers (Arch has it only in the
     /// AUR, openSUSE only in Tumbleweed, and Debian, Fedora and Alpine not at
-    /// all), and its installer is a `curl | sh` we never run.
+    /// all). Elsewhere `setup` offers Herdr's official installer, downloaded
+    /// to a private file first and never piped from the network.
     pub fn has_herdr(self) -> bool {
         self == Self::Brew
+    }
+
+    /// Whether this manager ships Tailscale in its default repositories.
+    /// Only Homebrew is relied on; elsewhere the official installer adds
+    /// Tailscale's own repository and picks the right package.
+    pub fn has_tailscale(self) -> bool {
+        self == Self::Brew
+    }
+
+    /// The OpenSSH server package, `None` for Homebrew (macOS ships SSH and
+    /// Homebrew does not run system services).
+    pub fn ssh_server_package(self) -> Option<&'static str> {
+        match self {
+            Self::Brew => None,
+            Self::Apt | Self::Dnf => Some("openssh-server"),
+            Self::Pacman | Self::Zypper | Self::Apk => Some("openssh"),
+        }
     }
 
     pub fn needs_root(self) -> bool {
@@ -75,6 +102,111 @@ impl PackageManager {
 /// The first supported package manager for which `has(binary)` is true.
 pub fn detect_package_manager(has: impl Fn(&str) -> bool) -> Option<PackageManager> {
     PackageManager::ALL.into_iter().find(|pm| has(pm.binary()))
+}
+
+/// The first supported system package manager (Homebrew excluded), for
+/// packages Homebrew does not ship, such as the OpenSSH server.
+pub fn detect_system_package_manager(has: impl Fn(&str) -> bool) -> Option<PackageManager> {
+    PackageManager::ALL
+        .into_iter()
+        .filter(|pm| *pm != PackageManager::Brew)
+        .find(|pm| has(pm.binary()))
+}
+
+/// Downloads an official installer to a file, HTTPS and TLS 1.2+ only.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Downloader {
+    Curl,
+    Wget,
+}
+
+impl Downloader {
+    pub fn binary(self) -> &'static str {
+        match self {
+            Self::Curl => "curl",
+            Self::Wget => "wget",
+        }
+    }
+
+    /// Fetches `url` into `dest`, refusing anything but HTTPS (redirects
+    /// included) and TLS older than 1.2.
+    pub fn argv(self, url: &str, dest: &str) -> Vec<String> {
+        let parts: Vec<&str> = match self {
+            Self::Curl => vec![
+                "curl",
+                "--proto",
+                "=https",
+                "--tlsv1.2",
+                "-fsSL",
+                "-o",
+                dest,
+                url,
+            ],
+            Self::Wget => vec![
+                "wget",
+                "--https-only",
+                "--secure-protocol=TLSv1_2",
+                "-q",
+                "-O",
+                dest,
+                url,
+            ],
+        };
+        parts.into_iter().map(String::from).collect()
+    }
+}
+
+/// curl first, then wget.
+pub fn detect_downloader(has: impl Fn(&str) -> bool) -> Option<Downloader> {
+    [Downloader::Curl, Downloader::Wget]
+        .into_iter()
+        .find(|d| has(d.binary()))
+}
+
+/// Runs a downloaded installer. The installers ask for `sudo` themselves
+/// when they need it.
+pub fn run_installer_argv(file: &str) -> Vec<String> {
+    vec!["sh".to_string(), file.to_string()]
+}
+
+/// The whole installer step as the user would type it, with `install.sh`
+/// standing for the private temp file.
+pub fn installer_display(d: Downloader, url: &str) -> String {
+    format!(
+        "{} && {}",
+        display(&d.argv(url, INSTALLER_FILE)),
+        display(&run_installer_argv(INSTALLER_FILE))
+    )
+}
+
+/// Brings Tailscale up (it prints a login URL when the node is logged out).
+/// Linux needs root; on macOS the app's CLI talks to the user's daemon.
+pub fn tailscale_up_argv(program: &str, os: Os, is_root: bool) -> Vec<String> {
+    privileged(
+        vec![program.to_string(), "up".to_string()],
+        os == Os::Linux,
+        is_root,
+    )
+}
+
+/// Where Herdr or Tailscale comes from on this machine.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Source {
+    Package(PackageManager),
+    Installer(Downloader),
+}
+
+/// Homebrew when it ships the tool, else the official installer when a
+/// downloader exists, else nothing.
+pub fn install_source(
+    pm: Option<PackageManager>,
+    ships: impl Fn(PackageManager) -> bool,
+    downloader: Option<Downloader>,
+) -> Option<Source> {
+    pm.filter(|pm| ships(*pm))
+        .map(Source::Package)
+        .or(downloader.map(Source::Installer))
 }
 
 /// Prefixes `sudo` when the command needs root and we are not root.
@@ -241,6 +373,100 @@ mod tests {
         );
         assert!(ssh_fix_hint(Os::MacOs, None, false).contains("Remote Login"));
         assert!(ssh_fix_hint(Os::Linux, None, false).contains("sudo systemctl enable --now sshd"));
+    }
+
+    #[test]
+    fn ssh_server_packages_per_manager() {
+        let cases = [
+            (PackageManager::Brew, None),
+            (PackageManager::Apt, Some("openssh-server")),
+            (PackageManager::Dnf, Some("openssh-server")),
+            (PackageManager::Pacman, Some("openssh")),
+            (PackageManager::Zypper, Some("openssh")),
+            (PackageManager::Apk, Some("openssh")),
+        ];
+        for (pm, want) in cases {
+            assert_eq!(pm.ssh_server_package(), want, "{pm:?}");
+        }
+        assert_eq!(
+            detect_system_package_manager(|b| b == "brew" || b == "pacman"),
+            Some(PackageManager::Pacman)
+        );
+        assert_eq!(detect_system_package_manager(|b| b == "brew"), None);
+    }
+
+    #[test]
+    fn downloads_are_https_only_into_a_file() {
+        assert_eq!(
+            Downloader::Curl.argv(HERDR_INSTALLER_URL, "/t/i.sh"),
+            argv(&[
+                "curl",
+                "--proto",
+                "=https",
+                "--tlsv1.2",
+                "-fsSL",
+                "-o",
+                "/t/i.sh",
+                HERDR_INSTALLER_URL
+            ])
+        );
+        assert_eq!(
+            Downloader::Wget.argv(TAILSCALE_INSTALLER_URL, "/t/i.sh"),
+            argv(&[
+                "wget",
+                "--https-only",
+                "--secure-protocol=TLSv1_2",
+                "-q",
+                "-O",
+                "/t/i.sh",
+                TAILSCALE_INSTALLER_URL
+            ])
+        );
+        assert_eq!(detect_downloader(|_| false), None);
+        assert_eq!(detect_downloader(|_| true), Some(Downloader::Curl));
+        assert_eq!(detect_downloader(|b| b == "wget"), Some(Downloader::Wget));
+        assert_eq!(
+            installer_display(Downloader::Curl, HERDR_INSTALLER_URL),
+            "curl --proto =https --tlsv1.2 -fsSL -o install.sh https://herdr.dev/install.sh && sh install.sh"
+        );
+        assert!(!installer_display(Downloader::Curl, HERDR_INSTALLER_URL).contains('|'));
+    }
+
+    #[test]
+    fn homebrew_is_preferred_then_the_installer() {
+        let brew = Some(PackageManager::Brew);
+        let apt = Some(PackageManager::Apt);
+        let curl = Some(Downloader::Curl);
+        let herdr = |pm: PackageManager| pm.has_herdr();
+        assert_eq!(
+            install_source(brew, herdr, curl),
+            Some(Source::Package(PackageManager::Brew))
+        );
+        assert_eq!(
+            install_source(apt, herdr, curl),
+            Some(Source::Installer(Downloader::Curl))
+        );
+        assert_eq!(install_source(apt, herdr, None), None);
+        assert_eq!(install_source(None, herdr, None), None);
+        for pm in PackageManager::ALL {
+            assert_eq!(pm.has_tailscale(), pm == PackageManager::Brew);
+        }
+    }
+
+    #[test]
+    fn tailscale_up_needs_root_on_linux_only() {
+        assert_eq!(
+            tailscale_up_argv("tailscale", Os::Linux, false),
+            argv(&["sudo", "tailscale", "up"])
+        );
+        assert_eq!(
+            tailscale_up_argv("tailscale", Os::Linux, true),
+            argv(&["tailscale", "up"])
+        );
+        assert_eq!(
+            tailscale_up_argv("tailscale", Os::MacOs, false),
+            argv(&["tailscale", "up"])
+        );
     }
 
     #[test]

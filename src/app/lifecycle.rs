@@ -179,6 +179,7 @@ pub fn setup(ctx: &Ctx, yes: bool, no_service: bool, json: bool) -> Result<Reply
     };
     let runtime = prereqs::ensure_runtime(ctx, &cfg, &mode, &mut human);
     let ssh = prereqs::ensure_ssh(ctx, &cfg, &mode, &mut human);
+    let tailscale = prereqs::ensure_tailscale(ctx, &cfg, &mode, &mut human);
 
     let doctor = commands::doctor(ctx)?;
     let _ = writeln!(human, "\n{}", doctor.human);
@@ -218,7 +219,7 @@ pub fn setup(ctx: &Ctx, yes: bool, no_service: bool, json: bool) -> Result<Reply
         "config": {"path": config_file, "created": created},
         "service": service,
         "integrations": agents,
-        "prerequisites": {"agent_runtime": runtime, "ssh": ssh},
+        "prerequisites": {"agent_runtime": runtime, "ssh": ssh, "tailscale": tailscale},
         "doctor": doctor.data,
         "pairing": pairing,
         "legacy": legacy,

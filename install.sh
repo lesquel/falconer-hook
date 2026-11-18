@@ -346,6 +346,32 @@ link_legacy() {
 	run ln -s falconer-hook "$old"
 }
 
+# Downloads an official installer over HTTPS (TLS 1.2+) to a private temp file,
+# runs it with sh, and deletes it. The network is never piped into a shell.
+run_official_installer() {
+	url=$1
+	idir=$(mktemp -d) || return 1
+	chmod 700 "$idir"
+	ifile="$idir/install.sh"
+	(umask 077 && : >"$ifile")
+	if have curl; then
+		fetch="curl"
+		run curl --proto '=https' --tlsv1.2 -fsSL -o "$ifile" "$url" || fetch=""
+	elif have wget; then
+		fetch="wget"
+		run wget --https-only --secure-protocol=TLSv1_2 -q -O "$ifile" "$url" || fetch=""
+	else
+		warn "neither curl nor wget is installed; download $url yourself"
+		fetch=""
+	fi
+	status=1
+	if [ -n "$fetch" ] && [ -s "$ifile" ]; then
+		if run sh "$ifile"; then status=0; fi
+	fi
+	rm -rf "$idir"
+	return $status
+}
+
 check_sshd() {
 	if have sshd || [ -x /usr/sbin/sshd ] || [ -x /usr/bin/sshd ]; then
 		say "ok: sshd found"
@@ -362,9 +388,8 @@ check_runtime() {
 		say "ok: tmux found (Herdr is recommended for automatic agent detection)"
 	else
 		warn "neither Herdr nor tmux is installed"
-		if confirm "Install Herdr with its official installer (curl -fsSL https://herdr.dev/install.sh | sh)?"; then
-			say "+ curl -fsSL https://herdr.dev/install.sh | sh"
-			curl -fsSL https://herdr.dev/install.sh | sh
+		if confirm "Install Herdr with its official installer from https://herdr.dev/install.sh (downloaded over HTTPS to a private temp file, then run with sh)?"; then
+			run_official_installer https://herdr.dev/install.sh || warn "the Herdr installer failed"
 		else
 			say "Install Herdr (https://herdr.dev) or tmux, then run: falconer-hook doctor"
 		fi
@@ -380,9 +405,8 @@ check_tailscale() {
 		fi
 	else
 		warn "tailscale is not installed (required for pairing)"
-		if confirm "Install Tailscale with its official installer (curl -fsSL https://tailscale.com/install.sh | sh)? It asks for sudo itself."; then
-			say "+ curl -fsSL https://tailscale.com/install.sh | sh"
-			curl -fsSL https://tailscale.com/install.sh | sh
+		if confirm "Install Tailscale with its official installer from https://tailscale.com/install.sh (downloaded over HTTPS to a private temp file, then run with sh; it asks for sudo itself)?"; then
+			run_official_installer https://tailscale.com/install.sh || warn "the Tailscale installer failed"
 			say "Now run: sudo tailscale up"
 		else
 			say "Install Tailscale from https://tailscale.com/download, then run: sudo tailscale up"

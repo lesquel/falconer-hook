@@ -18,6 +18,16 @@ pub const AGENTS: &str = r#"{"id":"cli:agent:list","result":{"agents":[{"agent":
 pub const FAKE: &str = r#"#!/bin/sh
 name=$(basename "$0")
 { printf '%s' "$name"; for a in "$@"; do printf '\037%s' "$a"; done; printf '\036'; } >> "$FAKE_LOG"
+case "$name" in
+  curl|wget)
+    # Writes a stand-in installer to the -o/-O destination.
+    prev=; for a in "$@"; do case "$prev" in -o|-O) printf '#!/bin/sh\necho fake installer\n' > "$a" ;; esac; prev=$a; done
+    exit 0 ;;
+  sh)
+    # Records the installer it was given (proves it existed when run).
+    [ -f "$1" ] && cat "$1" >> "$FAKE_DIR/sh_ran"
+    exit 0 ;;
+esac
 case "$name $1 $2" in
   "herdr agent list") cat "$FAKE_DIR/agents.json" ;;
   "herdr  "|"herdr session attach")
@@ -98,6 +108,13 @@ impl Env {
         fs::write(&cfg_file, cfg).unwrap();
         fs::set_permissions(&cfg_file, fs::Permissions::from_mode(0o600)).unwrap();
         fs::create_dir_all(root.join("home")).unwrap();
+        fs::create_dir_all(root.join("tmp")).unwrap();
+        // Stands in for an installed OpenSSH server (never on PATH, so
+        // `sshd -G` is not affected).
+        let sbin = root.join("sbin");
+        fs::create_dir_all(&sbin).unwrap();
+        fs::write(sbin.join("sshd"), FAKE).unwrap();
+        fs::set_permissions(sbin.join("sshd"), fs::Permissions::from_mode(0o755)).unwrap();
         let path = format!("{}:/usr/bin:/bin", root.join("bin").display());
         Self {
             _dir: dir,
@@ -161,6 +178,32 @@ impl Env {
         self.remove_runtime(&["herdr", "tmux"]);
     }
 
+    /// Adds a fake program (for example `curl`, `wget` or `sh`) to `PATH`.
+    pub fn add_tool(&self, name: &str) {
+        let p = self.root.join("bin").join(name);
+        fs::write(&p, FAKE).unwrap();
+        fs::set_permissions(&p, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    /// Makes the OpenSSH server "not installed".
+    pub fn remove_sshd(&self) {
+        fs::remove_file(self.root.join("sbin/sshd")).unwrap();
+    }
+
+    /// Replaces the fake `tailscale status --json` reply.
+    pub fn tailscale_state(&self, backend_state: &str) {
+        fs::write(
+            self.root.join("fake/ts_status.json"),
+            format!(r#"{{"BackendState":"{backend_state}","Self":null,"User":null}}"#),
+        )
+        .unwrap();
+    }
+
+    /// The private temp directory given to the binary (`TMPDIR`).
+    pub fn tmp(&self) -> PathBuf {
+        self.root.join("tmp")
+    }
+
     /// Removes a fake program from `PATH`.
     pub fn remove_tool(&self, name: &str) {
         fs::remove_file(self.root.join("bin").join(name)).unwrap();
@@ -183,6 +226,8 @@ impl Env {
             .env("XDG_STATE_HOME", self.root.join("state"))
             .env("PATH", &self.path)
             .env("USER", "tester")
+            .env("TMPDIR", self.root.join("tmp"))
+            .env("FALCONER_SBIN_DIRS", self.root.join("sbin"))
             .env("FAKE_LOG", self.root.join("calls.log"))
             .env("FAKE_DIR", self.root.join("fake"));
         c
