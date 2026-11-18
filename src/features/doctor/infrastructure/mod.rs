@@ -2,7 +2,7 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::features::doctor::domain::Check;
+use crate::features::doctor::domain::{Check, FixId};
 use crate::shared::domain::command::CommandRunner;
 use crate::shared::infrastructure::fs_secure::{check_private, FsError};
 use crate::shared::infrastructure::ssh_fingerprint::fingerprint;
@@ -32,6 +32,7 @@ pub fn check_permissions(dirs: &[&Path], files: &[&Path]) -> Check {
                 problems.join(", ")
             ),
         )
+        .with_fix(FixId::FixPermissions)
     }
 }
 
@@ -225,6 +226,7 @@ pub fn sshd_auth_check(effective: &str) -> Check {
                 open.join(", ")
             ),
         )
+        .with_fix(FixId::HardenSsh)
     }
 }
 
@@ -234,7 +236,8 @@ pub fn check_systemd_service(unit: &Path, runner: &dyn CommandRunner, systemctl:
         return Check::warn(
             "service",
             "not installed; run `falconer-hook service install`",
-        );
+        )
+        .with_fix(FixId::InstallService);
     }
     let args = vec![
         "--user".to_string(),
@@ -256,6 +259,7 @@ pub fn check_launchd_service(plist: &Path) -> Check {
             "service",
             "not installed; run `falconer-hook service install`",
         )
+        .with_fix(FixId::InstallService)
     }
 }
 
@@ -277,6 +281,21 @@ mod tests {
         assert!(c.detail.contains("0755"));
         std::fs::set_permissions(&d, std::fs::Permissions::from_mode(0o700)).unwrap();
         assert_eq!(check_permissions(&[&d], &[]).status, Status::Ok);
+    }
+
+    #[test]
+    fn password_logins_are_fixed_by_harden_ssh() {
+        let c = sshd_auth_check("passwordauthentication yes\n");
+        assert_eq!(c.fix_id(), Some(FixId::HardenSsh));
+        assert_eq!(sshd_auth_check("passwordauthentication no\n").fix, None);
+        let t = tempfile::tempdir().unwrap();
+        let d = t.path().join("state");
+        std::fs::create_dir(&d).unwrap();
+        std::fs::set_permissions(&d, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(
+            check_permissions(&[&d], &[]).fix_id(),
+            Some(FixId::FixPermissions)
+        );
     }
 
     #[test]

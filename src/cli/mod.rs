@@ -142,6 +142,18 @@ pub enum Command {
     },
     /// Check Tailscale, Herdr/tmux, permissions, devices and the service.
     Doctor {
+        /// Apply the fix of every failing or warning check that has one, or
+        /// only <ID>, then check again. Ids: install_runtime,
+        /// install_tailscale, tailscale_up, install_ssh, enable_ssh,
+        /// fix_permissions, harden_ssh, install_service, pair (pair is only
+        /// described: it needs a person). Each fix shows its command and asks
+        /// first; without a terminal (or with --json) and no --yes it is only
+        /// printed.
+        #[arg(long, value_name = "ID", num_args = 0..=1)]
+        fix: Option<Option<String>>,
+        /// With --fix: apply every fix without asking.
+        #[arg(long, requires = "fix")]
+        yes: bool,
         #[command(flatten)]
         out: JsonFlag,
     },
@@ -386,7 +398,7 @@ impl Command {
             Command::Emit { out, .. }
             | Command::PairSsh { out }
             | Command::Respond { out, .. }
-            | Command::Doctor { out }
+            | Command::Doctor { out, .. }
             | Command::HardenSsh { out, .. }
             | Command::Setup { out, .. }
             | Command::Uninstall { out, .. }

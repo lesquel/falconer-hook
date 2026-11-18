@@ -10,6 +10,7 @@ use std::fmt::Write as _;
 
 use super::{Ctx, Runtimes};
 use crate::features::agents::domain::AgentError;
+use crate::features::doctor::domain::{Check, FixId};
 use crate::features::doctor::infrastructure::{check_ssh_listening, port_listening};
 use crate::features::pairing::domain::{Tailnet, TailnetError};
 use crate::features::pairing::infrastructure::tailscale::TailscaleCli;
@@ -525,7 +526,16 @@ fn tailscale_up(ctx: &Ctx, cfg: &Config, mode: &Mode, human: &mut String) -> Val
     }
 }
 
+/// The fix id for a missing or silent SSH server.
+pub fn ssh_fix_id(ctx: &Ctx) -> FixId {
+    if ssh_server_install(ctx).is_some() {
+        FixId::InstallSsh
+    } else {
+        FixId::EnableSsh
+    }
+}
+
 /// The doctor check for the SSH port, with the platform fix.
-pub fn ssh_listening_check(ctx: &Ctx, port: u16) -> crate::features::doctor::domain::Check {
-    check_ssh_listening(port, port_listening(port), &ssh_fix(ctx))
+pub fn ssh_listening_check(ctx: &Ctx, port: u16) -> Check {
+    check_ssh_listening(port, port_listening(port), &ssh_fix(ctx)).with_fix(ssh_fix_id(ctx))
 }

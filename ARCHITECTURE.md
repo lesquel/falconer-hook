@@ -9,7 +9,7 @@ src/
 ├── main.rs                  # entry point: parse CLI, build Ctx, print the JSON envelope
 ├── app/                     # composition root (with main.rs): builds adapters, injects them into use cases
 │   ├── mod.rs               #   Ctx (paths, env, runner), private state, runtimes, push notifier, dispatch
-│   ├── commands.rs          #   request/response commands
+│   ├── commands.rs          #   request/response commands; `doctor --fix` applies fixes by reusing them
 │   ├── serve.rs             #   daemon loop
 │   ├── integrations.rs      #   integration install/uninstall/list over the agent catalog
 │   ├── lifecycle.rs         #   setup and uninstall
@@ -64,7 +64,7 @@ data/
 | `pairing` | QR and SSH pairing (with a host-side `y/N` confirmation), device registry, revocation that ends the phone's live SSH sessions | `DeviceRegistry`, `AuthorizedKeys`, `LiveSessions`, `Tailnet`, `PairConfirm`, `PairCrypto`, `PairSession` | `TomlDeviceRegistry`, `FileAuthorizedKeys`, `ProcSshSessions`, `TailscaleCli`, `X25519PairCrypto`, TCP listener, QR renderer |
 | `responses` | Resolve an event and execute allow/deny/text | `KeymapSource` (uses `AgentRuntime`, `EventStore`, `EventNotifier`) | `EmbeddedKeymaps` |
 | `service` | Render and apply the user service plan | `ServiceFiles` (uses `CommandRunner`) | `FsServiceFiles` |
-| `doctor` | Diagnose dependencies, permissions and connectivity | uses other ports read-only | filesystem and service checks |
+| `doctor` | Diagnose dependencies, permissions and connectivity; each fixable check carries a machine-readable fix id (`FixId`) | uses other ports read-only | filesystem and service checks |
 | `integration` | Agent catalog (Claude Code, Codex, Gemini, Cursor, Copilot, Kiro, OpenCode, Aider; Amp has no hook, so it is reached via Herdr only) and pure edits of each agent's hook file calling `emit` | `SettingsFile` | `JsonSettingsFile` |
 | `setup` | Uninstall plan (only what falconer-hook created) and its step-by-step execution; pure decisions for the prerequisites `setup` fixes (package manager, official installer, argv, consent), and the private temp file an official installer is downloaded to | `UninstallPorts` (implemented in `app/lifecycle.rs` over `service`, `integration`, `pairing`) | — |
 | `mirror` | Run the Herdr client and mirror focus to every attached client | `FocusSocket`, `Launcher`, `MonoClock` | `HerdrSocket` (Unix socket, NDJSON), `TtyLauncher`, `SystemMonoClock` |

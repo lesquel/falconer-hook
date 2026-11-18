@@ -541,7 +541,13 @@ impl App {
         let r: Result<(), CliError> = (|| {
             match self.screen {
                 Screen::Status => {
-                    let d = exec.exec(Command::Doctor { out: json() })?.data;
+                    let d = exec
+                        .exec(Command::Doctor {
+                            fix: None,
+                            yes: false,
+                            out: json(),
+                        })?
+                        .data;
                     self.healthy = d["healthy"].as_bool();
                     self.checks = rows(&d, "checks", |c| CheckRow {
                         name: text(c, "name"),

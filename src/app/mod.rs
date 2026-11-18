@@ -262,7 +262,12 @@ pub fn run(ctx: &Ctx, command: Command) -> Result<Reply, CliError> {
             yes,
             out,
         } => lifecycle::uninstall(ctx, all, dry_run, yes, out.json),
-        Command::Doctor { .. } => commands::doctor(ctx),
+        Command::Doctor { fix: None, .. } => commands::doctor(ctx),
+        Command::Doctor {
+            fix: Some(id),
+            yes,
+            out,
+        } => commands::doctor_fix(ctx, id.as_deref(), yes, out.json),
         Command::Usage { days, .. } => usage::usage(ctx, days),
         Command::HardenSsh { dry_run, yes, out } => harden::harden_ssh(ctx, dry_run, yes, out.json),
         Command::Service { cmd } => match cmd {

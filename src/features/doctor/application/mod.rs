@@ -1,7 +1,7 @@
 //! Checks built on other features' ports (read-only calls only).
 
 use crate::features::agents::domain::{AgentError, AgentRuntime};
-use crate::features::doctor::domain::Check;
+use crate::features::doctor::domain::{Check, FixId};
 use crate::features::pairing::domain::{
     DeviceRegistry, Tailnet, TailnetError, TAILSCALE_SSH_FIX, TAILSCALE_SSH_PORT,
     TAILSCALE_SSH_REASON,
@@ -12,9 +12,14 @@ pub fn check_tailscale(t: &impl Tailnet) -> Check {
     match t.status() {
         Err(TailnetError::Missing) => {
             Check::fail("tailscale", "not installed: https://tailscale.com/download")
+                .with_fix(FixId::InstallTailscale)
         }
-        Err(TailnetError::Failed) => Check::fail("tailscale", "`tailscale status` failed"),
-        Ok(s) if !s.running => Check::fail("tailscale", "not running; run `tailscale up`"),
+        Err(TailnetError::Failed) => {
+            Check::fail("tailscale", "`tailscale status` failed").with_fix(FixId::TailscaleUp)
+        }
+        Ok(s) if !s.running => {
+            Check::fail("tailscale", "not running; run `tailscale up`").with_fix(FixId::TailscaleUp)
+        }
         Ok(_) => match t.ipv4() {
             Ok(ip) => Check::ok("tailscale", format!("running, {ip}")),
             Err(_) => Check::fail("tailscale", "running but has no IPv4 address"),
@@ -54,26 +59,36 @@ pub fn check_runtimes(runtimes: &[&dyn AgentRuntime], herdr_install: Option<&str
                 any = true;
                 out.push(Check::ok(check_name, format!("{} session(s)", s.len())));
             }
-            Err(AgentError::Unavailable(_)) => out.push(Check::warn(
-                check_name,
-                match (check_name, herdr_install) {
-                    ("herdr", Some(cmd)) => {
-                        format!("not installed; `{cmd}` unlocks View as agents in the app")
-                    }
-                    _ => "not installed".to_string(),
-                },
-            )),
+            Err(AgentError::Unavailable(_)) => {
+                let c = Check::warn(
+                    check_name,
+                    match (check_name, herdr_install) {
+                        ("herdr", Some(cmd)) => {
+                            format!("not installed; `{cmd}` unlocks View as agents in the app")
+                        }
+                        _ => "not installed".to_string(),
+                    },
+                );
+                out.push(if check_name == "herdr" {
+                    c.with_fix(FixId::InstallRuntime)
+                } else {
+                    c
+                });
+            }
             Err(_) => out.push(Check::warn(check_name, "installed but not responding")),
         }
     }
     if !any {
-        out.push(Check::fail(
-            "agent_runtime",
-            match herdr_install {
-                Some(cmd) => format!("install Herdr (`{cmd}`) or tmux"),
-                None => "install Herdr (https://herdr.dev) or tmux".to_string(),
-            },
-        ));
+        out.push(
+            Check::fail(
+                "agent_runtime",
+                match herdr_install {
+                    Some(cmd) => format!("install Herdr (`{cmd}`) or tmux"),
+                    None => "install Herdr (https://herdr.dev) or tmux".to_string(),
+                },
+            )
+            .with_fix(FixId::InstallRuntime),
+        );
     }
     out
 }
@@ -83,6 +98,7 @@ pub fn check_devices(registry: &impl DeviceRegistry) -> Check {
         Err(e) => Check::fail("devices", e.to_string()),
         Ok(d) if d.is_empty() => {
             Check::warn("devices", "no paired phone; run `falconer-hook pair`")
+                .with_fix(FixId::Pair)
         }
         Ok(d) => {
             let stale = d.iter().filter(|x| x.endpoint_stale).count();

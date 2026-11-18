@@ -20,7 +20,7 @@ use crate::shared::config::{Config, DEFAULT_CONFIG};
 use crate::shared::infrastructure::fs_secure::{ensure_private_dir, write_atomic};
 
 /// Asks a yes/no question on the terminal (stderr prompt, stdin answer).
-fn ask(question: &str) -> bool {
+pub(super) fn ask(question: &str) -> bool {
     eprint!("{question} [y/N] ");
     let _ = std::io::stderr().flush();
     let mut line = String::new();
@@ -30,7 +30,7 @@ fn ask(question: &str) -> bool {
     matches!(line.trim(), "y" | "Y" | "yes" | "YES")
 }
 
-fn interactive(json: bool) -> bool {
+pub(super) fn interactive(json: bool) -> bool {
     // `FALCONER_ASSUME_TTY=1` lets tests drive the prompts through a pipe.
     !json && (std::io::stdin().is_terminal() || std::env::var_os("FALCONER_ASSUME_TTY").is_some())
 }
