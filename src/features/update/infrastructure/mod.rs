@@ -192,7 +192,11 @@ pub fn run_installer(
     stdout_to_stderr: bool,
 ) -> Result<i32, UpdateError> {
     let mut c = Command::new("sh");
-    c.arg(script).args(args).env("FALCONER_BIN_DIR", bin_dir);
+    c.arg(script)
+        .args(args)
+        .env("FALCONER_BIN_DIR", bin_dir)
+        // An update replaces falconer-hook only: never offer Herdr/Tailscale installs.
+        .env("FALCONER_SKIP_PREREQS", "1");
     if stdout_to_stderr {
         use std::os::fd::AsFd;
         let fd = std::io::stderr()

@@ -434,6 +434,10 @@ impl Release {
     }
 
     fn install_with_path(&self, args: &[&str], path: &str) -> Output {
+        self.install_with_env(args, path, &[])
+    }
+
+    fn install_with_env(&self, args: &[&str], path: &str, env: &[(&str, &str)]) -> Output {
         Command::new("sh")
             .arg(concat!(env!("CARGO_MANIFEST_DIR"), "/install.sh"))
             .args(args)
@@ -442,6 +446,7 @@ impl Release {
             .env("HOME", self.t.path().join("home"))
             .env("FALCONER_NO_GH", "1")
             .env("PATH", path)
+            .envs(env.iter().copied())
             .output()
             .unwrap()
     }
@@ -571,8 +576,8 @@ fn no_compatibility_symlink_without_an_old_binary() {
     assert!(fs::symlink_metadata(r.t.path().join("home/.local/bin/openmosh-hook")).is_err());
 }
 
-#[test]
-fn yes_downloads_the_herdr_installer_to_a_private_file_before_running_it() {
+/// A release tree with no runtime on PATH, so install.sh would offer Herdr.
+fn release_without_runtime() -> (Release, String) {
     let r = Release::new("v9.9.9", "falconer-hook v9.9.9");
     r.remove_fake("tmux");
     // The system tools, minus any real runtime, so the installer is offered.
@@ -588,6 +593,12 @@ fn yes_downloads_the_herdr_installer_to_a_private_file_before_running_it() {
         }
     }
     let path = format!("{}:{}", r.t.path().join("bin").display(), sys.display());
+    (r, path)
+}
+
+#[test]
+fn yes_downloads_the_herdr_installer_to_a_private_file_before_running_it() {
+    let (r, path) = release_without_runtime();
     let out = r.install_with_path(&["--yes"], &path);
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(out.status.success(), "{stdout}");
@@ -601,4 +612,20 @@ fn yes_downloads_the_herdr_installer_to_a_private_file_before_running_it() {
     assert!(stdout.contains("herdr-installer-ran"), "{stdout}");
     assert!(!Path::new(file).exists(), "the installer is deleted");
     assert!(!stdout.contains("| sh"), "{stdout}");
+}
+
+#[test]
+fn skip_prereqs_never_offers_or_runs_an_installer_even_with_yes() {
+    let (r, path) = release_without_runtime();
+    let out = r.install_with_env(&["--yes"], &path, &[("FALCONER_SKIP_PREREQS", "1")]);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success(), "{stdout}");
+    assert!(r.installed());
+    assert!(
+        stdout.contains("Skipping the prerequisite checks"),
+        "{stdout}"
+    );
+    assert!(!stdout.contains("herdr.dev"), "{stdout}");
+    assert!(!stdout.contains("tailscale.com"), "{stdout}");
+    assert!(!stdout.contains("herdr-installer-ran"), "{stdout}");
 }

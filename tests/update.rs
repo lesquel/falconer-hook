@@ -31,7 +31,7 @@ cat "$FAKE_DIR/install.sh" > "$out"
 
 /// The "downloaded" installer: logs its argv and `FALCONER_BIN_DIR`.
 const INSTALLER: &str = r#"#!/bin/sh
-{ printf 'install.sh'; for a in "$@"; do printf '\037%s' "$a"; done; printf '\037BIN_DIR=%s' "$FALCONER_BIN_DIR"; printf '\036'; } >> "$FAKE_LOG"
+{ printf 'install.sh'; for a in "$@"; do printf '\037%s' "$a"; done; printf '\037BIN_DIR=%s' "$FALCONER_BIN_DIR"; printf '\037SKIP=%s' "$FALCONER_SKIP_PREREQS"; printf '\036'; } >> "$FAKE_LOG"
 echo "falconer-hook installer (fake)"
 exit "${FAKE_INSTALL_EXIT:-0}"
 "#;
@@ -175,9 +175,9 @@ fn yes_runs_the_tag_pinned_installer() {
         [
             "--version".to_string(),
             next.clone(),
-            "--yes".to_string(),
             "--no-service".to_string(),
             format!("BIN_DIR={bin_dir}"),
+            "SKIP=1".to_string(),
         ]
     );
     // The private temp copy is gone.

@@ -170,11 +170,9 @@ impl UpdateCheck {
 /// verifies the signed SHA256SUMS), the offers to install missing Herdr or
 /// Tailscale accepted, and the service left alone when none is installed.
 pub fn installer_args(tag: &str, has_service: bool) -> Vec<String> {
-    let mut v = vec![
-        "--version".to_string(),
-        tag.to_string(),
-        "--yes".to_string(),
-    ];
+    // No `--yes`: install.sh's only prompts are prerequisite offers, which an update skips
+    // (FALCONER_SKIP_PREREQS), so nothing is ever installed without consent.
+    let mut v = vec!["--version".to_string(), tag.to_string()];
     if !has_service {
         v.push("--no-service".to_string());
     }
@@ -289,11 +287,8 @@ mod tests {
         assert_eq!(c.summary(), "Up to date (v0.2.0)");
         assert_eq!(
             installer_args("v0.2.1", false),
-            ["--version", "v0.2.1", "--yes", "--no-service"]
+            ["--version", "v0.2.1", "--no-service"]
         );
-        assert_eq!(
-            installer_args("v0.2.1", true),
-            ["--version", "v0.2.1", "--yes"]
-        );
+        assert_eq!(installer_args("v0.2.1", true), ["--version", "v0.2.1"]);
     }
 }

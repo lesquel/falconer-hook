@@ -56,7 +56,9 @@ Usage: install.sh [options]
   -h, --help         Show this help.
 
 Environment: FALCONER_BIN_DIR (default ~/.local/bin),
-             FALCONER_NO_GH=1 (never use the GitHub CLI).
+             FALCONER_NO_GH=1 (never use the GitHub CLI),
+             FALCONER_SKIP_PREREQS=1 (skip the sshd/Herdr/Tailscale
+             checks and offers; used by `falconer-hook update`).
 EOF
 }
 
@@ -463,9 +465,13 @@ binary) install_binary ;;
 esac
 link_legacy
 
-check_sshd
-check_runtime
-check_tailscale
+if [ "${FALCONER_SKIP_PREREQS:-0}" = 1 ]; then
+	say "Skipping the prerequisite checks (FALCONER_SKIP_PREREQS=1)."
+else
+	check_sshd
+	check_runtime
+	check_tailscale
+fi
 write_config
 
 HOOK="$BIN_DIR/falconer-hook"

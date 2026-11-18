@@ -88,7 +88,7 @@ fn manual_commands(d: Downloader, url: &str, args: &[String], bin_dir: &Path) ->
         .collect::<Vec<_>>()
         .join(" ");
     let run = format!(
-        "FALCONER_BIN_DIR={} sh install.sh {}",
+        "FALCONER_SKIP_PREREQS=1 FALCONER_BIN_DIR={} sh install.sh {}",
         sh_word(&bin_dir.display().to_string()),
         args.join(" ")
     );
@@ -220,7 +220,7 @@ pub fn update(
             let script = tmp.file("install.sh")?;
             download(&net_runner(), d, &url, &script)?;
             eprintln!(
-                "Running: FALCONER_BIN_DIR={} sh {} {}",
+                "Running: FALCONER_SKIP_PREREQS=1 FALCONER_BIN_DIR={} sh {} {}",
                 sh_word(&bin_dir.display().to_string()),
                 script.display(),
                 args.join(" ")
@@ -283,7 +283,7 @@ mod tests {
         assert_eq!(dl, "curl -fsSL --proto =https --tlsv1.2 -o install.sh https://raw.githubusercontent.com/lesquel/falconer-hook/v0.2.1/install.sh");
         assert_eq!(
             run,
-            "FALCONER_BIN_DIR=/home/me/.local/bin sh install.sh --version v0.2.1 --yes --no-service"
+            "FALCONER_SKIP_PREREQS=1 FALCONER_BIN_DIR=/home/me/.local/bin sh install.sh --version v0.2.1 --no-service"
         );
     }
 }
