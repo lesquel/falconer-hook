@@ -8,6 +8,7 @@ pub mod actions;
 pub mod i18n;
 pub mod state;
 pub mod view;
+pub mod wizard;
 
 use std::io::{BufRead, IsTerminal, Write};
 use std::sync::atomic::{AtomicBool, Ordering};

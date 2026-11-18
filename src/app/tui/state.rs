@@ -12,6 +12,7 @@ use serde_json::Value;
 use super::actions;
 pub use super::actions::Act;
 use super::i18n::{t, tf, Lang};
+pub use super::wizard::{StepStatus, WizardStep};
 use crate::cli::output::{CliError, Reply};
 use crate::cli::{
     ActionArg, AgentArg, Command, DevicesCmd, InboxCmd, IntegrationCmd, JsonFlag, ListCmd,
@@ -136,6 +137,10 @@ pub enum Pending {
     ClearWebpush {
         id: String,
         name: String,
+    },
+    /// Wizard: install the integration of every detected agent.
+    InstallDetected {
+        agents: Vec<(AgentArg, String)>,
     },
 }
 
@@ -311,6 +316,15 @@ impl Pending {
             Pending::ClearWebpush { name, .. } => {
                 tf(lang, "Remove the Web Push subscription of {}?", &[name])
             }
+            Pending::InstallDetected { agents } => tf(
+                lang,
+                "Install the integration of every detected agent: {}?",
+                &[&agents
+                    .iter()
+                    .map(|(_, n)| n.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")],
+            ),
         }
     }
 }
@@ -520,6 +534,9 @@ pub struct App {
     /// Set after a complete uninstall: nothing else may run (it would
     /// recreate state).
     pub uninstalled: bool,
+    /// The open setup wizard's step.
+    pub wizard: Option<usize>,
+    integrations_known: bool,
 }
 
 /// Terminal-safe text: control characters (escape sequences) are replaced.
@@ -584,6 +601,8 @@ impl App {
             plan_empty: true,
             output: None,
             uninstalled: false,
+            wizard: None,
+            integrations_known: false,
         }
     }
 
@@ -594,6 +613,143 @@ impl App {
     /// Loads the first screen.
     pub fn start(&mut self, exec: &mut dyn Exec) {
         self.refresh(exec);
+        if self.first_run() {
+            self.open_wizard(exec);
+        }
+    }
+
+    /// No phone paired yet and a prerequisite or the config is missing.
+    pub fn first_run(&self) -> bool {
+        const PREREQS: [FixId; 6] = [
+            FixId::InstallRuntime,
+            FixId::InstallTailscale,
+            FixId::TailscaleUp,
+            FixId::InstallSsh,
+            FixId::EnableSsh,
+            FixId::InstallService,
+        ];
+        let unpaired = self.checks.iter().any(|c| c.fix == Some(FixId::Pair));
+        let missing = self.checks.iter().any(|c| {
+            c.fix.is_some_and(|f| PREREQS.contains(&f)) || (c.name == "config" && !c.ok())
+        });
+        unpaired && missing
+    }
+
+    pub fn wizard_step(&self) -> Option<WizardStep> {
+        self.wizard.map(|i| WizardStep::ALL[i])
+    }
+
+    /// The fix the step needs now, if any.
+    pub fn step_fix(&self, step: WizardStep) -> Option<FixId> {
+        self.checks
+            .iter()
+            .filter_map(|c| c.fix)
+            .find(|f| step.fixes().contains(f))
+    }
+
+    fn undone_integrations(&self) -> Vec<(AgentArg, String)> {
+        self.integrations
+            .iter()
+            .filter(|r| r.detected && r.installed != Some(true))
+            .filter_map(|r| {
+                <AgentArg as clap::ValueEnum>::from_str(&r.agent, true)
+                    .ok()
+                    .map(|a| (a, r.name.clone()))
+            })
+            .collect()
+    }
+
+    pub fn step_status(&self, step: WizardStep) -> StepStatus {
+        match step {
+            WizardStep::Integrations if !self.integrations_known => StepStatus::Unknown,
+            WizardStep::Integrations if self.undone_integrations().is_empty() => StepStatus::Done,
+            WizardStep::Integrations => StepStatus::Todo,
+            _ if self.checks.is_empty() => StepStatus::Unknown,
+            _ if self.step_fix(step).is_some() => StepStatus::Todo,
+            _ => StepStatus::Done,
+        }
+    }
+
+    /// Opens the wizard at its first step that is not done.
+    pub fn open_wizard(&mut self, exec: &mut dyn Exec) {
+        if let Err(e) = self.load_integrations(exec) {
+            self.error(e.message);
+        }
+        self.wizard = Some(0);
+        self.settle_wizard();
+    }
+
+    /// Moves past steps that are already done (never past the last one).
+    fn settle_wizard(&mut self) {
+        while let Some(i) = self.wizard {
+            if i + 1 < WizardStep::ALL.len()
+                && self.step_status(WizardStep::ALL[i]) == StepStatus::Done
+            {
+                self.wizard = Some(i + 1);
+            } else {
+                break;
+            }
+        }
+    }
+
+    fn next_step(&mut self) {
+        match self.wizard {
+            Some(i) if i + 1 < WizardStep::ALL.len() => {
+                self.wizard = Some(i + 1);
+                self.settle_wizard();
+            }
+            _ => {
+                self.wizard = None;
+                self.screen = Screen::Home;
+                self.clamp();
+                self.info(self.tr("Setup wizard finished. Reopen it from Home."));
+            }
+        }
+    }
+
+    /// Reads health and integrations again for the wizard.
+    fn reload_wizard(&mut self, exec: &mut dyn Exec) {
+        self.screen = Screen::Home;
+        self.refresh(exec);
+        if let Err(e) = self.load_integrations(exec) {
+            self.error(e.message);
+        }
+    }
+
+    fn on_wizard_key(&mut self, key: KeyEvent, exec: &mut dyn Exec) -> Effect {
+        let Some(step) = self.wizard_step() else {
+            return Effect::None;
+        };
+        match key.code {
+            KeyCode::Esc => {
+                self.wizard = None;
+                self.screen = Screen::Home;
+                self.clamp();
+            }
+            KeyCode::Char('q') => return Effect::Quit,
+            KeyCode::Char('s') => self.next_step(),
+            KeyCode::Char('r') => self.reload_wizard(exec),
+            KeyCode::Enter => match self.step_status(step) {
+                StepStatus::Done => self.next_step(),
+                StepStatus::Unknown => self.reload_wizard(exec),
+                StepStatus::Todo if step == WizardStep::Integrations => {
+                    self.mode = Mode::Confirm(Pending::InstallDetected {
+                        agents: self.undone_integrations(),
+                    })
+                }
+                StepStatus::Todo => match self.step_fix(step) {
+                    Some(FixId::Pair) => {
+                        return Effect::Pair {
+                            invert: self.invert,
+                        }
+                    }
+                    Some(id) => self.mode = Mode::Confirm(Pending::Fix { id }),
+                    None => self.next_step(),
+                },
+            },
+            _ => {}
+        }
+        Effect::None
     }
 
     pub fn selected(&self) -> usize {
@@ -691,6 +847,7 @@ impl App {
             return Effect::Quit;
         }
         match std::mem::replace(&mut self.mode, Mode::Normal) {
+            Mode::Normal if self.wizard.is_some() => self.on_wizard_key(key, exec),
             Mode::Normal => self.on_normal(key, exec),
             Mode::Confirm(p) => match key.code {
                 KeyCode::Char('y') | KeyCode::Char('Y') => self.perform(p, exec),
@@ -819,7 +976,7 @@ impl App {
                     self.mode = Mode::Confirm(Pending::FixAll { ids });
                 }
             }
-            Act::Wizard => {}
+            Act::Wizard => self.open_wizard(exec),
             Act::Update => match &self.update {
                 UpdateState::Available { tag, .. } => {
                     self.mode = Mode::Confirm(Pending::Update { tag: tag.clone() })
@@ -1029,6 +1186,23 @@ impl App {
         Ok(())
     }
 
+    fn load_integrations(&mut self, exec: &mut dyn Exec) -> Result<(), CliError> {
+        let d = exec
+            .exec(Command::Integration {
+                cmd: IntegrationCmd::List { out: json() },
+            })?
+            .data;
+        self.integrations = rows(&d, "agents", |a| IntegrationRow {
+            agent: text(a, "agent"),
+            name: text(a, "name"),
+            detected: a["detected"].as_bool().unwrap_or(false),
+            installed: a["installed"].as_bool(),
+            settings: text(a, "settings"),
+        });
+        self.integrations_known = true;
+        Ok(())
+    }
+
     /// Reloads the current screen.
     pub fn refresh(&mut self, exec: &mut dyn Exec) {
         if self.uninstalled {
@@ -1082,20 +1256,7 @@ impl App {
                     let c = exec.exec(Command::Config { out: json() })?;
                     self.config_text = clean(&c.human);
                 }
-                Screen::Integrations => {
-                    let d = exec
-                        .exec(Command::Integration {
-                            cmd: IntegrationCmd::List { out: json() },
-                        })?
-                        .data;
-                    self.integrations = rows(&d, "agents", |a| IntegrationRow {
-                        agent: text(a, "agent"),
-                        name: text(a, "name"),
-                        detected: a["detected"].as_bool().unwrap_or(false),
-                        installed: a["installed"].as_bool(),
-                        settings: text(a, "settings"),
-                    });
-                }
+                Screen::Integrations => self.load_integrations(exec)?,
                 Screen::Service => self.load_doctor(exec)?,
                 Screen::Usage => {
                     let r = exec.exec(Command::Usage {
@@ -1146,7 +1307,12 @@ impl App {
         if self.uninstalled {
             return Effect::None;
         }
+        if let Pending::InstallDetected { agents } = &p {
+            self.install_detected(agents, exec);
+            return Effect::None;
+        }
         let cmd = match &p {
+            Pending::InstallDetected { .. } => return Effect::None,
             Pending::Fix { id } if *id != FixId::FixPermissions => {
                 return Effect::Fix { id: *id };
             }
@@ -1261,6 +1427,7 @@ impl App {
                 self.invalidate();
                 let msg = self.message.clone();
                 self.refresh(exec);
+                self.settle_wizard();
                 // Keep the action's outcome unless the refresh failed.
                 if !self.message.as_ref().is_some_and(|m| m.error) {
                     self.message = msg;
@@ -1269,6 +1436,34 @@ impl App {
             Err(e) => self.error(e.message),
         }
         Effect::None
+    }
+
+    fn install_detected(&mut self, agents: &[(AgentArg, String)], exec: &mut dyn Exec) {
+        let mut failed = Vec::new();
+        for (agent, name) in agents {
+            let r = exec.exec(Command::Integration {
+                cmd: IntegrationCmd::Install {
+                    agent: *agent,
+                    settings: None,
+                    out: json(),
+                },
+            });
+            if let Err(e) = r {
+                failed.push(format!("{name}: {}", e.message));
+            }
+        }
+        self.invalidate();
+        let _ = self.load_integrations(exec);
+        if failed.is_empty() {
+            self.info(tf(
+                self.lang,
+                "Installed {} integrations.",
+                &[&agents.len().to_string()],
+            ));
+            self.settle_wizard();
+        } else {
+            self.error(failed.join("; "));
+        }
     }
 
     fn uninstall(&mut self, exec: &mut dyn Exec) {
@@ -1316,6 +1511,9 @@ impl App {
         let msg = self.message.clone();
         self.loaded = [false; 8];
         self.refresh(exec);
+        if self.wizard.is_some() {
+            let _ = self.load_integrations(exec);
+        }
         if self.screen != Screen::Home && !self.uninstalled {
             // Home's health drives the problems list and the wizard.
             let screen = self.screen;
@@ -1323,6 +1521,7 @@ impl App {
             self.refresh(exec);
             self.screen = screen;
         }
+        self.settle_wizard();
         if !self.message.as_ref().is_some_and(|m| m.error) {
             self.message = msg;
         }
@@ -1336,3 +1535,7 @@ mod tests;
 #[cfg(test)]
 #[path = "hub_tests.rs"]
 mod hub_tests;
+
+#[cfg(test)]
+#[path = "wizard_tests.rs"]
+mod wizard_tests;

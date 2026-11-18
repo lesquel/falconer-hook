@@ -14,6 +14,8 @@ pub(super) struct FakeExec {
     pub fresh: bool,
     /// Doctor also reports OpenMosh leftovers.
     pub legacy: bool,
+    /// Codex's integration was installed through this fake.
+    pub codex_installed: bool,
 }
 
 fn fix(id: &str) -> serde_json::Value {
@@ -84,10 +86,19 @@ impl Exec for FakeExec {
             } => Reply::new(
                 &json!({"agents": [
                     {"agent": "claude", "name": "Claude Code", "detected": true, "installed": true, "settings": "/h/.claude/settings.json"},
-                    {"agent": "codex", "name": "Codex CLI", "detected": false, "installed": false, "settings": "/h/.codex/hooks.json"}
+                    {"agent": "codex", "name": "Codex CLI", "detected": self.fresh, "installed": self.codex_installed, "settings": "/h/.codex/hooks.json"}
                 ]}),
                 "",
             ),
+            Command::Integration {
+                cmd: IntegrationCmd::Install {
+                    agent: AgentArg::Codex,
+                    ..
+                },
+            } => {
+                self.codex_installed = true;
+                Reply::new(&json!({}), "Installed the Codex CLI integration")
+            }
             Command::Uninstall { dry_run: true, .. } => Reply::new(
                 &json!({"dry_run": true, "steps": if self.empty_plan { json!([]) } else { json!([{"service": "u"}]) }}),
                 "falconer-hook uninstall would:\n- remove the user service\n- delete /h/.config/falconer",

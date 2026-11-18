@@ -8,7 +8,10 @@ use ratatui::Frame;
 
 use super::actions;
 use super::i18n::tf;
-use super::state::{fix_title, App, HomeItem, Input, Mode, Screen, UpdateState, UNINSTALL_WORD};
+use super::state::{
+    fix_title, App, HomeItem, Input, Mode, Screen, StepStatus, UpdateState, WizardStep,
+    UNINSTALL_WORD,
+};
 
 const REVERSED: Style = Style::new().add_modifier(Modifier::REVERSED);
 
@@ -56,10 +59,17 @@ fn footer_lines(app: &App, width: usize) -> Vec<Line<'static>> {
             }
         })
         .collect();
-    let mut hints: Vec<Span> = actions::on(app.screen)
-        .filter(|d| !d.key.is_empty())
-        .map(|d| Span::raw(format!("{} {}", d.key, app.tr(d.hint))))
-        .collect();
+    let mut hints: Vec<Span> = if app.wizard.is_some() {
+        [("Enter", "run"), ("s", "skip"), ("Esc", "leave")]
+            .iter()
+            .map(|(k, h)| Span::raw(format!("{k} {}", app.tr(h))))
+            .collect()
+    } else {
+        actions::on(app.screen)
+            .filter(|d| !d.key.is_empty())
+            .map(|d| Span::raw(format!("{} {}", d.key, app.tr(d.hint))))
+            .collect()
+    };
     for (k, h) in [("r", "refresh"), ("q", "quit")] {
         hints.push(Span::raw(format!("{k} {}", app.tr(h))));
     }
@@ -76,11 +86,32 @@ pub fn draw(f: &mut Frame, app: &App) {
     let fh = (footer.len() as u16 + 1).min(area.height.saturating_sub(3));
     let [body, foot] = Layout::vertical([Constraint::Min(0), Constraint::Length(fh)]).areas(area);
 
-    let title = format!(" Falconer ─ {} ", app.tr(app.screen.title()));
-    let outer = Block::default().borders(Borders::ALL).title(title);
+    let title = if app.wizard.is_some() {
+        app.tr("Setup wizard")
+    } else {
+        app.tr(app.screen.title())
+    };
+    let outer = Block::default()
+        .borders(Borders::ALL)
+        .title(format!(" Falconer ─ {title} "));
     let inner = outer.inner(body);
     f.render_widget(outer, body);
 
+    if app.wizard.is_some() {
+        wizard(f, app, inner);
+    } else {
+        screen(f, app, inner);
+    }
+
+    f.render_widget(
+        Paragraph::new(footer).block(Block::default().borders(Borders::TOP)),
+        foot,
+    );
+
+    modal(f, app);
+}
+
+fn screen(f: &mut Frame, app: &App, inner: Rect) {
     match app.screen {
         Screen::Home => home(f, app, inner),
         Screen::Agents => agents(f, app, inner),
@@ -91,13 +122,61 @@ pub fn draw(f: &mut Frame, app: &App) {
         Screen::Usage => usage(f, app, inner),
         Screen::Advanced => advanced(f, app, inner),
     }
+}
 
-    f.render_widget(
-        Paragraph::new(footer).block(Block::default().borders(Borders::TOP)),
-        foot,
+fn wizard(f: &mut Frame, app: &App, area: Rect) {
+    let Some(cur) = app.wizard else { return };
+    let step = WizardStep::ALL[cur];
+    let [top, bottom] = Layout::vertical([
+        Constraint::Length(WizardStep::ALL.len() as u16 + 1),
+        Constraint::Min(0),
+    ])
+    .areas(area);
+    let items = WizardStep::ALL
+        .iter()
+        .enumerate()
+        .map(|(i, s)| {
+            let (m, color, note) = match app.step_status(*s) {
+                StepStatus::Done => ("✓", Color::Green, app.tr("done")),
+                StepStatus::Unknown => ("?", Color::Yellow, app.tr("checking")),
+                StepStatus::Todo => ("○", Color::Red, app.tr("to do")),
+            };
+            ListItem::new(Line::from(vec![
+                Span::styled(format!("{m} "), Style::default().fg(color)),
+                Span::raw(format!("{} {:<30} {note}", i + 1, app.tr(s.title()))),
+            ]))
+        })
+        .collect();
+    let title = tf(
+        app.lang,
+        "Step {}/{}",
+        &[&(cur + 1).to_string(), &WizardStep::ALL.len().to_string()],
     );
-
-    modal(f, app);
+    list(f, app, top, &title, items, Some(cur));
+    let next = match (app.step_status(step), step, app.step_fix(step)) {
+        (StepStatus::Done, ..) => app.tr("Done. Enter continues.").to_string(),
+        (StepStatus::Unknown, ..) => app.tr("Status unknown. Enter checks again.").to_string(),
+        (StepStatus::Todo, WizardStep::Integrations, _) => {
+            app.tr("Enter installs them, after asking.").to_string()
+        }
+        (StepStatus::Todo, _, Some(id)) => tf(
+            app.lang,
+            "Enter: {}, after asking.",
+            &[fix_title(app.lang, id)],
+        ),
+        (StepStatus::Todo, _, None) => String::new(),
+    };
+    text_panel(
+        f,
+        bottom,
+        app.tr(step.title()),
+        vec![
+            Line::from(app.tr(step.about())),
+            Line::from(""),
+            Line::from(next),
+            Line::from(app.tr("s skips this step; Esc leaves the wizard for Home.")),
+        ],
+    );
 }
 
 /// A section inside the screen: a titled rule above its content.
