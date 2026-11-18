@@ -12,6 +12,7 @@ mod pair;
 mod prereqs;
 mod serve;
 pub mod tui;
+pub mod update;
 mod usage;
 
 use std::path::PathBuf;
@@ -278,6 +279,12 @@ pub fn run(ctx: &Ctx, command: Command) -> Result<Reply, CliError> {
             Err(CliError::new("internal", "dispatched by main"))
         }
         Command::Version { .. } => Ok(commands::version()),
+        Command::Update {
+            check,
+            version,
+            yes,
+            out,
+        } => update::update(ctx, check, version.as_deref(), yes, out.json),
         Command::Herdr { cmd } => navigator::run(ctx, cmd),
     }
 }

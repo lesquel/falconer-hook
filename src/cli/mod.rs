@@ -186,6 +186,26 @@ pub enum Command {
     },
     /// Open the interactive terminal UI (also the default on a terminal).
     Tui,
+    /// Update to the latest release (`--check` only reports).
+    ///
+    /// Reinstalls through the release's own install.sh (pinned to its tag), which verifies the
+    /// signed SHA256SUMS with minisign. Keeps the install directory, the
+    /// config and the service, and restarts the service.
+    #[command(disable_version_flag = true)]
+    Update {
+        /// Only report whether an update is available; change nothing.
+        #[arg(long)]
+        check: bool,
+        /// Install this release tag (e.g. `v0.2.1`) instead of the latest,
+        /// even when it is older or a prerelease.
+        #[arg(long, value_name = "TAG")]
+        version: Option<String>,
+        /// Do not ask for confirmation. Needed when stdin is not a terminal.
+        #[arg(long)]
+        yes: bool,
+        #[command(flatten)]
+        out: JsonFlag,
+    },
     /// Print the version and wire protocol versions.
     Version {
         #[command(flatten)]
@@ -403,6 +423,7 @@ impl Command {
             | Command::Setup { out, .. }
             | Command::Uninstall { out, .. }
             | Command::Usage { out, .. }
+            | Command::Update { out, .. }
             | Command::Version { out } => out.json,
             Command::Sessions {
                 cmd: ListCmd::List { out },

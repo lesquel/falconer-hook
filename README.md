@@ -157,6 +157,37 @@ to remove and removing it turns password logins back on, so it is kept and liste
 Without `--yes` it prints the plan and asks on a terminal; without a terminal (or with `--json`)
 it refuses with `confirmation_required`. `--dry-run` prints the plan and changes nothing.
 
+### Updating
+
+`falconer-hook update` updates to the latest release through the same signed path as the first
+install:
+
+```sh
+falconer-hook update --check        # Up to date (v0.2.0)  |  Update available: v0.2.0 → v0.2.1
+falconer-hook update                # shows what it will run, asks [y/N]
+falconer-hook update --yes          # no question (needed without a terminal)
+falconer-hook update --version v0.2.1 --yes   # a specific tag, even an older one or a prerelease
+```
+
+It resolves the latest tag from the redirect of
+`https://github.com/lesquel/falconer-hook/releases/latest` (curl, or wget, HTTPS only) and
+compares it with the running version by semver. A prerelease is never offered to a stable
+version. To update it downloads that release's own installer,
+`https://raw.githubusercontent.com/lesquel/falconer-hook/<tag>/install.sh`, with
+`curl --proto '=https' --tlsv1.2` into a private temp directory (`0700`, file `0600`), shows the
+URL and the command and, after consent, runs
+`FALCONER_BIN_DIR=<directory of the running binary> sh install.sh --version <tag> --yes`. The
+script verifies the release's signed `SHA256SUMS` with minisign, as in a first install. Your
+config is kept; when a user service is installed it is kept and restarted
+(`systemctl --user restart falconer-hook.service`, macOS `launchctl unload`/`load -w`),
+otherwise `--no-service` is passed so none is created. The temp copy is deleted afterwards.
+
+`--check` never changes anything. Without a terminal, or with `--json` and no `--yes`, it only
+prints the commands. A network failure or a tag that cannot be resolved exits `1`
+(`unavailable`) and changes nothing; a failing installer is `update_failed`. JSON:
+`{"current","latest","tag","update_available"}`, plus `action` (`up_to_date`, `printed`,
+`declined`, `updated`), `script_url`, `command` and `service` without `--check`.
+
 ### Upgrading from OpenMosh
 
 falconer-hook was called `openmosh-hook`. On a machine that still has the old install:
@@ -229,6 +260,7 @@ else (it would recreate state); quit with `q`.
 | `falconer-hook herdr snapshot [--session <name>] [--since <rev>] [--wait-ms <n>] --json` | [Navigator](#herdr-navigator) snapshot: `{"rev","unchanged":false,"workspaces":[{"id","label","focused"}],"tabs":[{"id","workspace_id","label","number","agent_status","pane_count","focused"}],"panes":[{"id","tab_id","workspace_id","agent","agent_status","focused"}]}`; with `--since` equal to the current `rev` it waits up to `--wait-ms` (max 20000) for a change and answers `{"rev","unchanged":true}` when none came |
 | `falconer-hook herdr read --pane <id> [--session <name>] [--since <rev>] [--wait-ms <n>] [--lines <n>] --json` | The pane's own text, last `--lines` lines (default 200, max 2000), escape sequences and control characters removed: `{"rev","unchanged","agent","agent_status","lines":[…]}`; long-polls like `snapshot` |
 | `falconer-hook herdr action [--session <name>] --json` | Run one allowlisted [navigator action](#herdr-navigator); the request `{"op":…}` comes on stdin, the answer is `{"op","id"?}` |
+| `falconer-hook update [--check] [--version <tag>] [--yes] [--json]` | [Update](#updating) to the latest release through its tag-pinned, signature-verifying install.sh; `--check` only reports |
 | `falconer-hook tui` | The [terminal UI](#tui) (also `falconer-hook` alone on a terminal) |
 | `falconer-hook version [--json]` | Version and wire protocol versions (`protocol.herdr` is the navigator's) |
 
@@ -248,7 +280,7 @@ Exit code is `0` on success and `1` on error. Messages never contain secrets. Er
 `runtime_unavailable`, `runtime_error`, `partial_delivery`, `invalid_endpoint`, `permissions_too_open`,
 `config_error`, `io_error`, `store_error`, `registry_corrupt`, `storage_error`,
 `tailscale_missing`, `tailscale_not_running`, `tailscale_tagged`, `tailscale_error`, `ssh_host_key_missing`,
-`listen_failed`, `pair_closed`, `pair_cancelled`, `confirmation_required`, `settings_invalid`, `service_error`, `internal`.
+`listen_failed`, `pair_closed`, `pair_cancelled`, `confirmation_required`, `settings_invalid`, `service_error`, `unavailable`, `update_failed`, `internal`.
 
 ## Usage
 
