@@ -78,19 +78,6 @@ impl Exec for CtxExec<'_> {
     }
 }
 
-/// `LC_ALL`, then `LC_MESSAGES`, then `LANG`: the first one set decides.
-pub fn lang_from(get: impl Fn(&str) -> Option<String>) -> Lang {
-    let locale = ["LC_ALL", "LC_MESSAGES", "LANG"]
-        .iter()
-        .find_map(|k| get(k).filter(|v| !v.is_empty()))
-        .unwrap_or_default();
-    if locale.starts_with("es") {
-        Lang::Es
-    } else {
-        Lang::En
-    }
-}
-
 /// `update --check` on a background thread (a network call of up to 60 s),
 /// so the TUI never waits for it.
 fn check_updates(ctx: &Ctx) -> Receiver<Result<Value, String>> {
@@ -170,7 +157,7 @@ pub fn run_tui(ctx: &Ctx) -> Result<(), CliError> {
     let _guard = Guard;
     let mut terminal = Terminal::new(CrosstermBackend::new(std::io::stdout())).map_err(io_err)?;
     let mut exec = CtxExec(ctx);
-    let mut app = App::with_lang(lang_from(|k| std::env::var(k).ok()));
+    let mut app = App::with_lang(Lang::from_env(|k| std::env::var(k).ok()));
     let lang = app.lang;
     terminal.draw(|f| view::draw(f, &app)).map_err(io_err)?;
     app.start(&mut exec);

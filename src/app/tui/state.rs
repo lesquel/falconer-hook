@@ -1659,3 +1659,7 @@ mod wizard_tests;
 #[cfg(test)]
 #[path = "palette_tests.rs"]
 mod palette_tests;
+
+#[cfg(test)]
+#[path = "i18n_tests.rs"]
+mod i18n_tests;
