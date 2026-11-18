@@ -197,7 +197,11 @@ pub fn run_tui(ctx: &Ctx) -> Result<(), CliError> {
                 leave();
                 let r = suspended(ctx, cmd, lang);
                 enter().map_err(io_err)?;
-                app.after_suspended(r);
+                if matches!(other, Effect::Update { .. }) {
+                    app.after_update(r);
+                } else {
+                    app.after_suspended(r);
+                }
                 app.resume(&mut exec);
             }
         }

@@ -1616,6 +1616,18 @@ impl App {
         self.invalidate();
     }
 
+    /// Result of `update` run in the terminal: this process still runs the
+    /// old binary, so the banner goes and the person is asked to reopen.
+    pub fn after_update(&mut self, r: Result<Reply, CliError>) {
+        let ok = r.is_ok();
+        self.after_suspended(r);
+        if ok {
+            self.update = UpdateState::UpToDate;
+            self.info(self.tr("Updated. Quit and reopen falconer-hook to use the new version."));
+            self.clamp();
+        }
+    }
+
     /// Records the outcome of the pairing flow run outside the TUI.
     pub fn after_pair(&mut self, r: Result<Reply, CliError>) {
         self.after_suspended(r)

@@ -303,3 +303,27 @@ fn every_screen_renders_on_small_terminals() {
     app.on_key(ch('u'), &mut ex);
     dump_at(&app, 40, 12);
 }
+
+#[test]
+fn a_finished_update_hides_the_banner_and_asks_to_reopen() {
+    let (mut app, mut ex) = started();
+    app.on_update_check(Ok(
+        json!({"current": "0.2.0", "latest": "0.2.1", "tag": "v0.2.1", "update_available": true}),
+    ));
+    app.after_update(Ok(Reply::new(&json!({"action": "updated"}), "Updated")));
+    app.resume(&mut ex);
+    assert_eq!(app.update, UpdateState::UpToDate);
+    assert!(!app.home_items().contains(&HomeItem::Update));
+    assert!(app.message.as_ref().unwrap().text.contains("reopen"));
+
+    let (mut app, _ex) = started();
+    app.on_update_check(Ok(
+        json!({"current": "0.2.0", "latest": "0.2.1", "tag": "v0.2.1", "update_available": true}),
+    ));
+    app.after_update(Err(CliError::new("update_failed", "installer failed")));
+    assert!(
+        app.home_items().contains(&HomeItem::Update),
+        "still offered"
+    );
+    assert!(app.message.as_ref().unwrap().error);
+}

@@ -156,6 +156,8 @@ static ES: &[(&str, &str)] = &[
     ("Some steps failed; see the list, then try again.",
      "Algunos pasos fallaron; revisa la lista y vuelve a intentarlo."),
     ("Press Enter to return to the TUI.", "Pulsa Enter para volver a la TUI."),
+    ("Updated. Quit and reopen falconer-hook to use the new version.",
+     "Actualizado. Sal y vuelve a abrir falconer-hook para usar la nueva versión."),
     // Footer and help.
     ("run", "ejecutar"),
     ("skip", "omitir"),
